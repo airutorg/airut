@@ -33,7 +33,9 @@ from airut.conversation import (
     ConversationLayout,
     ConversationStore,
     ReplySummary,
+    clear_outbox,
     create_conversation_layout,
+    list_outbox_files,
     prepare_conversation,
 )
 from airut.dashboard.tracker import (
@@ -736,6 +738,38 @@ def run_in_sandbox(
 # ── Channel-facing wrapper ─────────────────────────────────────────────
 
 
+def _deliver_reply(
+    adapter: ChannelAdapter,
+    parsed: ParsedMessage,
+    result: SandboxTaskResult,
+    usage_footer: str,
+) -> None:
+    """Send the reply with any outbox files, then clear the outbox.
+
+    Clearing here — rather than in each adapter — keeps every channel
+    consistent, and happens only once ``send_reply`` returns: a raised
+    ``ChannelSendError`` means nothing was delivered, so the files stay
+    for the next attempt.
+
+    Args:
+        adapter: Channel adapter delivering the reply.
+        parsed: Parsed message being replied to.
+        result: Sandbox result carrying the response, conversation ID,
+            and layout.
+        usage_footer: Formatted usage summary, or empty for none.
+    """
+    outbox = result.layout.outbox
+    outbox_files = list_outbox_files(outbox)
+    adapter.send_reply(
+        parsed,
+        result.conversation_id,
+        result.response_text,
+        usage_footer,
+        outbox_files,
+    )
+    clear_outbox(outbox)
+
+
 def process_message(
     service: GatewayService,
     parsed: ParsedMessage,
@@ -939,40 +973,18 @@ def process_message(
             plan_streamer.finalize()
 
         if sandbox_result.outcome == Outcome.SUCCESS:
-            outbox_files = (
-                list(sandbox_result.layout.outbox.iterdir())
-                if sandbox_result.layout.outbox.exists()
-                else []
-            )
             usage_footer = (
                 sandbox_result.usage_stats.format_summary()
                 if sandbox_result.usage_stats
                 and sandbox_result.usage_stats.has_any()
                 else ""
             )
-            adapter.send_reply(
-                parsed,
-                conv_id,
-                sandbox_result.response_text,
-                usage_footer,
-                outbox_files,
-            )
+            _deliver_reply(adapter, parsed, sandbox_result, usage_footer)
         elif sandbox_result.outcome == Outcome.TIMEOUT:
             adapter.send_error(parsed, conv_id, sandbox_result.response_text)
             return CompletionReason.TIMEOUT, conv_id
         else:
-            outbox_files = (
-                list(sandbox_result.layout.outbox.iterdir())
-                if sandbox_result.layout.outbox.exists()
-                else []
-            )
-            adapter.send_reply(
-                parsed,
-                conv_id,
-                sandbox_result.response_text,
-                "",
-                outbox_files,
-            )
+            _deliver_reply(adapter, parsed, sandbox_result, "")
 
         logger.info(
             "Repo '%s': sent reply to %s for conversation %s",

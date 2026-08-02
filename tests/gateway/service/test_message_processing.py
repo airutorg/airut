@@ -464,6 +464,14 @@ class TestProcessMessage:
 
         return svc, handler, mock_conv_store, adapter
 
+    def _seed_outbox(self, tmp_path: Path, name: str = "report.txt") -> Path:
+        """Create a file in the conversation outbox and return its path."""
+        outbox = tmp_path / "conversations" / "outbox"
+        outbox.mkdir(parents=True, exist_ok=True)
+        outfile = outbox / name
+        outfile.write_text(f"contents of {name}")
+        return outfile
+
     def test_new_conversation_success(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
@@ -589,6 +597,115 @@ class TestProcessMessage:
         assert reason == CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_reply.assert_called_once()
+
+    def test_outbox_files_delivered_then_cleared(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Delivered outbox files are removed so later turns don't re-send.
+
+        The outbox lives for the whole conversation, so anything left
+        behind would be attached again to every subsequent reply.
+        """
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        outfile = self._seed_outbox(tmp_path)
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.SUCCESS
+        delivered = adapter.send_reply.call_args.args[4]
+        assert [p.name for p in delivered] == ["report.txt"]
+        assert not outfile.exists()
+
+    def test_outbox_cleared_after_failed_execution_reply(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Partial results delivered on failure are cleared too."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(error_summary="FATAL: OOM")
+        )
+        outfile = self._seed_outbox(tmp_path, "partial.txt")
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.EXECUTION_FAILED
+        delivered = adapter.send_reply.call_args.args[4]
+        assert [p.name for p in delivered] == ["partial.txt"]
+        assert not outfile.exists()
+
+    def test_outbox_subdirectories_not_delivered(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Only files in the outbox root are handed to the adapter."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        outfile = self._seed_outbox(tmp_path)
+        nested = outfile.parent / "nested"
+        nested.mkdir()
+        (nested / "inner.txt").write_text("kept")
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        delivered = adapter.send_reply.call_args.args[4]
+        assert [p.name for p in delivered] == ["report.txt"]
+        assert (nested / "inner.txt").exists()
+
+    def test_outbox_kept_on_timeout(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """A timeout takes the error path and keeps the outbox.
+
+        Nothing was delivered, so partial output stays for the next
+        reply instead of being dropped.
+        """
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(outcome=Outcome.TIMEOUT)
+        )
+        outfile = self._seed_outbox(tmp_path, "partial.txt")
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.TIMEOUT
+        adapter.send_reply.assert_not_called()
+        assert outfile.exists()
+
+    def test_outbox_kept_when_delivery_fails(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """A failed send leaves the outbox intact for the next attempt."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        adapter.send_reply.side_effect = ChannelSendError("smtp down")
+        outfile = self._seed_outbox(tmp_path)
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.CHANNEL_ERROR
+        assert outfile.exists()
 
     def test_execution_failure(
         self, email_config: RepoServerConfig, tmp_path: Path

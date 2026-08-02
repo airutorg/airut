@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import cast
 
 from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
+from slack_sdk.errors import SlackApiError, SlackRequestError
 
 from airut._json_types import JsonDict
 from airut.conversation import unique_inbox_path
@@ -705,20 +705,27 @@ class SlackChannelAdapter(ChannelAdapter):
             logger.error("Failed to send Slack reply: %s", e)
             raise ChannelSendError(str(e)) from e
 
-        # Upload outbox files
+        # Upload outbox files.  A single failed upload does not fail the
+        # reply (the text is already posted), but the core clears the
+        # outbox once this returns, so the user is told which files did
+        # not make it rather than losing them silently.
+        failed: list[str] = []
         for filepath in outbox_files:
-            if filepath.exists():
-                try:
-                    _upload_file(
-                        self._client,
-                        parsed.slack_channel_id,
-                        parsed.slack_thread_ts,
-                        filepath,
-                    )
-                except SlackApiError as e:
-                    logger.warning(
-                        "Failed to upload file %s: %s", filepath.name, e
-                    )
+            try:
+                _upload_file(
+                    self._client,
+                    parsed.slack_channel_id,
+                    parsed.slack_thread_ts,
+                    filepath,
+                )
+            except (SlackApiError, SlackRequestError, OSError) as e:
+                # OSError covers a file that vanished or cannot be read
+                # between listing and upload; it must not escape as an
+                # unhandled error after the reply text is already out.
+                logger.warning("Failed to upload file %s: %s", filepath.name, e)
+                failed.append(filepath.name)
+        if failed:
+            self._report_failed_uploads(parsed, failed)
 
         # Set thread title from first message.  assistant.threads.setTitle
         # is a DM-only (Agents & AI Apps) API; channel threads are
@@ -733,6 +740,26 @@ class SlackChannelAdapter(ChannelAdapter):
                 )
             except SlackApiError as e:
                 logger.debug("Failed to set thread title: %s", e)
+
+    def _report_failed_uploads(
+        self, parsed: SlackParsedMessage, filenames: list[str]
+    ) -> None:
+        """Tell the thread which outbox files could not be uploaded.
+
+        Never raises: escaping here would skip the core's outbox cleanup
+        and bring back the re-upload on the next turn.
+        """
+        names = ", ".join(f"`{name}`" for name in filenames)
+        try:
+            self._client.chat_postMessage(
+                channel=parsed.slack_channel_id,
+                thread_ts=parsed.slack_thread_ts,
+                text=f"Could not upload {len(filenames)} file(s): {names}",
+            )
+        except (SlackApiError, SlackRequestError) as e:
+            logger.warning(
+                "Failed to report Slack upload failures (non-fatal): %s", e
+            )
 
     def send_error(
         self,

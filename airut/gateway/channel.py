@@ -395,7 +395,17 @@ class ChannelAdapter(Protocol):
         usage_footer: str,
         outbox_files: list[Path],
     ) -> None:
-        """Send the final response with optional file attachments."""
+        """Send the final response with optional file attachments.
+
+        ``outbox_files`` are the files the task left in the conversation
+        outbox.  Adapters deliver them but must never delete them: the
+        core clears the outbox once this call returns, so each file is
+        sent once instead of with every later reply.  Raise
+        ``ChannelSendError`` when the reply was not delivered — that
+        skips the cleanup and keeps the files for the next attempt.  An
+        adapter that gives up on an individual file without raising
+        should tell the user, since the file is discarded either way.
+        """
         ...
 
     def send_error(

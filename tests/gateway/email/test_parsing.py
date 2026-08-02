@@ -14,13 +14,13 @@ from unittest.mock import patch
 import pytest
 
 from airut.gateway.email.parsing import (
-    collect_outbox_files,
     decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
     extract_conversation_id_from_headers,
     extract_model_from_address,
+    read_outbox_files,
 )
 
 
@@ -740,94 +740,55 @@ def test_extract_attachments_rfc2047_filename_with_path_traversal(
     assert not (tmp_path / "evil.csv").exists()
 
 
-def test_collect_outbox_files_with_files(tmp_path: Path) -> None:
-    """Test collecting files from outbox directory."""
-    outbox_dir = tmp_path / "outbox"
-    outbox_dir.mkdir()
+def test_read_outbox_files_reads_content(tmp_path: Path) -> None:
+    """Test reading outbox files into attachment tuples."""
+    (tmp_path / "report.txt").write_text("Report content")
+    (tmp_path / "data.csv").write_text("name,value\nfoo,1\n")
 
-    # Create test files
-    (outbox_dir / "report.txt").write_text("Report content")
-    (outbox_dir / "data.csv").write_text("name,value\nfoo,1\n")
+    outbox = read_outbox_files([tmp_path / "report.txt", tmp_path / "data.csv"])
 
-    files = collect_outbox_files(outbox_dir)
-
-    assert len(files) == 2
-    filenames = {name for name, _ in files}
-    assert "report.txt" in filenames
-    assert "data.csv" in filenames
-
-    # Check content
-    content_map = {name: content for name, content in files}
-    assert content_map["report.txt"] == b"Report content"
-    assert content_map["data.csv"] == b"name,value\nfoo,1\n"
+    assert outbox.unreadable == []
+    assert outbox.attachments == [
+        ("report.txt", b"Report content"),
+        ("data.csv", b"name,value\nfoo,1\n"),
+    ]
 
 
-def test_collect_outbox_files_binary(tmp_path: Path) -> None:
-    """Test collecting binary files from outbox."""
-    outbox_dir = tmp_path / "outbox"
-    outbox_dir.mkdir()
-
-    # Create binary file
+def test_read_outbox_files_binary(tmp_path: Path) -> None:
+    """Test reading binary files from outbox."""
     binary_content = bytes([0x00, 0x01, 0x02, 0xFF, 0xFE])
-    (outbox_dir / "binary.bin").write_bytes(binary_content)
+    (tmp_path / "binary.bin").write_bytes(binary_content)
 
-    files = collect_outbox_files(outbox_dir)
+    outbox = read_outbox_files([tmp_path / "binary.bin"])
 
-    assert len(files) == 1
-    filename, content = files[0]
-    assert filename == "binary.bin"
-    assert content == binary_content
+    assert outbox.attachments == [("binary.bin", binary_content)]
 
 
-def test_collect_outbox_files_empty_directory(tmp_path: Path) -> None:
-    """Test collecting from empty outbox directory."""
-    outbox_dir = tmp_path / "outbox"
-    outbox_dir.mkdir()
+def test_read_outbox_files_empty_list() -> None:
+    """Test reading with nothing to attach."""
+    outbox = read_outbox_files([])
 
-    files = collect_outbox_files(outbox_dir)
-    assert len(files) == 0
-
-
-def test_collect_outbox_files_nonexistent_directory(tmp_path: Path) -> None:
-    """Test collecting from nonexistent outbox directory."""
-    outbox_dir = tmp_path / "nonexistent"
-
-    files = collect_outbox_files(outbox_dir)
-    assert len(files) == 0
+    assert outbox.attachments == []
+    assert outbox.unreadable == []
 
 
-def test_collect_outbox_files_ignores_subdirectories(tmp_path: Path) -> None:
-    """Test that subdirectories in outbox are ignored."""
-    outbox_dir = tmp_path / "outbox"
-    outbox_dir.mkdir()
+def test_read_outbox_files_preserves_order(tmp_path: Path) -> None:
+    """Files are read in the order given, not directory order."""
+    (tmp_path / "b.txt").write_text("second")
+    (tmp_path / "a.txt").write_text("first")
 
-    # Create file and subdirectory
-    (outbox_dir / "file.txt").write_text("File content")
-    subdir = outbox_dir / "subdir"
-    subdir.mkdir()
-    (subdir / "nested.txt").write_text("Nested file")
+    outbox = read_outbox_files([tmp_path / "b.txt", tmp_path / "a.txt"])
 
-    files = collect_outbox_files(outbox_dir)
-
-    # Should only collect the top-level file
-    assert len(files) == 1
-    filename, content = files[0]
-    assert filename == "file.txt"
-    assert content == b"File content"
+    assert outbox.attachments == [("b.txt", b"second"), ("a.txt", b"first")]
 
 
-def test_collect_outbox_files_handles_read_error(
+def test_read_outbox_files_reports_read_error(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test that OSError during file read is handled gracefully."""
-    outbox_dir = tmp_path / "outbox"
-    outbox_dir.mkdir()
+    """An unreadable file is reported, not silently dropped."""
+    (tmp_path / "good.txt").write_text("Good content")
+    (tmp_path / "bad.txt").write_text("Bad content")
 
-    # Create a file that will be mocked to fail
-    (outbox_dir / "good.txt").write_text("Good content")
-    (outbox_dir / "bad.txt").write_text("Bad content")
-
-    # Mock read_bytes to raise OSError for bad.txt
     original_read_bytes = Path.read_bytes
 
     def mock_read_bytes(self: Path) -> bytes:
@@ -836,14 +797,22 @@ def test_collect_outbox_files_handles_read_error(
         return original_read_bytes(self)
 
     with patch.object(Path, "read_bytes", mock_read_bytes):
-        files = collect_outbox_files(outbox_dir)
+        outbox = read_outbox_files(
+            [tmp_path / "good.txt", tmp_path / "bad.txt"]
+        )
 
-    # Should still collect the good file
-    assert len(files) == 1
-    filename, content = files[0]
-    assert filename == "good.txt"
-    assert content == b"Good content"
+    # The readable file still ships; the other one is named for the user.
+    assert outbox.attachments == [("good.txt", b"Good content")]
+    assert outbox.unreadable == ["bad.txt"]
+    assert outbox.unreadable_note() == "Could not attach 1 file(s): bad.txt"
 
-    # Should have logged warning for bad file
     assert "Failed to read outbox file" in caplog.text
     assert "bad.txt" in caplog.text
+
+
+def test_read_outbox_files_missing_path_reported(tmp_path: Path) -> None:
+    """A file that vanished before delivery is reported as unreadable."""
+    outbox = read_outbox_files([tmp_path / "gone.txt"])
+
+    assert outbox.attachments == []
+    assert outbox.unreadable == ["gone.txt"]

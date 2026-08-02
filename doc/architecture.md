@@ -300,6 +300,9 @@ EmailResponder
 SMTP send
     │
     ▼
+Gateway clears /outbox (files are sent once, not on every later turn)
+    │
+    ▼
 EmailListener
     │
     └──▶ Delete original message from IMAP inbox (expunge)
@@ -379,6 +382,9 @@ SlackChannelAdapter.send_reply()
     ├──▶ Upload files from /outbox
     │
     ├──▶ Set thread title from the first message (DM only; skipped in channels)
+    │
+    ▼
+Gateway clears /outbox (files are sent once, not on every later turn)
     │
     ▼
 Done (thread mapping persisted for future messages)

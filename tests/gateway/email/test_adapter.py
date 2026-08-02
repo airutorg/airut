@@ -24,7 +24,6 @@ from airut.gateway.config import (
 from airut.gateway.email.adapter import (
     EmailChannelAdapter,
     EmailParsedMessage,
-    _clean_outbox,
 )
 from airut.gateway.email.responder import SMTPSendError
 
@@ -543,23 +542,58 @@ class TestSendReply:
         outbox.mkdir()
         outfile = outbox / "report.txt"
         outfile.write_text("report content")
+        # A sibling the core did not pass must not be attached.
+        (outbox / "ignored.txt").write_text("not delivered")
 
-        with patch(
-            "airut.gateway.email.adapter.collect_outbox_files",
-            return_value=[("report.txt", b"report content")],
-        ):
-            adapter.send_reply(
-                parsed,
-                "conv1",
-                "Done",
-                "",
-                [outfile],
-            )
+        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
 
         call_kw = responder.send_reply.call_args[1]
         assert call_kw["attachments"] == [("report.txt", b"report content")]
+        # Removing delivered files is the gateway's job, not the adapter's.
+        assert outfile.exists()
 
-    def test_retry_cleans_outbox_on_success(self, tmp_path: Path) -> None:
+    def test_unreadable_outbox_file_named_in_body(self, tmp_path: Path) -> None:
+        """A file that cannot be read is named, not silently dropped.
+
+        The core clears the outbox once this returns, so the user would
+        otherwise never learn the file existed.
+        """
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        good = outbox / "report.txt"
+        good.write_text("report content")
+        bad = outbox / "locked.bin"
+        bad.write_text("unreadable")
+
+        original_read_bytes = Path.read_bytes
+
+        def fake_read_bytes(self: Path) -> bytes:
+            if self.name == "locked.bin":
+                raise OSError("Permission denied")
+            return original_read_bytes(self)
+
+        with patch.object(Path, "read_bytes", fake_read_bytes):
+            adapter.send_reply(parsed, "conv1", "Done", "Cost: $1", [good, bad])
+
+        call_kw = responder.send_reply.call_args[1]
+        assert call_kw["attachments"] == [("report.txt", b"report content")]
+        assert "Could not attach 1 file(s): locked.bin" in call_kw["body"]
+        # The note precedes the usage footer.
+        assert call_kw["body"].index("locked.bin") < call_kw["body"].index(
+            "Cost: $1"
+        )
+
+    def test_retry_resends_attachments(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
         parsed = EmailParsedMessage(
             sender="user@example.com",
@@ -581,20 +615,12 @@ class TestSendReply:
             None,
         ]
 
-        with patch(
-            "airut.gateway.email.adapter.collect_outbox_files",
-            return_value=[("report.txt", b"data")],
-        ):
-            adapter.send_reply(
-                parsed,
-                "conv1",
-                "Done",
-                "",
-                [outfile],
-            )
+        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
 
-        # Outbox should be cleaned after retry success
-        assert not outfile.exists()
+        # The retry carries the same attachments as the first attempt.
+        assert responder.send_reply.call_count == 2
+        for send_call in responder.send_reply.call_args_list:
+            assert send_call[1]["attachments"] == [("report.txt", b"data")]
 
     def test_retry_on_smtp_failure(self) -> None:
         adapter, _, _, responder = _make_adapter()
@@ -828,48 +854,6 @@ class TestBuildReplyHeaders:
 
         _, refs = adapter._build_reply_headers(parsed, "conv1")
         assert refs == []
-
-
-class TestCleanOutbox:
-    def test_removes_files(self, tmp_path: Path) -> None:
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "file1.txt").write_text("a")
-        (outbox / "file2.txt").write_text("b")
-
-        _clean_outbox(
-            [("file1.txt", b"a"), ("file2.txt", b"b")],
-            outbox,
-        )
-
-        remaining = list(outbox.iterdir())
-        assert len(remaining) == 0
-
-    def test_noop_for_empty_attachments(self, tmp_path: Path) -> None:
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "file.txt").write_text("keep me")
-
-        _clean_outbox([], outbox)
-
-        # File should still exist
-        assert (outbox / "file.txt").exists()
-
-    def test_noop_for_missing_outbox(self, tmp_path: Path) -> None:
-        nonexistent = tmp_path / "nonexistent"
-
-        # Should not raise
-        _clean_outbox([("file.txt", b"data")], nonexistent)
-
-    def test_handles_unlink_error(self, tmp_path: Path) -> None:
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        f = outbox / "file.txt"
-        f.write_text("data")
-
-        with patch.object(Path, "unlink", side_effect=OSError("perm denied")):
-            # Should not raise
-            _clean_outbox([("file.txt", b"data")], outbox)
 
 
 class TestResponderProperty:

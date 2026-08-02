@@ -873,7 +873,12 @@ class TestUploadFile:
 
 class TestSendReplyEdgeCases:
     def test_file_upload_failure_non_fatal(self, tmp_path: Path) -> None:
-        """File upload errors don't prevent the reply from sending."""
+        """File upload errors don't prevent the reply from sending.
+
+        The core clears the outbox once ``send_reply`` returns, so the
+        undelivered file is named in the thread rather than dropped
+        silently.
+        """
         adapter, client, _, _ = _make_adapter(tmp_path)
         client.files_upload_v2.side_effect = SlackApiError(
             message="upload_failed",
@@ -893,7 +898,68 @@ class TestSendReplyEdgeCases:
 
         # Should not raise
         adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
-        client.chat_postMessage.assert_called_once()
+
+        texts = [
+            c.kwargs["text"] for c in client.chat_postMessage.call_args_list
+        ]
+        assert texts[0] == "Done"
+        assert "report.txt" in texts[1]
+
+    def test_upload_failure_report_failure_non_fatal(
+        self, tmp_path: Path
+    ) -> None:
+        """Failing to report a failed upload does not raise."""
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        error = SlackApiError(
+            message="upload_failed",
+            response=MagicMock(status_code=500, data={}),
+        )
+        client.files_upload_v2.side_effect = error
+        client.chat_postMessage.side_effect = [MagicMock(), error]
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            display_title="Test",
+        )
+        outfile = tmp_path / "report.txt"
+        outfile.write_text("data")
+
+        # Should not raise
+        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
+
+        # The reply, then the (also failing) failure report.
+        assert client.chat_postMessage.call_count == 2
+
+    def test_unreadable_file_reported(self, tmp_path: Path) -> None:
+        """A file that vanished before upload is reported, not raised.
+
+        ``files_upload_v2`` opens the path itself, so a file removed
+        between listing and upload surfaces as an ``OSError`` rather than
+        a Slack error — it must stay on the reported path.
+        """
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        client.files_upload_v2.side_effect = FileNotFoundError("gone.txt")
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            display_title="Test",
+        )
+
+        # Should not raise even though the path does not exist
+        adapter.send_reply(parsed, "conv1", "Done", "", [tmp_path / "gone.txt"])
+
+        texts = [
+            c.kwargs["text"] for c in client.chat_postMessage.call_args_list
+        ]
+        assert "gone.txt" in texts[1]
 
     def test_title_set_failure_non_fatal(self, tmp_path: Path) -> None:
         """Thread title set errors don't affect the reply."""

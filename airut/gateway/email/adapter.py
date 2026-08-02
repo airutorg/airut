@@ -28,13 +28,13 @@ from airut.gateway.channel import (
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.channel_listener import EmailChannelListener
 from airut.gateway.email.parsing import (
-    collect_outbox_files,
     decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
     extract_conversation_id_from_headers,
     extract_model_from_address,
+    read_outbox_files,
 )
 from airut.gateway.email.responder import (
     EmailResponder,
@@ -360,28 +360,33 @@ class EmailChannelAdapter(ChannelAdapter):
             parsed, conversation_id
         )
 
-        # Append usage footer if present
-        body = response_text
-        if usage_footer:
-            body = f"{response_text}\n\n*{usage_footer}*"
-
         outgoing_message_id = generate_message_id(
             conversation_id, self._config.account.from_address
         )
 
-        # Collect attachments from outbox directory
+        # Attach the outbox files the core handed us.  Removing them once
+        # delivered is the core's job (see ``ChannelAdapter.send_reply``),
+        # so that every channel behaves the same.
         attachments: list[tuple[str, bytes]] | None = None
-        outbox_path: Path | None = None
+        unreadable_note = ""
         if outbox_files:
-            outbox_path = outbox_files[0].parent
-            attachments_data = collect_outbox_files(outbox_path)
-            if attachments_data:
-                attachments = attachments_data
+            outbox = read_outbox_files(outbox_files)
+            unreadable_note = outbox.unreadable_note()
+            if outbox.attachments:
+                attachments = outbox.attachments
                 logger.info(
                     "Attaching %d files from outbox: %s",
-                    len(attachments_data),
-                    ", ".join(f[0] for f in attachments_data),
+                    len(outbox.attachments),
+                    ", ".join(name for name, _ in outbox.attachments),
                 )
+
+        body = response_text
+        # The core clears the outbox once this returns, so name the files
+        # that could not be attached instead of losing them silently.
+        if unreadable_note:
+            body = f"{body}\n\n{unreadable_note}"
+        if usage_footer:
+            body = f"{body}\n\n*{usage_footer}*"
 
         try:
             self._responder.send_reply(
@@ -393,10 +398,6 @@ class EmailChannelAdapter(ChannelAdapter):
                 attachments=attachments,
                 message_id=outgoing_message_id,
             )
-
-            if outbox_path:
-                _clean_outbox(attachments or [], outbox_path)
-
         except SMTPSendError as e:
             logger.error("Failed to send reply: %s", e)
             # Retry once
@@ -411,10 +412,6 @@ class EmailChannelAdapter(ChannelAdapter):
                     attachments=attachments,
                     message_id=outgoing_message_id,
                 )
-
-                if outbox_path:
-                    _clean_outbox(attachments or [], outbox_path)
-
             except SMTPSendError as retry_error:
                 logger.critical("SMTP retry failed: %s", retry_error)
                 raise ChannelSendError(str(retry_error)) from retry_error
@@ -527,22 +524,3 @@ class EmailChannelAdapter(ChannelAdapter):
         )
 
         return subject, references_list
-
-
-def _clean_outbox(
-    attachments: list[tuple[str, bytes]], outbox_path: Path
-) -> None:
-    """Remove files from outbox after successful send."""
-    if not attachments or not outbox_path.exists():
-        return
-    for filepath in outbox_path.iterdir():
-        if filepath.is_file():
-            try:
-                filepath.unlink()
-            except OSError as e:
-                logger.warning(
-                    "Failed to delete outbox file %s: %s",
-                    filepath,
-                    e,
-                )
-    logger.info("Cleaned up outbox directory")

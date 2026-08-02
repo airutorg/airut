@@ -11,6 +11,7 @@ conversation IDs and handling attachments.
 
 import logging
 import re
+from dataclasses import dataclass
 from email.header import decode_header
 from email.message import Message
 from pathlib import Path
@@ -315,37 +316,59 @@ def extract_attachments(
     return filenames
 
 
-def collect_outbox_files(outbox_dir: Path) -> list[tuple[str, bytes]]:
-    """Collect files from outbox directory for email attachment.
+@dataclass(frozen=True)
+class OutboxContent:
+    """Outbox files read for delivery.
+
+    Attributes:
+        attachments: ``(filename, content)`` pairs ready to send.
+        unreadable: Names of files that could not be read.  The outbox
+            is cleared once the reply goes out, so the caller has to
+            tell the user about these rather than dropping them.
+    """
+
+    attachments: list[tuple[str, bytes]]
+    unreadable: list[str]
+
+    def unreadable_note(self) -> str:
+        """Render the line naming the files that could not be read.
+
+        Returns:
+            The note, or an empty string when everything was readable.
+        """
+        if not self.unreadable:
+            return ""
+        names = ", ".join(self.unreadable)
+        return f"Could not attach {len(self.unreadable)} file(s): {names}"
+
+
+def read_outbox_files(paths: list[Path]) -> OutboxContent:
+    """Read outbox files into attachment tuples.
+
+    A file that cannot be read does not fail the reply — the response
+    text still matters — but its name is returned so the caller can say
+    what did not make it.
 
     Args:
-        outbox_dir: Directory to scan for files to attach.
+        paths: Files to attach, in delivery order.
 
     Returns:
-        List of (filename, content) tuples for files to attach.
-        Returns empty list if directory doesn't exist or is empty.
+        ``OutboxContent`` with the readable files and the names of the
+        unreadable ones.
     """
-    if not outbox_dir.exists():
-        logger.debug("Outbox directory does not exist: %s", outbox_dir)
-        return []
-
-    attachments = []
-    for filepath in outbox_dir.iterdir():
-        if filepath.is_file():
-            try:
-                content = filepath.read_bytes()
-                attachments.append((filepath.name, content))
-                logger.debug(
-                    "Collected outbox file: %s (%d bytes)",
-                    filepath.name,
-                    len(content),
-                )
-            except OSError as e:
-                logger.warning("Failed to read outbox file %s: %s", filepath, e)
-
-    if attachments:
-        logger.info("Collected %d files from outbox", len(attachments))
-    else:
-        logger.debug("No files found in outbox")
-
-    return attachments
+    attachments: list[tuple[str, bytes]] = []
+    unreadable: list[str] = []
+    for filepath in paths:
+        try:
+            content = filepath.read_bytes()
+        except OSError as e:
+            logger.warning("Failed to read outbox file %s: %s", filepath, e)
+            unreadable.append(filepath.name)
+            continue
+        attachments.append((filepath.name, content))
+        logger.debug(
+            "Collected outbox file: %s (%d bytes)",
+            filepath.name,
+            len(content),
+        )
+    return OutboxContent(attachments=attachments, unreadable=unreadable)

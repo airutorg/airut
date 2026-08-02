@@ -20,14 +20,15 @@ from airut.gateway.email.listener import (
     IMAPIdleError,
 )
 from airut.gateway.email.parsing import (
+    OutboxContent,
     ParseError,
-    collect_outbox_files,
     decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
     extract_conversation_id_from_headers,
     extract_model_from_address,
+    read_outbox_files,
 )
 from airut.gateway.email.responder import (
     EmailResponder,
@@ -47,14 +48,15 @@ __all__ = [
     "IMAPConnectionError",
     "IMAPIdleError",
     # parsing
+    "OutboxContent",
     "ParseError",
-    "collect_outbox_files",
     "decode_subject",
     "extract_attachments",
     "extract_body",
     "extract_conversation_id",
     "extract_conversation_id_from_headers",
     "extract_model_from_address",
+    "read_outbox_files",
     # responder
     "EmailResponder",
     "SMTPSendError",
