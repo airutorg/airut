@@ -10,19 +10,32 @@ dependencies = [
 ]
 
 [tool.uv]
-# Override mitmproxy 12.2.1's transitive dependency pins to fix known
-# vulnerabilities. Safe overrides: all are compatible patch/minor releases.
-# Remove when mitmproxy releases a version with updated pins.
+# Override mitmproxy 12.2.3's transitive dependency pins to fix known
+# vulnerabilities. Remove each entry when mitmproxy releases a version whose
+# own pins already admit the fixed release.
 #
 # - tornado >=6.5.5: fixes GHSA-78cv-mqj4-43f7 (cookie attribute injection)
 # - pyopenssl >=26.0.0: fixes GHSA-vp96-hxj8-p424
 # - flask >=3.1.3: fixes GHSA-68rp-wp8r-4726 (missing Vary: Cookie header)
 # - pyasn1 >=0.6.3: fixes GHSA-jr27-m4p2-rc6r
 # - msgpack >=1.2.1: fixes GHSA-6v7p-g79w-8964
+# - cryptography >=50.0.0: fixes GHSA-jwv3-5hgf-82ww (exponential X.509 path
+#   building), GHSA-m2h6-j472-rp4c (wildcard DNS names escape
+#   permittedSubtrees) and GHSA-g6cj-pr64-35w5 (PKCS#7 Bleichenbacher oracle).
+#   mitmproxy 12.2.3 pins cryptography <=48.1 and no 48.x release carries the
+#   fixes, so the override crosses two major versions. Verified against
+#   mitmproxy 12.2.3: CA/leaf certificate generation, PEM round-trips, DNS and
+#   IP SANs, and end-to-end HTTPS interception through mitmdump all work. The
+#   49.0.0/50.0.0 backwards-incompatible changes do not touch mitmproxy or the
+#   proxy filter: dropped 32-bit Windows and x86_64 macOS wheels (container is
+#   linux/amd64 and arm64), removed *_KEY_TYPES aliases deprecated since 40.0,
+#   ChaCha20 nonce counter semantics (TLS ciphers come from OpenSSL, not this
+#   API), and stricter DER parsing rejecting malformed certificates.
 override-dependencies = [
     "tornado>=6.5.5",
     "pyopenssl>=26.0.0",
     "flask>=3.1.3",
     "pyasn1>=0.6.3",
     "msgpack>=1.2.1",
+    "cryptography>=50.0.0",
 ]
