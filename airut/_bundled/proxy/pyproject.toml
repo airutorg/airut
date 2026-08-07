@@ -31,6 +31,25 @@ dependencies = [
 #   linux/amd64 and arm64), removed *_KEY_TYPES aliases deprecated since 40.0,
 #   ChaCha20 nonce counter semantics (TLS ciphers come from OpenSSL, not this
 #   API), and stricter DER parsing rejecting malformed certificates.
+# - h2 >=4.4.1: fixes GHSA-6hr6-w5qg-qmwg (duplicate Host headers forwarded to
+#   the consuming application, an HTTP/2-to-HTTP/1.1 request smuggling
+#   primitive). mitmproxy 12.2.3 pins h2 ==4.3.0 exactly, so the override
+#   crosses a minor version. Verified against mitmproxy 12.2.3 with end-to-end
+#   HTTP/2 interception through mitmdump against an HTTP/2-only origin, in both
+#   the deployed regular-mode topology (client leg is HTTP/1.1 -- mitmproxy
+#   forces that because it does not support CONNECT over HTTP/2 -- so h2 runs
+#   in its client role toward the origin) and reverse mode (client leg
+#   negotiates h2, covering the h2 server role): 500 KB request/response
+#   bodies, flow control and WINDOW_UPDATE, connection reuse, and the proxy
+#   filter's allow/block decisions all work. The 4.4.0 backwards-incompatible
+#   changes do not affect mitmproxy or the proxy filter: dropped Python/PyPy
+#   3.9 (container is 3.13); `H2Connection.end_stream()` now raises
+#   `NoSuchStreamError`/`StreamClosedError` instead of `KeyError` for unknown
+#   or closed streams, and mitmproxy only calls it behind an `is_open_for_us()`
+#   guard; and stricter `content-length`, duplicate-Host and
+#   `SETTINGS_ENABLE_PUSH` validation raises `h2.exceptions.ProtocolError`,
+#   which mitmproxy already catches around `receive_data` and turns into a
+#   normal protocol-error teardown.
 override-dependencies = [
     "tornado>=6.5.5",
     "pyopenssl>=26.0.0",
@@ -38,4 +57,5 @@ override-dependencies = [
     "pyasn1>=0.6.3",
     "msgpack>=1.2.1",
     "cryptography>=50.0.0",
+    "h2>=4.4.1",
 ]
