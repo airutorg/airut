@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+import pytest
 from tool_domains import (  # ty:ignore[unresolved-import]
+    _MAX_BODY_SIZE,
     ToolConfigVerdict,
     check_and_trim_tools,
     host_get_open,
@@ -628,13 +630,159 @@ class TestBodyParsing:
     """Tests for size limit, malformed JSON, and unusual body shapes."""
 
     def test_oversized_body(self) -> None:
-        body = b"x" * (1024 * 1024 + 1)
+        body = b"x" * (_MAX_BODY_SIZE + 1)
         result = check_and_trim_tools(body, _open)
         assert result.verdict is ToolConfigVerdict.BLOCKED
         assert result.error == "tool_config_too_large"
 
+    def test_body_at_size_limit_is_parsed(self) -> None:
+        """A body of exactly _MAX_BODY_SIZE is still parsed, not blocked."""
+        payload = {"tools": [{"type": "custom", "name": "Read"}], "pad": ""}
+        body = _body(payload)
+        # Grow the padding string so the encoded body is exactly at the cap.
+        payload["pad"] = "x" * (_MAX_BODY_SIZE - len(body))
+        body = _body(payload)
+        assert len(body) == _MAX_BODY_SIZE
+        result = check_and_trim_tools(body, _open)
+        assert result.verdict is ToolConfigVerdict.UNCHANGED
+
+    @staticmethod
+    def _image_payload(tools: list[dict]) -> dict:
+        """A Messages body carrying a 4 MiB base64 image, as Read sends."""
+        return {
+            "model": "claude-opus-5",
+            "tools": tools,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "A" * (4 * 1024 * 1024),
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+
+    def test_multi_megabyte_image_body_passes(self) -> None:
+        """A Claude Code request carrying a read image is not blocked.
+
+        Reading an image base64-encodes it into the ``/v1/messages``
+        body, and the whole conversation is resent on every turn, so a
+        cap below Anthropic's own 32 MB request limit bricks the rest of
+        the session rather than just one request. Regression test for a
+        1 MiB cap that 403'd these requests.
+        """
+        body = _body(self._image_payload([{"type": "custom", "name": "Read"}]))
+        assert len(body) > 1024 * 1024
+        result = check_and_trim_tools(body, _open)
+        assert result.verdict is ToolConfigVerdict.UNCHANGED
+
+    def test_multi_megabyte_body_is_still_trimmed(self) -> None:
+        """Raising the cap must not stop the trim running on big bodies.
+
+        Guards the security control itself: a large body carrying a
+        covered tool is parsed and trimmed, not waved through.
+        """
+        body = _body(
+            self._image_payload(
+                [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": ["evil.example"],
+                    }
+                ]
+            )
+        )
+        assert len(body) > 1024 * 1024
+        result = check_and_trim_tools(body, _open)
+        assert result.verdict is ToolConfigVerdict.REWRITTEN
+        new = json.loads(result.body or b"")
+        assert new["tools"][0]["allowed_domains"] == []
+
+    def test_oversized_body_with_covered_tool_is_blocked(self) -> None:
+        """Over the cap, a covered tool is blocked rather than passed."""
+        payload = {
+            "tools": [
+                {
+                    "type": "web_fetch_20250910",
+                    "allowed_domains": ["evil.example"],
+                }
+            ],
+            "pad": "x" * (_MAX_BODY_SIZE + 1),
+        }
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.BLOCKED
+        assert result.error == "tool_config_too_large"
+
+    def test_rewrite_does_not_inflate_non_ascii(self) -> None:
+        r"""A rewritten body must not balloon on non-ASCII content.
+
+        ``json.dumps`` defaults to ``ensure_ascii=True``, which expands
+        each non-ASCII character to a 6-byte ``\uXXXX`` escape. Now
+        that multi-megabyte bodies are admitted, that could push a body
+        Anthropic accepted past its own request limit.
+        """
+        text = "日本語テキスト" * 100
+        payload = {
+            "tools": [{"type": "web_fetch_20250910"}],
+            "messages": [{"role": "user", "content": text}],
+        }
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.REWRITTEN
+        assert result.body is not None
+        # Round-trips intact...
+        new = json.loads(result.body)
+        assert new["messages"][0]["content"] == text
+        # ...and stays close to the original size rather than inflating.
+        assert len(result.body) < len(text.encode()) * 2
+
+    def test_rewrite_handles_lone_surrogate(self) -> None:
+        r"""A lone surrogate must not break the rewrite.
+
+        ``JSON.stringify`` emits an unpaired surrogate as ``\udXXX``
+        rather than rejecting it, so a client that split a surrogate
+        pair mid-string sends one. It has no UTF-8 encoding, so the
+        non-escaping serialiser raises and must fall back to escaping.
+        """
+        raw = (
+            b'{"tools":[{"type":"web_fetch_20250910",'
+            b'"allowed_domains":["airut.org"]}],'
+            b'"messages":[{"role":"user","content":"tail \\ud83d"}]}'
+        )
+        result = check_and_trim_tools(raw, _open)
+        assert result.verdict is ToolConfigVerdict.REWRITTEN
+        assert result.body is not None
+        new = json.loads(result.body)
+        assert new["tools"][0]["allowed_domains"] == []
+        assert new["messages"][0]["content"] == "tail \ud83d"
+
     def test_malformed_json(self) -> None:
         result = check_and_trim_tools(b"not json{{{", _open)
+        assert result.verdict is ToolConfigVerdict.BLOCKED
+        assert result.error == "tool_config_invalid"
+
+    def test_deeply_nested_body_is_blocked(self) -> None:
+        """A nesting bomb fails closed instead of escaping the filter.
+
+        ``json.loads`` recurses in C, so a body far under the size cap
+        can raise ``RecursionError``. Left uncaught it would propagate
+        out of the proxy hook and the original, untrimmed body would be
+        forwarded — a silent bypass of this control.
+        """
+        depth = 50_000
+        body = (b'{"a":' * depth) + b"1" + (b"}" * depth)
+        # Precondition: this depth must actually exceed the
+        # interpreter's C recursion limit, else the test is vacuous.
+        with pytest.raises(RecursionError):
+            json.loads(body)
+        assert len(body) < _MAX_BODY_SIZE
+        result = check_and_trim_tools(body, _open)
         assert result.verdict is ToolConfigVerdict.BLOCKED
         assert result.error == "tool_config_invalid"
 

@@ -142,7 +142,7 @@ def check_operations(
     # Step 1: Parse JSON body.
     try:
         body = json.loads(request_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return _PARSE_ERROR
 
     # Step 2: Reject arrays (batched queries).

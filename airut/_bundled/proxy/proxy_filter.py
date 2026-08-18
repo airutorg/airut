@@ -60,10 +60,19 @@ from github_app import (
     is_token_valid,
 )
 from graphql_operations import GraphQLOperationFilter
-from graphql_scope import ScopeVerdict, check_repo_scope
+from graphql_scope import (
+    _UNREADABLE,
+    ScopeVerdict,
+    check_repo_scope,
+)
 from host_match import UrlPrefixEntry, match_host_pattern
 from mitmproxy import ctx, http
-from request_filter import FilterAction, FilterRequest, RequestBodyFilter
+from request_filter import (
+    FilterAction,
+    FilterRequest,
+    FilterResult,
+    RequestBodyFilter,
+)
 from tool_domains import ToolDomainFilter, host_get_open
 
 
@@ -91,6 +100,14 @@ NETWORK_LOG_PATH = Path("/network-sandbox.log")
 
 # Path to replacement map (mounted by proxy container)
 REPLACEMENTS_PATH = Path("/replacements.json")
+
+# Backstop length for a request-body filter's log annotation. The tags
+# interpolate request-controlled values, so they are bounded before
+# reaching the network log, syslog, and the dashboard log stream.
+# Filters bound their own variable-length parts (see tool_domains'
+# _format_domains); this is the catch-all, set high enough that a
+# well-behaved filter never hits it.
+_MAX_FILTER_TAG_LEN = 1000
 
 # Enable verbose signing diagnostics (canonical request, hashes, etc.)
 DEBUG_SIGNING = os.environ.get("DEBUG_SIGNING", "").lower() in (
@@ -404,7 +421,15 @@ class ProxyFilter:
 
         ``response()`` emits each entry as ``[{name}: {log_tag}]`` on the
         access-decision line, in filter-execution order.
+
+        Tags interpolate request-controlled values (tool types, dropped
+        domains, GraphQL operation names), so they are truncated: a body
+        declaring thousands of domains would otherwise write a
+        multi-megabyte single line to the network log, to syslog, and to
+        the dashboard's log stream.
         """
+        if len(log_tag) > _MAX_FILTER_TAG_LEN:
+            log_tag = f"{log_tag[:_MAX_FILTER_TAG_LEN]}… (truncated)"
         flow.metadata.setdefault("filter_tags", []).append(f"{name}: {log_tag}")
 
     def _run_body_filters(
@@ -420,7 +445,9 @@ class ProxyFilter:
         the request inspects the (possibly already-rewritten) body and
         returns a :class:`FilterResult`. The pipeline applies it:
         ``PASS`` continues, ``REWRITE`` swaps the request body in place,
-        ``BLOCK`` sets a 403 and stops.
+        ``BLOCK`` sets a 403 and stops. A filter that raises is treated
+        as ``BLOCK`` — these are security controls, so an unexpected
+        error must not forward the body uninspected.
 
         Returns:
             True if a filter blocked the request (caller must stop
@@ -429,11 +456,42 @@ class ProxyFilter:
         req = FilterRequest(host=host, path=path, matched_entry=matched_entry)
 
         for body_filter in self._body_filters:
-            if not body_filter.matches(req):
-                continue
+            try:
+                if not body_filter.matches(req):
+                    continue
 
-            body = flow.request.get_content() or b""
-            result = body_filter.apply(req, body)
+                # get_content() is inside the guard deliberately: it
+                # raises for any Content-Encoding it cannot decode
+                # (ValueError for an unknown codec, TypeError for a
+                # str-only one like rot13), and the sandboxed agent
+                # controls that header outright.
+                body = flow.request.get_content() or b""
+                result = body_filter.apply(req, body)
+            except Exception as e:  # noqa: BLE001 - must fail closed
+                # A filter that raises must never let the request
+                # through: these filters are security controls, and an
+                # escaping exception would leave mitmproxy's safecall to
+                # log the error and forward the original, uninspected
+                # body. Anything unexpected (a RecursionError from a
+                # deeply nested body, an undecodable Content-Encoding)
+                # is therefore converted into the same 403 an explicit
+                # BLOCK produces.
+                # str(), not repr(): UnicodeEncodeError/UnicodeDecodeError
+                # carry the entire offending string in .args, and repr()
+                # would write a multi-megabyte request body to the log.
+                ctx.log.error(
+                    f"Request-body filter {body_filter.name} raised "
+                    f"{type(e).__name__}: {str(e)[:200]}; blocking request"
+                )
+                result = FilterResult.block(
+                    error="filter_error",
+                    message=(
+                        "The airut network proxy could not inspect this "
+                        "request body and rejected it."
+                    ),
+                    detail=f"<{body_filter.name}: {type(e).__name__}>",
+                    log_tag=f"<error: {type(e).__name__}>",
+                )
 
             if result.log_tag:
                 self._add_filter_tag(flow, body_filter.name, result.log_tag)
@@ -885,11 +943,36 @@ class ProxyFilter:
                     if cached_entry is not None
                     else frozenset()
                 )
-                result = check_repo_scope(
-                    flow.request.get_content(),
-                    repo_ids,
-                    repo_full_names,
-                )
+                # This runs outside the request-body filter pipeline,
+                # so it cannot rely on that pipeline's fail-closed
+                # guard and needs its own. get_content() raises for a
+                # Content-Encoding mitmproxy cannot decode — ValueError
+                # for an unknown codec, TypeError for a str-only one
+                # like rot13 — and the agent controls that header. A
+                # body we cannot read or parse is one we cannot
+                # scope-check, so treat it exactly like unparseable
+                # input rather than letting the hook raise and
+                # mitmproxy forward the request unchecked.
+                #
+                # ``or b""`` mirrors the pipeline: an absent body is
+                # handed over as empty, which check_repo_scope rejects
+                # as unparseable rather than raising on ``len(None)``.
+                try:
+                    content = flow.request.get_content() or b""
+                    result = check_repo_scope(
+                        content,
+                        repo_ids,
+                        repo_full_names,
+                    )
+                except Exception as e:  # noqa: BLE001 - must fail closed
+                    # Unconditional catch, so log: otherwise a genuine
+                    # bug in check_repo_scope() surfaces only as an
+                    # unexplained 403.
+                    self._log_loud(
+                        f"GraphQL repo-scope check failed: "
+                        f"{type(e).__name__}: {str(e)[:200]}"
+                    )
+                    result = _UNREADABLE
                 if result.verdict is not ScopeVerdict.ALLOWED:
                     detail = result.detail or result.verdict.value
                     if result.verdict is ScopeVerdict.OUT_OF_SCOPE:
@@ -1513,8 +1596,26 @@ class ProxyFilter:
                     return
 
         if deferred is not None:
-            # Compute sha256 of actual body for deferred signing
-            body = getattr(flow.request, "content", b"") or b""
+            # Compute sha256 of actual body for deferred signing.
+            # ``content`` is a property that calls get_content(), which
+            # raises for a Content-Encoding the proxy cannot decode, and
+            # the agent controls that header. Escaping here would skip
+            # _perform_resign() below, forwarding the request with the
+            # surrogate credential and an unhandled exception in the
+            # hook. Sign over empty bytes instead: the payload hash is
+            # part of the canonical request but is not sent as a header
+            # on this path, so AWS recomputes it from the wire bytes and
+            # rejects the mismatch.
+            try:
+                body = flow.request.content or b""
+            except Exception as e:  # noqa: BLE001 - must fail closed
+                # Unconditional catch, so log: the only other symptom is
+                # an upstream SignatureDoesNotMatch with nothing here.
+                self._log_loud(
+                    f"Deferred AWS signing could not read the request "
+                    f"body: {type(e).__name__}: {str(e)[:200]}"
+                )
+                body = b""
             if isinstance(body, str):
                 body = body.encode("utf-8")
             body_hash = hashlib.sha256(body).hexdigest()

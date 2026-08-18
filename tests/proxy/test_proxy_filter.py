@@ -12,16 +12,20 @@ reimplemented copies.
 """
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from mitmproxy.http import (  # ty:ignore[unresolved-import]
     MockError,
     MockHeaders,
     MockHTTPFlow,
     MockRequest,
     MockResponse,
+)
+from request_filter import (  # ty:ignore[unresolved-import]
+    FilterRequest,
+    FilterResult,
 )
 from tests.proxy.vectors import (
     REAL_ACCESS_KEY_ID,
@@ -2346,6 +2350,37 @@ class TestDeferredResigning:
         assert flow.metadata.get("masked_count") == 1
         assert REAL_ACCESS_KEY_ID in flow.request.headers["Authorization"]
 
+    def test_deferred_resign_unreadable_body_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable body signs over empty bytes, not an exception.
+
+        ``flow.request.content`` is a property that calls
+        ``get_content()``, which raises for a ``Content-Encoding`` the
+        proxy cannot decode. Escaping here would skip
+        ``_perform_resign()`` and forward the request carrying the
+        surrogate credential, with an unhandled error in the hook.
+        """
+        pf = _pf_with_signing()
+        flow = _bedrock_flow_no_content_sha(body=b'{"prompt": "hi"}')
+        pf.requestheaders(flow)
+        assert "aws_deferred_resign" in flow.metadata
+
+        monkeypatch.setattr(
+            type(flow.request),
+            "content",
+            property(
+                lambda self: (_ for _ in ()).throw(
+                    ValueError("Invalid Content-Encoding: utf-8")
+                )
+            ),
+            raising=False,
+        )
+        pf.request(flow)
+        # Signed over b"" rather than raising out of the hook. AWS
+        # recomputes the hash from the wire bytes and rejects it.
+        assert flow.metadata.get("aws_resigned") is True
+
     def test_deferred_resign_uses_body_hash(self) -> None:
         """Deferred re-sign uses sha256(body), not UNSIGNED-PAYLOAD."""
         import hashlib
@@ -3744,6 +3779,62 @@ class TestGitHubAppGraphQLScoping:
         )
         return pf
 
+    def test_undecodable_body_fails_closed(self) -> None:
+        """An unreadable body blocks instead of skipping the check.
+
+        ``get_content()`` raises ``ValueError`` for a
+        ``Content-Encoding`` mitmproxy cannot decode, and the agent
+        controls that header. This call sits outside the request-body
+        filter pipeline, so it cannot rely on that guard: left to
+        raise, it would escape the hook with the repo-scope check
+        silently skipped.
+        """
+        pf = self._setup_filter_with_cached_token()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=b'{"query":"{ viewer { login } }"}',
+        )
+        flow.request.get_content = MagicMock(
+            side_effect=ValueError("Invalid Content-Encoding: utf-8")
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.metadata["credential_info"] == "github-app: <unreadable>"
+
+    def test_unparseable_body_fails_closed(self) -> None:
+        """A body that raises during *parsing* also blocks.
+
+        ``json.loads`` raises a plain ``ValueError`` for an integer
+        literal over ``sys.get_int_max_str_digits()``. The guard has to
+        cover ``check_repo_scope()`` itself, not only the body read.
+        """
+        pf = self._setup_filter_with_cached_token()
+        body = (
+            b'{"query":"{ viewer { login } }","variables":{"n":'
+            + b"1" * 5000
+            + b"}}"
+        )
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
     def test_blocks_out_of_scope_graphql_mutation(self) -> None:
         """GraphQL mutation with out-of-scope repositoryId returns 403."""
         pf = self._setup_filter_with_cached_token()
@@ -5093,7 +5184,9 @@ class TestProxyFilterToolDomainTrim:
         a ~12 KB adversarial body could trigger ``RecursionError`` and
         the exception would propagate out of the proxy hook, leaving
         the original (un-trimmed) body to reach upstream. The iterative
-        walk eliminates this class of bypass.
+        walk eliminates this class of bypass, so a body this deep is
+        parsed normally. Deeper bodies exhaust ``json.loads``' own C
+        stack instead — see ``test_deep_recursion_bomb_is_blocked``.
         """
         pf = self._filter()
         nesting = 2000
@@ -5104,15 +5197,249 @@ class TestProxyFilterToolDomainTrim:
             path="/v1/messages",
             content=body,
         )
-        original_limit = sys.getrecursionlimit()
-        sys.setrecursionlimit(1500)
-        try:
-            pf.request(flow)
-        finally:
-            sys.setrecursionlimit(original_limit)
+        pf.request(flow)
         # No covered tools in the body — should be ALLOWED and quiet.
         assert flow.metadata["allowlist_action"] == "ALLOWED"
         assert flow.response is None
+
+    def test_deep_recursion_bomb_is_blocked(self) -> None:
+        """A body too deeply nested for ``json.loads`` returns 403.
+
+        ``_walk_for_tools`` is iterative, but ``json.loads`` still
+        recurses in C and raises ``RecursionError`` well before the
+        size cap. Uncaught, that escapes the proxy hook and mitmproxy
+        forwards the original body uninspected — a silent bypass. It
+        must fail closed instead.
+        """
+        pf = self._filter()
+        nesting = 50_000
+        body = b'{"a":' * nesting + b"null" + b"}" * nesting
+        # Precondition: this depth must actually exceed the
+        # interpreter's C recursion limit. Assert it rather than assume,
+        # so a change to that limit fails this test loudly instead of
+        # silently voiding it.
+        with pytest.raises(RecursionError):
+            json.loads(body)
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert json.loads(flow.response._content)["error"] == (
+            "tool_config_invalid"
+        )
+
+    def test_filter_raising_fails_closed(self) -> None:
+        """An unexpected exception in any filter blocks the request.
+
+        The pipeline backstop: request-body filters are security
+        controls, so a filter that raises must not leave the body to be
+        forwarded uninspected.
+        """
+
+        class _ExplodingFilter:
+            name = "boom"
+
+            def matches(self, req: FilterRequest) -> bool:
+                return True
+
+            def apply(self, req: FilterRequest, body: bytes) -> FilterResult:
+                raise ValueError("kaboom")
+
+        pf = self._filter()
+        pf._body_filters = [_ExplodingFilter()]
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=b"{}",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        payload = json.loads(flow.response._content)
+        assert payload["error"] == "filter_error"
+        assert payload["detail"] == "<boom: ValueError>"
+        assert flow.request.content == b"{}"
+        assert flow.metadata["filter_tags"] == ["boom: <error: ValueError>"]
+
+    def test_log_annotation_is_bounded(self) -> None:
+        """A request-controlled tag cannot write an unbounded log line.
+
+        The trim annotation interpolates every dropped domain, so a
+        body declaring thousands of them would otherwise produce a
+        multi-megabyte single line in the network log, syslog, and the
+        dashboard stream — a ceiling that rose with the body-size cap.
+        """
+        pf = self._filter()
+        domains = [f"d{i}.example.com" for i in range(5000)]
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": domains,
+                    }
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is None
+        (tag,) = flow.metadata["filter_tags"]
+        assert len(tag) < 300
+        # The counts survive; only the domain tail is summarised.
+        assert "dropped 5000 of 5000 domains" in tag
+        assert "+4990 more" in tag
+
+    def test_every_tool_is_annotated_despite_long_lists(self) -> None:
+        """One tool's long domain list must not crowd out the others.
+
+        Bounding the joined tag alone would drop the second entry
+        entirely; bounding each domain list at the source keeps one
+        annotation per tool.
+        """
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": [
+                            f"d{i}.example.com" for i in range(2000)
+                        ],
+                    },
+                    {
+                        "type": "code_execution_20250825",
+                        "allowed_domains": ["late.example.com"],
+                    },
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        (tag,) = flow.metadata["filter_tags"]
+        assert "web_fetch_20250910" in tag
+        assert "code_execution_20250825" in tag
+        assert "late.example.com" in tag
+
+    def test_log_annotation_backstop_truncates(self) -> None:
+        """The choke point still bounds a filter that ignores the rule."""
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=b"{}",
+        )
+        ProxyFilter._add_filter_tag(flow, "noisy", "x" * 5000)
+        (tag,) = flow.metadata["filter_tags"]
+        assert tag.endswith("… (truncated)")
+        assert len(tag) < 1100
+
+    def test_short_log_annotation_is_not_truncated(self) -> None:
+        """A normal-sized tag is recorded verbatim."""
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": ["airut.org"],
+                    }
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        (tag,) = flow.metadata["filter_tags"]
+        assert "truncated" not in tag
+        assert "airut.org" in tag
+
+    def test_filter_matches_raising_fails_closed(self) -> None:
+        """A filter whose gating raises blocks too, not just apply()."""
+
+        class _ExplodingMatcher:
+            name = "boom"
+
+            def matches(self, req: FilterRequest) -> bool:
+                raise RuntimeError("gate exploded")
+
+            def apply(self, req: FilterRequest, body: bytes) -> FilterResult:
+                raise AssertionError("must not be reached")
+
+        pf = self._filter()
+        pf._body_filters = [_ExplodingMatcher()]
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=b"{}",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        payload = json.loads(flow.response._content)
+        assert payload["detail"] == "<boom: RuntimeError>"
+
+    def test_undecodable_content_encoding_fails_closed(self) -> None:
+        """A body the proxy cannot decode is blocked, not forwarded.
+
+        ``get_content()`` raises ``ValueError`` for any
+        ``Content-Encoding`` mitmproxy cannot decode, and the sandboxed
+        agent controls that header outright — ``Content-Encoding:
+        utf-8`` is enough to trigger it. Escaping the hook would leave
+        mitmproxy's ``safecall`` to log the error and forward the
+        original, untrimmed body upstream.
+        """
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": ["airut.org"],
+                    }
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        flow.request.get_content = MagicMock(
+            side_effect=ValueError("Invalid Content-Encoding: utf-8")
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert json.loads(flow.response._content)["error"] == "filter_error"
+        # The untrimmed body must not have been forwarded.
+        assert flow.request.content == body
 
     def test_trim_treats_tool_type_case_insensitively(self) -> None:
         """``Web_Fetch_20250910`` must still match the covered prefix.

@@ -406,10 +406,14 @@ target a specific allowed repo.
    The GraphQL endpoint only accepts POST with a JSON body; query parameters
    could bypass body-based scope checking. The `gh` CLI never uses query
    parameters for GraphQL.
-3. Oversized request bodies (> 1 MiB) are rejected with a `PARSE_ERROR` verdict
-   to prevent CPU exhaustion via `graphql-core` AST parsing of very large query
-   strings. This matches the same limit applied in the GraphQL operation
-   allowlist check.
+3. Request bodies that cannot be read or parsed are rejected with a
+   `PARSE_ERROR` verdict: a body the proxy cannot inspect is one it cannot
+   scope-check, so it fails closed rather than being forwarded. This covers
+   malformed JSON, bodies nested too deeply to parse, and any `Content-Encoding`
+   the proxy cannot decode. Oversized bodies (> 1 MiB) are rejected under the
+   same verdict, there to prevent CPU exhaustion via `graphql-core` AST parsing
+   of very large query strings — the same limit the GraphQL operation allowlist
+   check applies.
 4. For each GraphQL request (`POST /graphql`), `check_repo_scope()` extracts
    `repositoryId` from three paths: inlined in the query AST, variable
    references resolved against the variables dict, and variable objects scanned

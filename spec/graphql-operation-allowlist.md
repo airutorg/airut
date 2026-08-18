@@ -204,7 +204,7 @@ When a request matches a URL pattern that has a `graphql` configuration:
 
 | Condition                                      | Result  |
 | ---------------------------------------------- | ------- |
-| Body is not valid JSON                         | BLOCKED |
+| Body is not valid JSON / nested too deeply     | BLOCKED |
 | Body is a JSON array (batched)                 | BLOCKED |
 | `query` field missing or not a string          | BLOCKED |
 | GraphQL parse error                            | BLOCKED |
