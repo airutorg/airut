@@ -80,6 +80,9 @@ Constructed via `FilterResult.passthrough()`, `FilterResult.rewrite(body)`, or
 | `REWRITE` | Swap `body` into `flow.request.content`, then continue.  |
 | `BLOCK`   | Set a 403 with `{error, message, detail}` JSON and stop. |
 
+A raised exception is coerced to `BLOCK` by the pipeline — see
+[Pipeline Execution](#pipeline-execution).
+
 Any action may carry a `log_tag`. A `PASS` result with a `log_tag` is the
 mechanism by which an allowed-but-noteworthy request is still annotated (e.g.
 the GraphQL operation tag is logged even when the operation is permitted).
@@ -123,20 +126,51 @@ reach Anthropic. It:
    tool-domain trim).
 3. For each filter whose `matches()` is true, reads the current request body
    (re-read each time, so a filter sees any rewrite an earlier filter applied)
-   and calls `apply()`. A missing/undecodable body (`get_content()` is `None`)
-   is passed to the filter as `b""`, which the body-parsing filters reject as
-   invalid — fail-secure rather than forwarding an opaque body.
+   and calls `apply()`. A missing body (`get_content()` returns `None`) is
+   passed to the filter as `b""`, which the body-parsing filters reject as
+   invalid — fail-secure rather than forwarding an opaque body. An
+   **undecodable** body is different: `get_content()` raises for any
+   `Content-Encoding` mitmproxy cannot decode (`ValueError` for an unknown
+   codec, `TypeError` for a str-only one such as `rot13`), and that raise is
+   caught by the same guard as a raising filter (below) and blocked. The header
+   is fully agent-controlled, so this path must not escape.
 4. Translates the `FilterResult`: `PASS` continues, `REWRITE` writes
    `flow.request.content` and continues, `BLOCK` sets `flow.metadata`
    `allowlist_action = "BLOCKED"`, emits the 403, and returns `True` (caller
    stops processing).
 5. Records each non-empty `log_tag` as `"{name}: {log_tag}"` in
-   `flow.metadata["filter_tags"]`.
+   `flow.metadata["filter_tags"]`, truncating the tag as a backstop (see
+   [Logging](#logging)).
+
+An exception raised **anywhere in a filter's gating or body read** —
+`matches()`, `get_content()`, or `apply()` — is treated as `BLOCK`, with `error`
+`filter_error` and `detail` `<{name}: {ExceptionType}>`. Filters are security
+controls, so an escaping exception would leave mitmproxy's `safecall` to log the
+error and forward the original, uninspected body — the worst available outcome.
+Individual filters still catch what they can predict (a filter that recognises
+the failure returns a `BLOCK` with a specific error code); this backstop covers
+what they cannot, such as a `RecursionError` raised inside `json.loads` on a
+deeply nested body.
 
 `mitmproxy` updates `Content-Length` automatically when `flow.request.content`
 is assigned, so a rewrite needs no further bookkeeping.
 
 ## Logging
+
+Tags interpolate request-controlled values — tool types, dropped domains,
+GraphQL operation names — so their size scales with the request body. A single
+request declaring thousands of `allowed_domains` would otherwise write a
+multi-megabyte line to the network log, to syslog, and to the dashboard's log
+stream. Bounding happens at two levels:
+
+1. **Each filter bounds its own variable-length parts.** The tool-domain trim
+   names at most 10 domains and summarises the rest as `+N more`, keeping the
+   counts that precede them. This is what keeps the annotation useful: a filter
+   emitting one annotation per tool stays readable, because no single entry can
+   crowd out the ones after it.
+2. **`_add_filter_tag` truncates the finished tag** to 1000 characters,
+   suffixing `… (truncated)`. This is a catch-all for a filter that neglects
+   step 1, not the primary mechanism — a well-behaved filter never reaches it.
 
 `ProxyFilter.response()` emits each entry in `flow.metadata["filter_tags"]` as a
 bracket-wrapped annotation on the single access-decision line, in filter

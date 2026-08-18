@@ -74,9 +74,19 @@ _COVERED_TOOL_PREFIXES: tuple[str, ...] = (
 _UNRESTRICTED_ON_EMPTY_PREFIXES: tuple[str, ...] = ("web_search_",)
 
 
-# Maximum request body size accepted for parsing. Larger bodies are
-# rejected to bound parser CPU (mirrors graphql_operations._MAX_BODY_SIZE).
-_MAX_BODY_SIZE = 1024 * 1024
+# Maximum request body size accepted for parsing: 32 MiB, rounded up
+# from Anthropic's own 32 MB request limit so the proxy is never the
+# binding constraint on a request the API would have accepted. The
+# non-obvious part: a ``/v1/messages`` body carries the whole
+# conversation on every turn, so one oversized request bricks every
+# later turn in that conversation, not just itself. Rationale in
+# spec/anthropic-tool-domain-trim.md ("Body size cap").
+_MAX_BODY_SIZE = 32 * 1024 * 1024
+
+
+# Maximum number of domains named individually in a log annotation. The
+# list is request-controlled, so the tail is summarised as "+N more".
+_MAX_LOGGED_DOMAINS = 10
 
 
 class ToolConfigVerdict(enum.Enum):
@@ -283,7 +293,7 @@ def _process_tools_array(
                 annotations.append(
                     f"{tool_type}: cleared allowed_domains "
                     f"({len(original)} outside allowlist: "
-                    f"{','.join(original)})"
+                    f"{_format_domains(original)})"
                 )
             else:
                 annotations.append(
@@ -294,10 +304,25 @@ def _process_tools_array(
             entry["allowed_domains"] = trimmed
             annotations.append(
                 f"{tool_type}: dropped {len(dropped)} of "
-                f"{len(original)} domains: {','.join(dropped)}"
+                f"{len(original)} domains: {_format_domains(dropped)}"
             )
 
     return None
+
+
+def _format_domains(domains: list[str]) -> str:
+    """Render a domain list for a log annotation, bounded in length.
+
+    The list comes straight from the request, so it is only as short as
+    the agent chose to make it: a body declaring thousands of domains
+    would otherwise put all of them on a single access-decision line.
+    Counts are already carried by the surrounding text, so the tail is
+    the cheapest thing to drop.
+    """
+    if len(domains) <= _MAX_LOGGED_DOMAINS:
+        return ",".join(domains)
+    shown = ",".join(domains[:_MAX_LOGGED_DOMAINS])
+    return f"{shown},+{len(domains) - _MAX_LOGGED_DOMAINS} more"
 
 
 def _walk_for_tools(
@@ -311,7 +336,9 @@ def _walk_for_tools(
     trigger a ``RecursionError`` (which would propagate out of the
     proxy hook and result in the original body being forwarded
     unfiltered — the worst possible failure mode for this security
-    control).
+    control). ``json.loads`` recurses in C and raises before the walk
+    is ever reached, so :func:`check_and_trim_tools` catches
+    ``RecursionError`` at the parse site as well.
 
     Whenever a key named ``tools`` whose value is a list is encountered,
     :func:`_process_tools_array` is applied to it. The walk handles both
@@ -366,8 +393,9 @@ def check_and_trim_tools(
             ToolConfigVerdict.BLOCKED,
             error="tool_config_too_large",
             message=(
-                "Request body exceeds the 1 MiB size limit for "
-                "Anthropic Messages tool-config parsing."
+                f"Request body exceeds the "
+                f"{_MAX_BODY_SIZE // (1024 * 1024)} MiB size limit for "
+                f"Anthropic Messages tool-config parsing."
             ),
             detail="<too-large>",
             log_tag="<too-large>",
@@ -375,14 +403,15 @@ def check_and_trim_tools(
 
     try:
         body = json.loads(request_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return ToolConfigResult(
             ToolConfigVerdict.BLOCKED,
             error="tool_config_invalid",
             message=(
-                "Request body is not valid JSON. The airut network "
-                "proxy parses Anthropic Messages request bodies to "
-                "trim server-side tool 'allowed_domains'."
+                "Request body is not valid JSON, or is nested too "
+                "deeply to parse. The airut network proxy parses "
+                "Anthropic Messages request bodies to trim server-side "
+                "tool 'allowed_domains'."
             ),
             detail="<invalid-json>",
             log_tag="<invalid-json>",
@@ -401,9 +430,22 @@ def check_and_trim_tools(
         # No covered tool entries — quiet pass-through.
         return ToolConfigResult(ToolConfigVerdict.UNCHANGED)
 
-    # Re-serialise with compact separators to keep the rewritten body
-    # close to the original on the wire.
-    new_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    # Re-serialise with compact separators and no ASCII escaping, to
+    # keep the rewritten body close to the original on the wire. The
+    # default ensure_ascii=True would expand every non-ASCII character
+    # to a 6-byte \uXXXX escape — on a CJK- or emoji-heavy conversation
+    # that can push a body Anthropic accepted past its 32 MB limit.
+    #
+    # A lone surrogate (a client splitting a surrogate pair mid-string,
+    # which JSON.stringify emits as \udXXX rather than rejecting) has
+    # no UTF-8 encoding, so fall back to escaping it exactly as the
+    # client sent it. Escaping is the safe direction: it only inflates.
+    try:
+        new_body = json.dumps(
+            body, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    except UnicodeEncodeError:
+        new_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
     return ToolConfigResult(
         ToolConfigVerdict.REWRITTEN,
         body=new_body,

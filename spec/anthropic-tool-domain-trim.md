@@ -61,8 +61,13 @@ any tool definition Anthropic supports, current or future.
    reject an empty list upstream (see
    [Empty-list handling](#empty-list-handling)), where default-deny is expressed
    by removing the key instead.
-2. **Fail-secure.** Anything ambiguous (malformed JSON, oversized body, unknown
-   blocklist shape) yields a 403, never an unfiltered pass-through.
+2. **Fail-secure.** Anything ambiguous (malformed JSON, body nested too deeply
+   to parse, oversized body, unknown blocklist shape) yields a 403, never an
+   unfiltered pass-through — as does an unexpected exception anywhere in the
+   filter, which the pipeline converts into a 403 rather than letting it escape
+   (see [`request-body-filters.md`](request-body-filters.md)). The size cap is
+   set at Anthropic's own request limit so fail-secure never costs functionality
+   (see [Body size cap](#body-size-cap)).
 3. **Generic.** No tool-specific schema knowledge beyond the `type` prefix list;
    only `allowed_domains` / `blocked_domains` are touched.
 4. **Independent of header gating.** The rewrite is body-level, so it survives
@@ -117,8 +122,8 @@ Messages shape — and applies the per-entry rules below to covered tools only.
 
 | Condition (covered tool unless noted)                                                | Result                          |
 | ------------------------------------------------------------------------------------ | ------------------------------- |
-| Body exceeds 1 MiB                                                                   | 403                             |
-| Body is empty / not valid JSON / not valid UTF-8                                     | 403                             |
+| Body exceeds 32 MiB                                                                  | 403                             |
+| Body is empty / not valid JSON / not valid UTF-8 / nested too deeply                 | 403                             |
 | `blocked_domains` present and non-empty (or not a list)                              | 403                             |
 | `allowed_domains` element is empty, non-string, or has `*` `?` whitespace `.`-prefix | 403                             |
 | `allowed_domains` missing or not a list (default-deny tool)                          | injected as `[]`                |
@@ -135,6 +140,40 @@ security default. Wildcards are rejected so the trim does not silently fall out
 of sync with whatever wildcard syntax Anthropic might later adopt. For
 default-deny tools a trimmed entry is left with `allowed_domains: []` rather
 than deleted, since Anthropic treats an empty list as deny-all.
+
+### Body size cap
+
+The filter must parse the body to enforce the trim, so it rejects bodies too
+large to parse rather than forwarding them unfiltered. The cap is **32 MiB**,
+rounded up from the Anthropic Messages API's own 32 MB request limit.
+
+Sizing the cap to the upstream limit is deliberate. A `/v1/messages` body
+carries the whole conversation on every turn — base64 images from `Read`,
+document attachments, accumulated file contents — so a cap below the upstream
+limit makes the proxy, not the API, the binding constraint. Because history is
+resent each turn, a single oversized request also bricks every subsequent
+request in that conversation, not just the one that crossed the line. For
+`/v1/messages` the cap therefore costs no functionality: anything it rejects
+Anthropic would have rejected anyway.
+
+The one exception is `/v1/messages/batches`, which this filter also matches and
+which accepts up to 256 MB per batch. Between 32 MiB and that limit the proxy
+*is* the binding constraint. Claude Code does not use the Batches API, so this
+is accepted rather than solved; raising the cap for batches specifically would
+mean parsing bodies an order of magnitude larger, which the amplification note
+below argues against.
+
+Parse cost at the cap is ~50 ms and negligible extra memory for a realistic
+Messages body (one large base64 string), against an API round-trip measured in
+seconds. It is **not** linear in body size for degenerate input: 32 MiB of tiny
+JSON objects parses in ~0.5 s and allocates ~740 MB, roughly 23x the body. The
+proxy is per-task and a proxy that dies takes only its own task's network with
+it (fail-closed), but the proxy container is not memory-limited, so this
+amplification is the cost of the higher cap — see
+[Open Questions](#open-questions).
+
+This is why the cap differs from the 1 MiB used by the GraphQL filters, whose
+request bodies are queries rather than conversation payloads.
 
 ### Empty-list handling
 
@@ -191,6 +230,15 @@ Monitoring Anthropic's tool-release notes is part of routine maintenance.
 
 ## Open Questions
 
+- **Parse-memory amplification.** Degenerate JSON at the 32 MiB cap allocates
+  ~740 MB during `json.loads`, and the proxy container runs without a `--memory`
+  limit. The blast radius is one task's own proxy, and losing it fails closed,
+  but the allocation lands on host memory shared with the gateway. The cap does
+  not bound proxy memory end-to-end either way: mitmproxy buffers and
+  **decompresses** the body before any filter sees it, and the cap is measured
+  on the decoded bytes, so a small compressed bomb allocates without ever
+  reaching the check. **Unresolved:** give the proxy container a memory limit,
+  which contains both effects at the point they actually matter.
 - **`web_search` snippet leakage.** Even with a trimmed `allowed_domains`,
   `web_search` returns engine snippets containing content from arbitrary
   third-party URLs. If snippets carry enough data to reconstruct a canary, the

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from graphql_operations import (  # ty:ignore[unresolved-import]
     OperationResult,
     OperationVerdict,
@@ -739,6 +740,24 @@ class TestEdgeCases:
         result = check_operations(large_body, _STANDARD_CONFIG)
         assert result.verdict is _BLOCKED
         assert result.detail == "<too-large>"
+
+    def test_deeply_nested_body_blocked(self) -> None:
+        """A nesting bomb is blocked rather than escaping the filter.
+
+        ``json.loads`` recurses in C, so a body far under the size cap
+        can raise ``RecursionError``. Uncaught it would propagate out
+        of the proxy hook and the original body would be forwarded
+        un-inspected.
+        """
+        depth = 50_000
+        body = (b'{"a":' * depth) + b"1" + (b"}" * depth)
+        # Precondition: this depth must actually exhaust the C
+        # stack, else the test would pass vacuously.
+        with pytest.raises(RecursionError):
+            json.loads(body)
+        result = check_operations(body, _STANDARD_CONFIG)
+        assert result.verdict is _BLOCKED
+        assert result.detail == "<unparseable>"
 
     def test_non_string_pattern_fails_secure(self) -> None:
         """Non-string pattern values cause fail-secure block."""

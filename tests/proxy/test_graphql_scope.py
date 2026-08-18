@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from graphql_scope import (  # ty:ignore[unresolved-import]
     _MAX_BODY_SIZE,
     ScopeResult,
@@ -350,6 +351,43 @@ class TestParseFailures:
         # Pad to exactly _MAX_BODY_SIZE — should still be processed.
         body = body + b" " * (_MAX_BODY_SIZE - len(body))
         assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_deeply_nested_body_is_parse_error(self) -> None:
+        """A nesting bomb fails closed rather than escaping the caller.
+
+        ``check_repo_scope`` runs outside the request-body filter
+        pipeline (it gates GitHub App token injection), so it cannot
+        rely on the pipeline's fail-closed backstop.
+        """
+        depth = 50_000
+        body = (b'{"a":' * depth) + b"1" + (b"}" * depth)
+        # Precondition: this depth must actually exhaust the C
+        # stack, else the test would pass vacuously.
+        with pytest.raises(RecursionError):
+            json.loads(body)
+        assert len(body) < _MAX_BODY_SIZE
+        assert check_repo_scope(body, ALLOWED) == ScopeResult(
+            ScopeVerdict.PARSE_ERROR, "<unparseable>"
+        )
+
+    def test_huge_integer_literal_is_parse_error(self) -> None:
+        """An over-long int literal fails closed.
+
+        ``json.loads`` raises a plain ``ValueError`` — not
+        ``JSONDecodeError`` — once an integer literal exceeds
+        ``sys.get_int_max_str_digits()``, so a guard enumerating
+        ``JSONDecodeError`` alone would let it escape.
+        """
+        body = (
+            b'{"query":"{ viewer { login } }","variables":{"n":'
+            + b"1" * 5000
+            + b"}}"
+        )
+        with pytest.raises(ValueError):
+            json.loads(body)
+        assert check_repo_scope(body, ALLOWED) == ScopeResult(
+            ScopeVerdict.PARSE_ERROR, "<unparseable>"
+        )
 
     def test_body_is_array(self) -> None:
         body = json.dumps([{"query": "{ viewer { login } }"}]).encode()

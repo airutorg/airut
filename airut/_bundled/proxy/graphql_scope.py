@@ -114,6 +114,9 @@ _UNRESOLVED = ScopeResult(
     ScopeVerdict.UNRESOLVED_VARIABLE, "<unresolved-variable>"
 )
 _TOO_LARGE = ScopeResult(ScopeVerdict.PARSE_ERROR, "<too-large>")
+# Used by callers that run outside the request-body filter pipeline when
+# the body cannot even be read (e.g. an undecodable Content-Encoding).
+_UNREADABLE = ScopeResult(ScopeVerdict.PARSE_ERROR, "<unreadable>")
 
 # Maximum request body size for GraphQL scope checking (1 MiB).
 # Requests larger than this are blocked to prevent CPU exhaustion via
@@ -576,7 +579,7 @@ def check_repo_scope(
     # Step 1: Parse JSON body.
     try:
         body = json.loads(request_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return _PARSE_ERROR
 
     if not isinstance(body, dict):
