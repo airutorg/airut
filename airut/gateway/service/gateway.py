@@ -1715,6 +1715,11 @@ class GatewayService:
 
         Collects the set of active versions from all repo configs,
         then removes any cached versions not in that set.
+
+        Pruning is skipped entirely if any repo's version cannot be
+        resolved: an incomplete active set would delete binaries that
+        are still in use, forcing a multi-hundred-megabyte re-download
+        on the next task -- over the very network that just failed.
         """
         if self.claude_binary_cache is None:
             return
@@ -1730,11 +1735,12 @@ class GatewayService:
             except Exception as e:
                 logger.warning(
                     "Repo '%s': failed to resolve claude_version "
-                    "'%s' for GC: %s",
+                    "'%s' for GC: %s -- skipping Claude binary GC",
                     repo_id,
                     repo_version,
                     e,
                 )
+                return
 
         logger.info(
             "Claude binary GC: active versions: %s",

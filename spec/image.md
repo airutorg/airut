@@ -205,6 +205,33 @@ The Claude Code binary is not installed inside the container image. Instead,
 `AgentTask` bind-mounts the host-cached binary at `/opt/claude/claude`
 (read-only). The version is controlled by the `claude_version` config field.
 
+`ClaudeBinaryCache` downloads the binary from `downloads.claude.ai` and caches
+it per version. Because the binary is several hundred megabytes, transfers fail
+mid-body often enough to matter: each attempt verifies the transferred byte
+count against the manifest `size` and the SHA-256 digest against the manifest
+`checksum`, and the whole download is retried (bypassing intermediary caches) on
+transport error, truncation, or checksum mismatch. The byte count is checked
+because `HTTPResponse.read()` reports a dropped connection as a normal EOF, so a
+truncated download is otherwise indistinguishable from a complete one. Only a
+fully verified binary is moved into the cache, so a partial download can never
+be bind-mounted.
+
+Failures that will not fix themselves -- an HTTP status error, a platform
+missing from the manifest, a full or unwritable disk -- are reported immediately
+without retrying. All of them surface as `ClaudeBinaryError`, which the gateway
+turns into a "try again later" reply rather than an internal error.
+
+Channel resolution (`latest`, `stable` -> a concrete version) happens on the
+task-startup path whenever the cached resolution expires, so an unreachable CDN
+would fail tasks that have a perfectly good binary cached already. Resolutions
+are therefore persisted to `.resolutions.json` in the cache directory, and a
+failed refresh falls back to the last known version for that channel with a
+warning -- a task starts on a slightly stale Claude rather than not at all.
+While a fallback is available the refresh uses a short timeout and is not
+re-attempted for a minute, so an outage costs one task a few seconds instead of
+every task the full retry budget. With no previous resolution to fall back on
+(first run on a cold cache), resolution failure is still fatal.
+
 All Claude Code CLI flags (`--dangerously-skip-permissions`, `--model`,
 `--resume`, `--output-format`, etc.) are passed through as arguments by the
 executor -- the entrypoint does not add any flags.

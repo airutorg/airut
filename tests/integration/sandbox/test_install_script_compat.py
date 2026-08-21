@@ -18,9 +18,13 @@ Checks:
     3. The ``latest`` channel resolves to a valid semver version
        on ``downloads.claude.ai``.
     4. The manifest for that version is valid JSON with the expected
-       structure and our ``_extract_checksum()`` parses it correctly.
+       structure and our ``_extract_platform_info()`` parses it
+       correctly.
     5. The manifest includes checksums for all Linux platforms that
        ClaudeBinaryCache supports.
+    6. The manifest carries the binary size that ClaudeBinaryCache uses
+       to detect truncated downloads, and it matches ``Content-Length``
+       on the CDN.
 
 Every network fetch is required to succeed — no silent passes.
 """
@@ -35,7 +39,7 @@ import pytest
 
 from airut.sandbox.claude_binary import (
     DOWNLOADS_BASE,
-    _extract_checksum,
+    _extract_platform_info,
 )
 
 
@@ -177,17 +181,17 @@ class TestInstallScriptCompat:
         """The latest channel returns a valid semver version."""
         assert re.match(r"^\d+\.\d+\.\d+", latest_version)
 
-    def test_manifest_parseable_by_extract_checksum(
+    def test_manifest_parseable_by_extract_platform_info(
         self, manifest_json: str
     ) -> None:
-        """Our _extract_checksum() successfully parses the manifest."""
+        """Our _extract_platform_info() parses the manifest."""
         found = False
         for plat in _LINUX_PLATFORMS:
-            checksum = _extract_checksum(manifest_json, plat)
-            if checksum is not None:
+            info = _extract_platform_info(manifest_json, plat)
+            if info is not None:
                 found = True
-                assert re.match(r"^[a-f0-9]{64}$", checksum), (
-                    f"Checksum for {plat} is not 64-char hex: {checksum!r}"
+                assert re.match(r"^[a-f0-9]{64}$", info.checksum), (
+                    f"Checksum for {plat} is not 64-char hex: {info.checksum!r}"
                 )
         assert found, (
             f"Manifest has no checksums for any Linux platform: "
@@ -197,12 +201,24 @@ class TestInstallScriptCompat:
     def test_manifest_has_glibc_platforms(self, manifest_json: str) -> None:
         """Manifest includes checksums for glibc Linux platforms."""
         for plat in ("linux-x64", "linux-arm64"):
-            checksum = _extract_checksum(manifest_json, plat)
-            assert checksum is not None, f"Manifest missing checksum for {plat}"
-            assert re.match(r"^[a-f0-9]{64}$", checksum)
+            info = _extract_platform_info(manifest_json, plat)
+            assert info is not None, f"Manifest missing checksum for {plat}"
+            assert re.match(r"^[a-f0-9]{64}$", info.checksum)
 
-    def test_binary_url_reachable(self, latest_version: str) -> None:
-        """Binary URL on CDN is reachable.
+    def test_manifest_has_binary_size(self, manifest_json: str) -> None:
+        """Manifest carries the size used to detect truncated downloads."""
+        for plat in ("linux-x64", "linux-arm64"):
+            info = _extract_platform_info(manifest_json, plat)
+            assert info is not None
+            assert info.size is not None, (
+                f"Manifest for {plat} has no usable size field -- "
+                f"truncated downloads would only be caught by checksum"
+            )
+
+    def test_binary_url_reachable(
+        self, latest_version: str, manifest_json: str
+    ) -> None:
+        """Binary URL on CDN is reachable and matches the manifest size.
 
         Uses a HEAD request to avoid downloading the full binary.
         """
@@ -215,3 +231,11 @@ class TestInstallScriptCompat:
                 assert int(content_length) > 1_000_000, (
                     f"Binary suspiciously small: {content_length} bytes"
                 )
+                info = _extract_platform_info(manifest_json, "linux-x64")
+                assert info is not None
+                if info.size is not None:
+                    assert info.size == int(content_length), (
+                        f"Manifest size {info.size} does not match "
+                        f"Content-Length {content_length} -- the size "
+                        f"check would reject every download"
+                    )

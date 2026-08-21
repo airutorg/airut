@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import http.client
 import urllib.request
 from email.message import Message
 from unittest.mock import MagicMock, patch
@@ -128,6 +129,73 @@ class TestConnectionRetry:
             )
         # Only 1 sleep (between attempt 1 and 2), not after attempt 2
         mock_sleep.assert_called_once()
+
+
+# -------------------------------------------------------------------
+# Retry on unwrapped transport errors
+# -------------------------------------------------------------------
+
+
+class TestTransportRetry:
+    """Tests for retry on transport errors urllib does not wrap.
+
+    urllib only wraps request-phase errors in URLError; failures while
+    waiting for the response surface bare, so they need their own
+    retry coverage.
+    """
+
+    def test_retries_on_bare_timeout(self) -> None:
+        """A timeout waiting for response headers is retried."""
+        resp = _mock_response()
+        with (
+            patch(_URLOPEN) as mock_urlopen,
+            patch(_SLEEP),
+        ):
+            mock_urlopen.side_effect = [TimeoutError("timed out"), resp]
+            result = urlopen_with_retry("https://example.com", max_retries=2)
+        assert result is resp
+        assert mock_urlopen.call_count == 2
+
+    def test_retries_on_connection_reset(self) -> None:
+        """A reset connection is retried."""
+        resp = _mock_response()
+        with (
+            patch(_URLOPEN) as mock_urlopen,
+            patch(_SLEEP),
+        ):
+            mock_urlopen.side_effect = [
+                ConnectionResetError("reset by peer"),
+                resp,
+            ]
+            result = urlopen_with_retry("https://example.com", max_retries=2)
+        assert result is resp
+
+    def test_retries_on_http_exception(self) -> None:
+        """A malformed response is retried."""
+        resp = _mock_response()
+        with (
+            patch(_URLOPEN) as mock_urlopen,
+            patch(_SLEEP),
+        ):
+            mock_urlopen.side_effect = [
+                http.client.BadStatusLine("garbage"),
+                resp,
+            ]
+            result = urlopen_with_retry("https://example.com", max_retries=2)
+        assert result is resp
+
+    def test_exhausts_retries_on_bare_timeout(self) -> None:
+        """Raises the last timeout after exhausting retries."""
+        with (
+            patch(_URLOPEN) as mock_urlopen,
+            patch(_SLEEP),
+            pytest.raises(TimeoutError, match="persistent"),
+        ):
+            mock_urlopen.side_effect = [
+                TimeoutError("first"),
+                TimeoutError("persistent"),
+            ]
+            urlopen_with_retry("https://example.com", max_retries=1)
 
 
 # -------------------------------------------------------------------
