@@ -57,5 +57,6 @@ Gateway tests cover:
 
 - **Install script compatibility**: Validates that the upstream
   `claude.ai/install.sh` structure matches `ClaudeBinaryCache` assumptions
-  (release URL, manifest format, platform strings, binary URL pattern). Requires
-  external network access to `claude.ai` and `downloads.claude.ai`.
+  (release URL, manifest format, platform strings, binary URL pattern, and the
+  manifest `size` field used to detect truncated downloads). Requires external
+  network access to `claude.ai` and `downloads.claude.ai`.

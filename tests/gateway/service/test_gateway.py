@@ -1813,7 +1813,11 @@ class TestGarbageCollectorThread:
     def test_gc_claude_binaries_resolve_error(
         self, email_config, tmp_path: Path
     ) -> None:
-        """GC handles version resolution failure gracefully."""
+        """GC skips pruning when version resolution fails.
+
+        An incomplete active set would delete in-use binaries and force
+        a several-hundred-megabyte re-download on the next task.
+        """
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, conversation_max_age_days=7)
 
@@ -1827,6 +1831,8 @@ class TestGarbageCollectorThread:
         svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
         # Should not crash
         svc._garbage_collector_thread()
+
+        svc.claude_binary_cache.prune.assert_not_called()
 
     def test_gc_claude_binaries_repo_version_resolve_error(
         self, email_config, tmp_path: Path
@@ -1851,6 +1857,9 @@ class TestGarbageCollectorThread:
         svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
         # Should not crash despite repo-level failure
         svc._garbage_collector_thread()
+
+        # One unresolvable repo is enough to skip the whole sweep.
+        svc.claude_binary_cache.prune.assert_not_called()
 
     def test_gc_claude_binaries_none_cache(
         self, email_config, tmp_path: Path

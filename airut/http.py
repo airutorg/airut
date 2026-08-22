@@ -35,9 +35,16 @@ def urlopen_with_retry(
 ) -> http.client.HTTPResponse:
     """Open a URL with automatic retry on transient failures.
 
-    Retries on connection errors (:class:`urllib.error.URLError` that
-    are *not* HTTP errors), timeouts, and HTTP responses with status
-    codes in :data:`_RETRYABLE_STATUS_CODES` (429, 5xx).
+    Retries on transport failures -- connection errors, timeouts, TLS
+    errors, and truncated responses -- and on HTTP responses with
+    status codes in :data:`_RETRYABLE_STATUS_CODES` (429, 5xx).
+
+    The transport net is deliberately wide: :mod:`urllib` only wraps
+    errors from the request phase in :class:`urllib.error.URLError`.
+    A timeout waiting for response headers surfaces as a bare
+    :class:`TimeoutError`, and a truncated status line as an
+    :class:`http.client.HTTPException`; both are just as transient and
+    deserve the same retry.
 
     Uses exponential backoff: ``backoff_base * 2^attempt`` seconds,
     capped at *backoff_max*.
@@ -55,15 +62,18 @@ def urlopen_with_retry(
         HTTP response (usable as context manager).
 
     Raises:
-        urllib.error.URLError: If all attempts fail due to connection
-            errors.
+        OSError: If all attempts fail due to a transport error
+            (:class:`urllib.error.URLError`, :class:`TimeoutError`,
+            :class:`ConnectionError`, ...).
+        http.client.HTTPException: If all attempts fail due to a
+            malformed or truncated response.
         urllib.error.HTTPError: If all attempts fail with a retryable
             HTTP status, or immediately for non-retryable HTTP errors.
     """
     display_url = (
         url.full_url if isinstance(url, urllib.request.Request) else url
     )
-    last_error: urllib.error.URLError | None = None
+    last_error: Exception | None = None
 
     for attempt in range(1 + max_retries):
         try:
@@ -79,7 +89,7 @@ def urlopen_with_retry(
                 attempt + 1,
                 1 + max_retries,
             )
-        except urllib.error.URLError as e:
+        except (OSError, http.client.HTTPException) as e:
             last_error = e
             logger.debug(
                 "Fetch failed for %s: %s (attempt %d/%d)",
