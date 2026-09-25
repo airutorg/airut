@@ -43,6 +43,7 @@ from airut.config.source import (
     ConfigSource,
 )
 from airut.dashboard.templating import render_template
+from airut.gateway.config import SIGNING_TYPE_AWS_SIGV4
 
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,18 @@ def _make_github_app_skeleton() -> dict[str, Any]:
             "checks": "read",
         },
     }
+
+
+def _make_signing_credential_skeleton() -> dict[str, Any]:
+    """Create a signing credential skeleton with the ``type`` discriminator.
+
+    ``type`` is required by the parser but is not an editor field (there
+    is only one signing type), so it must be set when the entry is
+    created.  Env var names are not pre-filled: duplicate names across
+    credentials are silently skipped at task time, so a default could
+    shadow another credential.
+    """
+    return {"type": SIGNING_TYPE_AWS_SIGV4}
 
 
 def _make_repo_skeleton() -> dict[str, Any]:
@@ -813,6 +826,7 @@ class ConfigEditorHandlers:
         for field_name, make_skeleton in (
             ("schedules", _make_schedule_skeleton),
             ("github_app_credentials", _make_github_app_skeleton),
+            ("signing_credentials", _make_signing_credential_skeleton),
         ):
             result = self._try_add_keyed_skeleton(
                 buffer, path, key, field_name, make_skeleton

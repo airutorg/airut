@@ -2652,6 +2652,114 @@ class TestAddGitHubAppCredential:
         assert gh_creds["GH_TOKEN"]["app_id"] == "Iv23li8e2xyz123"
 
 
+class TestAddSigningCredential:
+    """Test adding a signing credential via handle_add."""
+
+    def test_add_signing_credential_creates_skeleton(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """New entry carries the ``type`` discriminator the parser needs.
+
+        ``type`` is not an editor field, so without the skeleton a new
+        signing credential can never pass validation.
+        """
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.signing_credentials",
+                "key": "AWS_PROD",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert "AWS_PROD" in response.text
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        creds = buf.raw["repos"]["test-repo"]["signing_credentials"]
+        assert creds["AWS_PROD"] == {"type": "aws-sigv4"}
+
+    def test_add_fill_and_save(self, harness: ConfigEditorHarness) -> None:
+        """Adding, filling all editor fields, and saving succeeds."""
+        import yaml
+
+        from airut.config.source import make_env_loader
+
+        harness.client.get("/config")
+        coll = "repos.test-repo.signing_credentials"
+        harness.client.post(
+            "/api/config/add",
+            data={"path": coll, "key": "AWS_PROD"},
+            headers=XHR,
+        )
+        prefix = f"{coll}.AWS_PROD"
+        for path, value in (
+            ("access_key_id.name", "AWS_KEY"),
+            ("access_key_id.value", "AKIAX"),
+            ("secret_access_key.name", "AWS_SECRET"),
+            ("secret_access_key.value", "s3cr3t"),
+        ):
+            response = harness.client.patch(
+                "/api/config/field",
+                data={
+                    "path": f"{prefix}.{path}",
+                    "source": "literal",
+                    "value": value,
+                },
+                headers=XHR,
+            )
+            assert response.status_code == 200
+        harness.client.post(
+            "/api/config/add", data={"path": f"{prefix}.scopes"}, headers=XHR
+        )
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": f"{prefix}.scopes",
+                "source": "literal",
+                "index": "0",
+                "value": "*.amazonaws.com",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+
+        response = harness.client.post(
+            "/api/config/save",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers.get("HX-Redirect") == "/config/repos/test-repo"
+
+        with open(harness.tmp_path / "airut.yaml") as f:
+            saved = yaml.load(f, Loader=make_env_loader())
+        cred = saved["repos"]["test-repo"]["signing_credentials"]["AWS_PROD"]
+        assert cred["type"] == "aws-sigv4"
+        assert cred["access_key_id"] == {"name": "AWS_KEY", "value": "AKIAX"}
+        assert cred["scopes"] == ["*.amazonaws.com"]
+
+    def test_add_signing_credential_duplicate_key(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Adding same credential key twice does not overwrite."""
+        harness.client.get("/config")
+        data = {
+            "path": "repos.test-repo.signing_credentials",
+            "key": "AWS_PROD",
+        }
+        harness.client.post("/api/config/add", data=data, headers=XHR)
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        creds = buf.raw["repos"]["test-repo"]["signing_credentials"]
+        creds["AWS_PROD"]["scopes"] = ["*.amazonaws.com"]
+
+        harness.client.post("/api/config/add", data=data, headers=XHR)
+        assert creds["AWS_PROD"]["scopes"] == ["*.amazonaws.com"]
+
+
 class TestMultilineTextarea:
     """Multiline fields render as <textarea> only when source is literal."""
 
