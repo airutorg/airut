@@ -147,6 +147,12 @@ When a new airut version is published to PyPI (e.g., `v0.18.0`):
      --body "Updates VERSION to 0.18.0 for the new airut release."
    ```
 
+   The PR gets no automatic checks: `test.yml` only runs on pushes to `main` and
+   `v*`. Verify the bump by dispatching `test.yml` on the bump branch, which
+   installs the new airut version from PyPI and runs the action end to end. The
+   agent's GitHub App token cannot dispatch workflows (HTTP 403), so ask the
+   user to run it from the Actions tab (Run workflow, branch `bump/v0.18.0`).
+
 3. After the PR is merged, draft release notes and create a release. Publishing
    the release triggers the `update-floating-tag` workflow, which automatically
    updates the `v0` floating tag so consumers pick up the new version.
