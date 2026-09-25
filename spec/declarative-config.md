@@ -386,7 +386,9 @@ The UI calls `schema_for_ui()` on all annotated config classes — including
 credential types (`MaskedSecret`, `SigningCredential`, `SigningCredentialField`,
 `GitHubAppCredential`) — to render settings forms. Keyed credential collections
 use `schema_for_ui()` on the item type to generate sub-forms within expandable
-card widgets.
+card widgets. Keys the parser requires but the schema does not expose (e.g. the
+`type: aws-sigv4` discriminator on signing credentials) are inserted by a
+per-collection skeleton when the editor adds a new entry.
 
 ## Scope Assignments
 
