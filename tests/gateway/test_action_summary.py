@@ -15,7 +15,7 @@ def _block(tool_name: str, **tool_input: JsonValue) -> ToolUseBlock:
     return ToolUseBlock(
         tool_id="t1",
         tool_name=tool_name,
-        tool_input=dict(tool_input),
+        tool_input=tool_input,
     )
 
 

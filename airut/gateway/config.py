@@ -407,7 +407,9 @@ class GitHubAppEntry:
         if self.allow_foreign_credentials:
             d["allow_foreign_credentials"] = True
         if self.permissions is not None:
-            perms: dict[str, JsonValue] = dict(self.permissions)
+            # {**...} rather than dict(...): ty 0.0.84 mis-infers dict() against
+            # the recursive JsonValue alias.
+            perms: dict[str, JsonValue] = {**self.permissions}
             d["permissions"] = perms
         if self.repositories is not None:
             repos: list[JsonValue] = list(self.repositories)
