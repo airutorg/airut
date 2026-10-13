@@ -121,3 +121,20 @@ class TestSlackChannelConfig:
             allowed_channels=["C1", "C2"],  # ty:ignore[invalid-argument-type]
         )
         assert isinstance(config.allowed_channels, tuple)
+
+    def test_sticky_threads_defaults_true(self) -> None:
+        config = SlackChannelConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            authorized=({"workspace_members": True},),
+        )
+        assert config.sticky_threads is True
+
+    def test_sticky_threads_set_false(self) -> None:
+        config = SlackChannelConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            authorized=({"workspace_members": True},),
+            sticky_threads=False,
+        )
+        assert config.sticky_threads is False

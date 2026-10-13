@@ -206,12 +206,14 @@ the busy window.
 
 Channel adapters override `ParsedMessage.coalesce()` to also carry their
 channel-specific *deferred* state into the survivor — work that has not run yet
-at coalesce time. Slack merges the reaction-target timestamps and the pending
-file-download URLs; email retains the merged emails' raw messages. Because
-attachments are downloaded/extracted lazily in `save_attachments()` (after the
-conversation layout exists), this merge is what keeps attachments on a coalesced
-follow-up from being silently dropped — only the survivor's deferred state would
-otherwise be processed.
+at coalesce time. Slack merges the reaction-target timestamps, the pending
+file-download URLs, and the outbound mention candidates, and appends any
+catch-up thread history to the survivor's `channel_context` (only the survivor's
+context reaches the prompt); email retains the merged emails' raw messages.
+Because attachments are downloaded/extracted lazily in `save_attachments()`
+(after the conversation layout exists), this merge is what keeps attachments on
+a coalesced follow-up from being silently dropped — only the survivor's deferred
+state would otherwise be processed.
 
 Every message — coalesced or not — is rendered with a per-message attribution
 header so Claude can attribute it, which matters in shared Slack threads where

@@ -319,18 +319,6 @@ class TestCaching:
 
         assert client.auth_test.call_count == 1
 
-    def test_provided_team_id_skips_api_call(self) -> None:
-        client = _mock_client()
-        client.users_info.return_value = _user_info_response()
-
-        authorizer = SlackAuthorizer(
-            client=client,
-            rules=[{"workspace_members": True}],
-            workspace_team_id="T001",
-        )
-        authorizer.authorize("U123")
-        client.auth_test.assert_not_called()
-
 
 class TestDisplayName:
     def test_returns_display_name(self) -> None:

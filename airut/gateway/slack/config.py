@@ -39,6 +39,12 @@ class SlackChannelConfig(ChannelConfig):
         allowed_channels: Channel IDs the bot will engage in (channel
             mode).  When empty, the bot engages in any channel it has
             been invited to.  DM events bypass this list entirely.
+        sticky_threads: Whether a channel thread stays engaged once the
+            bot has been ``@``-mentioned in it.  When true (the default),
+            every later message in the thread is input without a fresh
+            mention.  When false, only messages that ``@``-mention the bot
+            are input; thread messages posted since the previous mention
+            are replayed as background.  DMs are unaffected.
     """
 
     bot_token: str = field(
@@ -65,6 +71,14 @@ class SlackChannelConfig(ChannelConfig):
         default=(),
         metadata=meta(
             "Channel IDs the bot may engage in (empty = any invited channel)",
+            Scope.REPO,
+        ),
+    )
+    sticky_threads: bool = field(
+        default=True,
+        metadata=meta(
+            "Keep a mentioned thread engaged without re-mentioning"
+            " (false = only @-mentions)",
             Scope.REPO,
         ),
     )

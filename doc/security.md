@@ -166,6 +166,14 @@ rules. Baseline checks always reject bots, deactivated users, and external users
 Both layers must pass. A valid Slack user who doesn't match any authorization
 rule is rejected.
 
+Authorization gates who can **trigger** a run, not which channel thread content
+Claude reads. When an authorized user `@`-mentions the bot inside an existing
+thread — or, with `sticky_threads: false`, mentions it again in an engaged
+thread — the bot replays the thread's earlier messages (and downloads their
+files) as background, from any human participant, including users the rules
+would reject. Treat channel threads the bot is invited into as untrusted input,
+as you would any other user-supplied content.
+
 See [slack-setup.md](slack-setup.md#authorization-rules) for rule configuration
 and [spec/slack-channel.md](../spec/slack-channel.md) for the full
 specification.

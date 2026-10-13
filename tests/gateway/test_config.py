@@ -3443,6 +3443,35 @@ class TestParseSlackChannelConfig:
         with pytest.raises(ConfigError, match="non-empty channel ID"):
             _parse_slack_channel_config(raw, "repos.test")
 
+    def test_sticky_threads_absent_defaults_true(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-st1",
+            "app_token": "xapp-test-slack-token-st1",
+            "authorized": [{"workspace_members": True}],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert config.sticky_threads is True
+
+    def test_sticky_threads_false_parsed(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-st2",
+            "app_token": "xapp-test-slack-token-st2",
+            "authorized": [{"workspace_members": True}],
+            "sticky_threads": False,
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert config.sticky_threads is False
+
+    def test_sticky_threads_invalid_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-st3",
+            "app_token": "xapp-test-slack-token-st3",
+            "authorized": [{"workspace_members": True}],
+            "sticky_threads": "sometimes",
+        }
+        with pytest.raises(ConfigError, match="to bool"):
+            _parse_slack_channel_config(raw, "repos.test")
+
 
 def test_repo_server_config_slack_channel(
     master_repo: Path, tmp_path: Path

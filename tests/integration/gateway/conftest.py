@@ -12,6 +12,7 @@ tests of the email gateway service with minimal mocking.
 import os
 import sys
 import time
+import urllib.request
 from collections.abc import Callable, Generator
 from email.message import Message
 from email.mime.base import MIMEBase
@@ -345,7 +346,6 @@ def _create_slack_adapter_factory(
                 authorizer = SlackAuthorizer(
                     client=client,
                     rules=channel_config.authorized,
-                    workspace_team_id=slack_server.workspace_team_id,
                 )
                 state_dir = get_storage_dir(config.repo_id)
                 thread_store = SlackThreadStore(state_dir)
@@ -391,6 +391,24 @@ def _create_slack_adapter_factory(
         return adapters
 
     return create_adapters
+
+
+def slack_download_patch(url_to_content: dict[str, bytes]):
+    """Patch the Slack adapter's ``urlopen`` to serve canned per-URL content."""
+
+    def fake_urlopen(
+        req: urllib.request.Request, *args: object, **kwargs: object
+    ) -> MagicMock:
+        resp = MagicMock()
+        resp.read.return_value = url_to_content[req.full_url]
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    return patch(
+        "airut.gateway.slack.adapter.urllib.request.urlopen",
+        side_effect=fake_urlopen,
+    )
 
 
 def find_task_for_conversation(tracker, conv_id: str):

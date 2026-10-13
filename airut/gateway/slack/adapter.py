@@ -34,10 +34,15 @@ from airut.gateway.channel import (
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
-from airut.gateway.slack.listener import CONTENT_SUBTYPES, SlackChannelListener
+from airut.gateway.slack.listener import SlackChannelListener
 from airut.gateway.slack.mention_resolver import MentionResolver
 from airut.gateway.slack.mrkdwn import render_mrkdwn
 from airut.gateway.slack.plan_streamer import SlackPlanStreamer
+from airut.gateway.slack.thread_history import (
+    ThreadHistory,
+    ThreadReplay,
+    extract_file_urls,
+)
 from airut.gateway.slack.thread_store import SlackThreadStore
 
 
@@ -51,15 +56,6 @@ _MAX_SPLIT_MESSAGES = 5
 
 #: Maximum length for thread title.
 _MAX_TITLE_LENGTH = 60
-
-#: Most recent thread messages folded into the prompt on mid-thread
-#: engagement; older messages are summarized as an omitted-count line.
-_HISTORY_REPLAY_LIMIT = 200
-
-#: Hard cap on messages fetched while paginating ``conversations.replies``,
-#: bounding work for pathologically long threads before trimming to
-#: :data:`_HISTORY_REPLAY_LIMIT`.
-_HISTORY_FETCH_CAP = 1000
 
 #: Maximum attachment download size (100 MB).
 _MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
@@ -112,17 +108,45 @@ class SlackParsedMessage(ParsedMessage):
     The triggering sender, any authors seen in replayed thread history, and
     members of user groups named in the authorization rules."""
 
-    def coalesce(self, other: ParsedMessage) -> None:
-        """Merge a follow-up, also accumulating reaction targets and files.
+    catch_up_history: list[str] = field(default_factory=list)
+    """Rendered catch-up lines already folded into ``channel_context``.
 
-        The follow-up's pending file downloads are appended so attachments
-        posted while the conversation was busy are saved to the inbox when
-        the coalesced survivor runs (rather than silently dropped).
+    Set when ``sticky_threads`` is off and the bot is mentioned again in an
+    engaged thread: the :attr:`ThreadReplay.lines` for the thread messages
+    posted since the previous mention.  Kept separately so a coalesced
+    follow-up's catch-up can extend the survivor's preamble instead of
+    being lost."""
+
+    def coalesce(self, other: ParsedMessage) -> None:
+        """Merge a follow-up, also accumulating Slack-specific state.
+
+        Reaction targets, pending file downloads, and mention candidates
+        are accumulated so attachments posted while the conversation was
+        busy are saved to the inbox when the coalesced survivor runs
+        (rather than silently dropped) and the follow-up's participants
+        can be ``@``-mentioned in the reply.  A follow-up's catch-up lines
+        (``sticky_threads`` off) are appended to the survivor's preamble,
+        which is the tail of its ``channel_context``.
         """
         super().coalesce(other)
         if isinstance(other, SlackParsedMessage):
             self.acknowledged_message_ts.extend(other.acknowledged_message_ts)
             self.slack_file_urls.extend(other.slack_file_urls)
+            self.mention_candidate_ids = _dedup_preserving_order(
+                self.mention_candidate_ids + other.mention_candidate_ids
+            )
+            if other.catch_up_history:
+                if self.catch_up_history:
+                    lines = "\n".join(other.catch_up_history)
+                    self.channel_context = f"{self.channel_context}\n{lines}"
+                else:
+                    preamble = ThreadReplay(
+                        lines=list(other.catch_up_history), catch_up=True
+                    ).preamble
+                    self.channel_context = (
+                        f"{self.channel_context}\n\n{preamble}"
+                    )
+                self.catch_up_history.extend(other.catch_up_history)
 
 
 class SlackChannelAdapter(ChannelAdapter):
@@ -149,6 +173,7 @@ class SlackChannelAdapter(ChannelAdapter):
         self._listener = slack_listener
         self._repo_id = repo_id
         self._resolver: MentionResolver | None = None
+        self._history = ThreadHistory(client, authorizer)
 
     @classmethod
     def from_config(
@@ -296,30 +321,44 @@ class SlackChannelAdapter(ChannelAdapter):
 
         resolver = self._get_resolver()
 
-        # Mid-thread engagement: the bot was mentioned inside an existing
-        # thread it has not joined.  Replay the prior messages so Claude
-        # has the same context a human reading the thread would, and queue
-        # any files those earlier messages carried for inbox download.
-        channel_context = self.channel_context()
-        candidate_ids: list[str] = [user_id]
-        slack_file_urls: list[tuple[str, str]] = []
-        if is_channel and conversation_id is None and raw_thread_ts:
-            preamble, history_authors, history_file_urls = self._replay_history(
-                channel_id, thread_ts, message_ts, resolver
+        # Thread history replay, so Claude has the same context a human
+        # reading the thread would.  Mid-thread engagement (the bot was
+        # mentioned inside an existing thread it has not joined) replays
+        # the prior messages.  With sticky threads off, a later mention in
+        # an engaged thread replays the messages posted since the previous
+        # mention, which the listener did not deliver.
+        replay = ThreadReplay()
+        if (
+            is_channel
+            and raw_thread_ts
+            and (conversation_id is None or not self._config.sticky_threads)
+        ):
+            replay = self._history.replay(
+                channel_id,
+                thread_ts,
+                message_ts,
+                resolver,
+                catch_up=conversation_id is not None,
             )
-            if preamble:
-                channel_context = f"{channel_context}\n\n{preamble}"
-            candidate_ids.extend(history_authors)
-            slack_file_urls.extend(history_file_urls)
-        candidate_ids.extend(self._authorizer.candidate_group_member_ids())
+        channel_context = self.channel_context()
+        if replay.preamble:
+            channel_context = f"{channel_context}\n\n{replay.preamble}"
+        candidate_ids = [
+            user_id,
+            *replay.author_ids,
+            *self._authorizer.candidate_group_member_ids(),
+        ]
 
         # Resolve inbound mention tokens so Claude sees human-readable names.
         # The bot's own mention is stripped from the invocation (redundant).
         body = resolver.resolve_in(text, strip_bot_mention=True)
 
-        # Queue the triggering message's own files for deferred download,
-        # after any files replayed from thread history (chronological order).
-        slack_file_urls.extend(_extract_file_urls(payload.get("files")))
+        # Queue files for deferred download: those replayed from thread
+        # history first, then the triggering message's own (chronological).
+        slack_file_urls = [
+            *replay.file_urls,
+            *extract_file_urls(payload.get("files")),
+        ]
 
         # Build display title
         display_title = body[:_MAX_TITLE_LENGTH].split("\n")[0] if body else ""
@@ -350,6 +389,7 @@ class SlackChannelAdapter(ChannelAdapter):
             acknowledged_message_ts=[message_ts] if is_channel else [],
             is_channel=is_channel,
             mention_candidate_ids=_dedup_preserving_order(candidate_ids),
+            catch_up_history=replay.lines if replay.catch_up else [],
         )
 
     def _get_resolver(self) -> MentionResolver:
@@ -387,120 +427,6 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         except SlackApiError as e:
             logger.warning("Failed to remove Slack reaction (non-fatal): %s", e)
-
-    def _replay_history(
-        self,
-        channel_id: str,
-        thread_ts: str,
-        triggering_ts: str,
-        resolver: MentionResolver,
-    ) -> tuple[str, list[str], list[tuple[str, str]]]:
-        """Fetch prior thread messages and render them as a prompt preamble.
-
-        Reads the thread via ``conversations.replies`` (paginated, bounded
-        by :data:`_HISTORY_FETCH_CAP`), drops the triggering message and
-        non-human messages, keeps the most recent
-        :data:`_HISTORY_REPLAY_LIMIT`, and renders each as
-        ``[<display name>]: <resolved body>``.  The invocation itself is
-        delivered separately via the attributed message body, so it is not
-        repeated here.
-
-        Files attached to the replayed messages are collected for deferred
-        download so they land in the inbox alongside the triggering
-        message's own attachments, and each preamble line notes the
-        filenames it carried.
-
-        Args:
-            channel_id: Channel the thread lives in.
-            thread_ts: Root timestamp of the thread.
-            triggering_ts: ts of the invocation message (excluded).
-            resolver: Mention resolver for inbound token resolution.
-
-        Returns:
-            ``(preamble, author_ids, file_urls)`` — the preamble is empty
-            when no prior messages exist; ``author_ids`` lists the distinct
-            human authors for the outbound mention candidate set;
-            ``file_urls`` is the ``(name, url)`` pairs of attachments to
-            download, in thread order.
-        """
-        messages = self._fetch_thread_messages(channel_id, thread_ts)
-
-        # Keep human messages, including file uploads (Slack tags those
-        # ``file_share``); drop the trigger, bot posts, and system/edit
-        # subtypes.  The content-subtype carve-out matches the listener so a
-        # file shared before the invocation is replayed and downloaded.
-        history = [
-            m
-            for m in messages
-            if m.get("ts") != triggering_ts
-            and m.get("user")
-            and not m.get("bot_id")
-            and (not m.get("subtype") or m.get("subtype") in CONTENT_SUBTYPES)
-        ]
-        if not history:
-            return "", [], []
-
-        omitted = len(history) - _HISTORY_REPLAY_LIMIT
-        if omitted > 0:
-            history = history[-_HISTORY_REPLAY_LIMIT:]
-
-        lines: list[str] = [
-            "The user invited you into an existing Slack thread.  The "
-            "messages below are the conversation that preceded the "
-            "invocation, in order.  Use them as background; the invocation "
-            "that triggered you is the attributed message that follows this "
-            "preamble."
-        ]
-        if omitted > 0:
-            lines.append(f"[{omitted} earlier messages omitted]")
-
-        author_ids: list[str] = []
-        file_urls: list[tuple[str, str]] = []
-        for message in history:
-            author = cast(str, message.get("user", ""))
-            author_ids.append(author)
-            display = self._authorizer.get_display_name(author)
-            resolved = resolver.resolve_in(
-                cast(str, message.get("text", "")), strip_bot_mention=False
-            )
-            message_files = _extract_file_urls(message.get("files"))
-            file_urls.extend(message_files)
-            rendered = resolved
-            if message_files:
-                names = ", ".join(name for name, _ in message_files)
-                suffix = f"[attached: {names}]"
-                # A file_share message may have no comment text; avoid the
-                # double space that ``{resolved} {suffix}`` would leave then.
-                rendered = f"{resolved} {suffix}" if resolved else suffix
-            lines.append(f"[{display}]: {rendered}")
-
-        return "\n".join(lines), author_ids, file_urls
-
-    def _fetch_thread_messages(
-        self, channel_id: str, thread_ts: str
-    ) -> list[JsonDict]:
-        """Page through ``conversations.replies`` up to the fetch cap."""
-        messages: list[JsonDict] = []
-        cursor: str | None = None
-        try:
-            while True:
-                resp = self._client.conversations_replies(
-                    channel=channel_id,
-                    ts=thread_ts,
-                    limit=200,
-                    cursor=cursor,
-                )
-                messages.extend(cast(list[JsonDict], resp.get("messages", [])))
-                cursor = resp.get("response_metadata", {}).get("next_cursor")
-                if not cursor or len(messages) >= _HISTORY_FETCH_CAP:
-                    break
-        except SlackApiError as e:
-            logger.warning(
-                "Failed to fetch Slack thread history for %s: %s",
-                thread_ts,
-                e,
-            )
-        return messages
 
     def save_attachments(
         self, parsed: ParsedMessage, inbox_dir: Path
@@ -819,37 +745,6 @@ class SlackChannelAdapter(ChannelAdapter):
 def _dedup_preserving_order(ids: list[str]) -> list[str]:
     """Return *ids* with duplicates removed, keeping first-seen order."""
     return list(dict.fromkeys(ids))
-
-
-def _extract_file_urls(raw_files: object) -> list[tuple[str, str]]:
-    """Pull ``(filename, download_url)`` tuples from a message's ``files``.
-
-    Shared by the triggering-message parse and the thread-history replay so
-    attachments are queued for deferred download identically wherever they
-    appear.  Files lacking a usable URL are skipped.
-
-    Args:
-        raw_files: The ``files`` field of a Slack message payload (any
-            type; non-lists yield no files).
-
-    Returns:
-        List of ``(name, url)`` pairs, in payload order.
-    """
-    if not isinstance(raw_files, list):
-        return []
-    result: list[tuple[str, str]] = []
-    for raw_file in cast(list[object], raw_files):
-        if not isinstance(raw_file, dict):
-            continue
-        entry = cast(JsonDict, raw_file)
-        name = cast(str, entry.get("name", "unnamed"))
-        url = cast(
-            str,
-            entry.get("url_private_download") or entry.get("url_private", ""),
-        )
-        if url:
-            result.append((name, url))
-    return result
 
 
 def _is_slack_file_url(url: str) -> bool:

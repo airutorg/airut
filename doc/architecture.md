@@ -325,6 +325,9 @@ The Slack channel (`gateway/slack/`) implements `ChannelAdapter` as
   data
 - **MentionResolver** — Resolves inbound Slack mention tokens to display names
   and rewrites outbound `@name`/`#name`/`@group` back to Slack references
+- **ThreadHistory** — Replays channel thread history into the prompt: the prior
+  thread on a mid-thread mention, or (with `sticky_threads: false`) the messages
+  posted since the previous mention
 - **SlackMrkdwnRenderer** — Converts CommonMark to Slack `mrkdwn`
 - **SlackThreadStore** — Persistent mapping between Slack threads and Airut
   conversation IDs
@@ -349,7 +352,8 @@ SlackChannelListener (Bolt SDK event handlers)
     ├──▶ Channel surface (app_mention + message):
     │      ├─ drop bot-authored / subtyped events
     │      ├─ channel allowlist + (channel, ts) dedup
-    │      └─ engage on @-mention or in a sticky (already-engaged) thread
+    │      └─ engage on @-mention or, unless sticky_threads: false, in an
+    │         already-engaged thread
     │
     ▼
 SlackChannelAdapter.authenticate_and_parse()
@@ -359,7 +363,9 @@ SlackChannelAdapter.authenticate_and_parse()
     ├──▶ Channel: add :eyes: ack reaction once authorized
     │
     ├──▶ Resolve inbound mention tokens; on a mid-thread mention, replay
-    │     prior thread context via conversations.replies (≤200 messages)
+    │     prior thread context via conversations.replies (≤200 messages);
+    │     with sticky_threads: false, a mention in an engaged thread
+    │     replays the messages posted since the previous mention
     │
     ├──▶ Look up conversation ID from thread store, or generate new
     │

@@ -50,9 +50,28 @@ _DEDUP_CAPACITY = 256
 #: Message subtypes that still carry genuine user content and must not be
 #: filtered out with the system/edit subtypes.  Slack tags a file upload as
 #: ``file_share`` (even when it includes a text comment); dropping it would
-#: lose attachments posted into an engaged thread.  Shared with the adapter's
-#: thread-history replay so the two stay in sync on what counts as content.
+#: lose attachments posted into an engaged thread.  Shared with
+#: :mod:`airut.gateway.slack.thread_history` so the listener and the replay
+#: stay in sync on what counts as content.
 CONTENT_SUBTYPES: frozenset[str] = frozenset({"file_share"})
+
+
+def mentions_bot(text: str, bot_user_id: str | None) -> bool:
+    """Return whether *text* contains the bot's ``<@BOT_USER_ID>`` token.
+
+    Matches both the bare ``<@U…>`` form and the ``<@U…|label>`` form
+    Slack uses when a display name is available.  Shared with
+    :mod:`airut.gateway.slack.thread_history`, which uses it to find the
+    previous mention for the ``sticky_threads: false`` catch-up.
+
+    Args:
+        text: Slack message text.
+        bot_user_id: The bot's own user ID, or None when unresolved (in
+            which case nothing matches).
+    """
+    if not bot_user_id:
+        return False
+    return f"<@{bot_user_id}>" in text or f"<@{bot_user_id}|" in text
 
 
 class SlackChannelListener(ChannelListener):
@@ -321,9 +340,9 @@ class SlackChannelListener(ChannelListener):
         middleware and skipped here.  System/edit subtypes (edits, joins,
         bot posts) and bot-authored messages are ignored, but content
         subtypes such as ``file_share`` are kept so attachments are not
-        dropped.  A message is submitted only when it lands in an
-        already-engaged thread (the sticky-thread rule) or it
-        ``@``-mentions the bot.
+        dropped.  A message is submitted only when it ``@``-mentions the
+        bot or, with ``sticky_threads`` on, lands in an already-engaged
+        thread (the sticky-thread rule).
         """
         channel_type = cast(str, event.get("channel_type", ""))
         if channel_type not in ("channel", "group"):
@@ -343,11 +362,13 @@ class SlackChannelListener(ChannelListener):
         if not self._channel_allowed(channel):
             return
 
-        engaged = (
+        engaged = self._config.sticky_threads and (
             self._thread_store.get_conversation_id(channel, thread_ts)
             is not None
         )
-        if not engaged and not self._has_bot_mention(text):
+        if not engaged and not mentions_bot(
+            text, self._authorizer.get_bot_user_id()
+        ):
             return
 
         if not self._claim_event(channel, ts):
@@ -384,17 +405,6 @@ class SlackChannelListener(ChannelListener):
         """Return whether *channel* passes the optional channel allowlist."""
         allowed = self._config.allowed_channels
         return not allowed or channel in allowed
-
-    def _has_bot_mention(self, text: str) -> bool:
-        """Return whether *text* contains the bot's ``<@BOT_USER_ID>`` token.
-
-        Matches both the bare ``<@U…>`` form and the ``<@U…|label>`` form
-        Slack uses when a display name is available.
-        """
-        bot_id = self._authorizer.get_bot_user_id()
-        if not bot_id:
-            return False
-        return f"<@{bot_id}>" in text or f"<@{bot_id}|" in text
 
     def _claim_event(self, channel: str, ts: str) -> bool:
         """Claim a ``(channel, ts)`` event for processing, deduplicating.
