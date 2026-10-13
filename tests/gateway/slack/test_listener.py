@@ -14,18 +14,19 @@ from airut._json_types import JsonDict, JsonValue
 from airut.gateway.channel import ChannelHealth, RawMessage
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
-from airut.gateway.slack.listener import SlackChannelListener
+from airut.gateway.slack.listener import SlackChannelListener, mentions_bot
 from airut.gateway.slack.thread_store import SlackThreadStore
 
 
 def _make_config(
-    *, allowed_channels: tuple[str, ...] = ()
+    *, allowed_channels: tuple[str, ...] = (), sticky_threads: bool = True
 ) -> SlackChannelConfig:
     return SlackChannelConfig(
         bot_token="xoxb-test-token",
         app_token="xapp-test-token",
         authorized=({"workspace_members": True},),
         allowed_channels=allowed_channels,
+        sticky_threads=sticky_threads,
     )
 
 
@@ -548,13 +549,17 @@ class TestChannelMessageHandler:
         allowed_channels: tuple[str, ...] = (),
         sticky_conv: str | None = None,
         bot_user_id: str | None = "UBOT",
+        sticky_threads: bool = True,
     ) -> tuple[SlackChannelListener, MagicMock, MagicMock]:
         authorizer = MagicMock(spec=SlackAuthorizer)
         authorizer.get_bot_user_id.return_value = bot_user_id
         thread_store = MagicMock(spec=SlackThreadStore)
         thread_store.get_conversation_id.return_value = sticky_conv
         listener = _make_listener(
-            config=_make_config(allowed_channels=allowed_channels),
+            config=_make_config(
+                allowed_channels=allowed_channels,
+                sticky_threads=sticky_threads,
+            ),
             thread_store=thread_store,
             authorizer=authorizer,
         )
@@ -650,6 +655,49 @@ class TestChannelMessageHandler:
         listener._on_channel_message(self._event(text="<@UBOT> hi"))
         submit.assert_called_once()
 
+    def test_sticky_threads_off_drops_unmentioned_follow_up(self) -> None:
+        """With sticky threads off an engaged thread needs a fresh mention.
+
+        The follow-up is dropped before any reaction or processing.
+        """
+        listener, submit, _ = self._listener(
+            sticky_conv="conv1", sticky_threads=False
+        )
+        listener._on_channel_message(self._event(text="no mention here"))
+        submit.assert_not_called()
+
+    def test_sticky_threads_off_drops_unmentioned_file_share(self) -> None:
+        listener, submit, _ = self._listener(
+            sticky_conv="conv1", sticky_threads=False
+        )
+        listener._on_channel_message(
+            self._event(
+                subtype="file_share",
+                text="",
+                files=[{"name": "data.csv", "url_private": "u"}],
+            )
+        )
+        submit.assert_not_called()
+
+    def test_sticky_threads_off_submits_mention_in_engaged_thread(
+        self,
+    ) -> None:
+        listener, submit, _ = self._listener(
+            sticky_conv="conv1", sticky_threads=False
+        )
+        listener._on_channel_message(self._event(text="<@UBOT> again"))
+        submit.assert_called_once()
+
+    def test_sticky_threads_off_app_mention_submits(self) -> None:
+        """``app_mention`` always engages, whatever the sticky setting."""
+        listener, submit, _ = self._listener(
+            sticky_conv="conv1", sticky_threads=False
+        )
+        listener._on_app_mention(
+            {"user": "U1", "text": "<@UBOT> hi", "channel": "C1", "ts": "T2"}
+        )
+        submit.assert_called_once()
+
     def test_no_engagement_dropped(self) -> None:
         listener, submit, _ = self._listener(sticky_conv=None)
         listener._on_channel_message(self._event(text="just chatting"))
@@ -705,3 +753,17 @@ class TestChannelMessageHandler:
             listener._claim_event("C1", f"k{i}")
         assert len(listener._seen_events) == _DEDUP_CAPACITY
         assert listener._claim_event("C1", "first") is True
+
+
+class TestMentionsBot:
+    def test_bare_form(self) -> None:
+        assert mentions_bot("hi <@UBOT> there", "UBOT") is True
+
+    def test_pipe_form(self) -> None:
+        assert mentions_bot("hi <@UBOT|airut>", "UBOT") is True
+
+    def test_other_user_not_matched(self) -> None:
+        assert mentions_bot("hi <@UBOTX> <@U1>", "UBOT") is False
+
+    def test_unresolved_bot_id_matches_nothing(self) -> None:
+        assert mentions_bot("hi <@UBOT>", None) is False

@@ -23,7 +23,6 @@ from airut.gateway.slack.adapter import (
     _MAX_TEXT_CHARS,
     SlackChannelAdapter,
     SlackParsedMessage,
-    _extract_file_urls,
     _is_slack_file_url,
     _send_long_message,
     _split_message,
@@ -34,23 +33,26 @@ from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.thread_store import SlackThreadStore
 
 
-def _make_config() -> SlackChannelConfig:
+def _make_config(*, sticky_threads: bool = True) -> SlackChannelConfig:
     return SlackChannelConfig(
         bot_token="xoxb-test-token",
         app_token="xapp-test-token",
         authorized=({"workspace_members": True},),
+        sticky_threads=sticky_threads,
     )
 
 
 def _make_adapter(
     tmp_path: Path,
+    *,
+    sticky_threads: bool = True,
 ) -> tuple[
     SlackChannelAdapter,
     MagicMock,
     MagicMock,
     SlackThreadStore,
 ]:
-    config = _make_config()
+    config = _make_config(sticky_threads=sticky_threads)
     client = MagicMock(spec=WebClient)
     client.token = config.bot_token
     authorizer = MagicMock(spec=SlackAuthorizer)
@@ -375,40 +377,6 @@ class TestSaveAttachments:
         assert result == ["report-1.txt"]
         assert (inbox / "report.txt").read_bytes() == b"old turn"
         assert (inbox / "report-1.txt").read_bytes() == b"new turn"
-
-
-class TestExtractFileUrls:
-    def test_extracts_download_url(self) -> None:
-        files = [
-            {
-                "name": "a.txt",
-                "url_private_download": "https://files.slack.com/a",
-            }
-        ]
-        assert _extract_file_urls(files) == [
-            ("a.txt", "https://files.slack.com/a")
-        ]
-
-    def test_falls_back_to_url_private(self) -> None:
-        files = [{"name": "a.txt", "url_private": "https://files.slack.com/a"}]
-        assert _extract_file_urls(files) == [
-            ("a.txt", "https://files.slack.com/a")
-        ]
-
-    def test_non_list_yields_empty(self) -> None:
-        assert _extract_file_urls(None) == []
-
-    def test_non_dict_entries_skipped(self) -> None:
-        files = [
-            "not-a-dict",
-            {"name": "a.txt", "url_private": "https://files.slack.com/a"},
-        ]
-        assert _extract_file_urls(files) == [
-            ("a.txt", "https://files.slack.com/a")
-        ]
-
-    def test_file_without_url_skipped(self) -> None:
-        assert _extract_file_urls([{"name": "a.txt"}]) == []
 
 
 class TestCoalesce:
@@ -1425,7 +1393,7 @@ class TestChannelEngagement:
         client.conversations_replies.assert_not_called()
 
     def test_message_event_is_channel(self, tmp_path: Path) -> None:
-        adapter, _, authorizer, store = _make_adapter(tmp_path)
+        adapter, client, authorizer, store = _make_adapter(tmp_path)
         authorizer.authorize.return_value = (True, "")
         authorizer.get_display_name.return_value = "Alice"
         store.register("C1", "T1", "conv1")
@@ -1443,6 +1411,9 @@ class TestChannelEngagement:
         assert result.is_channel is True
         assert result.conversation_id == "conv1"
         assert result.slack_thread_ts == "T1"
+        # Sticky threads: every follow-up was delivered, so no replay.
+        client.conversations_replies.assert_not_called()
+        assert result.catch_up_history == []
 
     def test_followup_by_other_user_acknowledged_with_eyes(
         self, tmp_path: Path
@@ -1748,7 +1719,7 @@ class TestMidThreadReplay:
         assert "existing Slack thread" not in result.channel_context
 
     def test_replay_trims_to_limit(self, tmp_path: Path) -> None:
-        from airut.gateway.slack.adapter import _HISTORY_REPLAY_LIMIT
+        from airut.gateway.slack.thread_history import _HISTORY_REPLAY_LIMIT
 
         adapter, client, authorizer, _ = _make_adapter(tmp_path)
         authorizer.authorize.return_value = (True, "")
@@ -1799,6 +1770,55 @@ class TestMidThreadReplay:
         assert "[U2]: first" in result.channel_context
         assert "[U2]: second" in result.channel_context
 
+    def test_replay_dedups_parent_repeated_per_page(
+        self, tmp_path: Path
+    ) -> None:
+        """A parent repeated at the top of each page is replayed once."""
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        root = {"ts": "T0", "user": "U2", "text": "root"}
+        client.conversations_replies.side_effect = [
+            {
+                "messages": [root, {"ts": "Ta", "user": "U3", "text": "a"}],
+                "response_metadata": {"next_cursor": "c1"},
+            },
+            {
+                "messages": [
+                    root,
+                    {"ts": "Tb", "user": "U3", "text": "b"},
+                    {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+                ],
+                "response_metadata": {},
+            },
+        ]
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        assert result.channel_context.endswith("\n[U2]: root\n[U3]: a\n[U3]: b")
+
+    def test_replay_fetches_uncached_author_names(self, tmp_path: Path) -> None:
+        """Authors who never addressed the bot are looked up, not raw IDs."""
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"ts": "T0", "user": "U2", "text": "earlier"},
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+            ],
+            "response_metadata": {},
+        }
+
+        adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        # get_user_info fetches on a cache miss, so get_display_name hits.
+        authorizer.get_user_info.assert_any_call("U2")
+
     def test_replay_api_error_non_fatal(self, tmp_path: Path) -> None:
         adapter, client, authorizer, _ = _make_adapter(tmp_path)
         authorizer.authorize.return_value = (True, "")
@@ -1813,6 +1833,364 @@ class TestMidThreadReplay:
 
         # Replay failed but parsing continues with no preamble.
         assert "existing Slack thread" not in result.channel_context
+
+    def test_replay_whole_thread_with_sticky_threads_off(
+        self, tmp_path: Path
+    ) -> None:
+        """First engagement replays everything regardless of the setting.
+
+        Earlier mentions in a thread the bot never joined (e.g. one posted
+        before the bot was invited) do not cut the replay short.
+        """
+        adapter, client, authorizer, _ = _make_adapter(
+            tmp_path, sticky_threads=False
+        )
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"ts": "T0", "user": "U2", "text": "first"},
+                {"ts": "Ta", "user": "U3", "text": "<@UBOT> anyone?"},
+                {"ts": "Tb", "user": "U2", "text": "second"},
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+            ],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        assert "existing Slack thread" in result.channel_context
+        assert "[U2]: first" in result.channel_context
+        assert "[U2]: second" in result.channel_context
+        # First-engagement history is not a catch-up.
+        assert result.catch_up_history == []
+
+
+class TestCatchUpReplay:
+    """``sticky_threads: false``: a later mention replays missed messages."""
+
+    def _adapter(
+        self,
+        tmp_path: Path,
+        messages: list[dict],
+        *,
+        unauthorized: frozenset[str] = frozenset(),
+    ) -> tuple[SlackChannelAdapter, MagicMock]:
+        adapter, client, authorizer, store = _make_adapter(
+            tmp_path, sticky_threads=False
+        )
+        authorizer.authorize.side_effect = lambda uid: (
+            (False, "not allowed") if uid in unauthorized else (True, "")
+        )
+        authorizer.get_display_name.side_effect = lambda uid: {
+            "U1": "Alice",
+            "U2": "Bob",
+            "U3": "Carol",
+        }.get(uid, uid)
+        store.register("C1", "T0", "conv1")
+        client.conversations_replies.return_value = {
+            "messages": messages,
+            "response_metadata": {},
+        }
+        return adapter, client
+
+    def _mention(self, ts: str, text: str = "<@UBOT> again") -> RawMessage:
+        return _channel_raw(
+            event_type="message",
+            channel_type="channel",
+            text=text,
+            ts=ts,
+            thread_ts="T0",
+        )
+
+    def test_replays_messages_since_previous_mention(
+        self, tmp_path: Path
+    ) -> None:
+        adapter, client = self._adapter(
+            tmp_path,
+            [
+                {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+                {"ts": "T1", "bot_id": "B1", "text": "bot reply"},
+                {"ts": "T2", "user": "U2", "text": "seen before"},
+                {"ts": "T3", "user": "U1", "text": "<@UBOT|airut> second"},
+                {"ts": "T4", "bot_id": "B1", "text": "bot reply two"},
+                {"ts": "T5", "user": "U2", "text": "bob aside"},
+                {"ts": "T6", "user": "U3", "text": "carol aside"},
+                {"ts": "T7", "user": "U1", "text": "<@UBOT> what now?"},
+                {"ts": "T8", "user": "U2", "text": "after the trigger"},
+            ],
+        )
+
+        result = adapter.authenticate_and_parse(
+            self._mention("T7", "<@UBOT> what now?")
+        )
+
+        client.conversations_replies.assert_called_once()
+        assert result.conversation_id == "conv1"
+        assert result.slack_thread_ts == "T0"
+        assert "since you were last mentioned" in result.channel_context
+        assert "existing Slack thread" not in result.channel_context
+        assert result.catch_up_history == [
+            "[Bob]: bob aside",
+            "[Carol]: carol aside",
+        ]
+        assert result.channel_context.endswith(
+            "\n[Bob]: bob aside\n[Carol]: carol aside"
+        )
+        # Messages up to the previous mention were already delivered, and
+        # ones after the trigger belong to the next catch-up.
+        assert "seen before" not in result.channel_context
+        assert "after the trigger" not in result.channel_context
+        assert "bot reply" not in result.channel_context
+        # Replayed authors join the outbound mention candidate set.
+        assert result.mention_candidate_ids == ["U1", "U2", "U3"]
+
+    def test_bot_authored_mention_is_not_a_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        """A bot's mention was never delivered, so it does not end the gap."""
+        adapter, _ = self._adapter(
+            tmp_path,
+            [
+                {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+                {"ts": "T1", "user": "U2", "text": "bob aside"},
+                {
+                    "ts": "T2",
+                    "user": "UOTHER",
+                    "bot_id": "B2",
+                    "text": "<@UBOT> ping",
+                },
+                {"ts": "T3", "user": "U1", "text": "<@UBOT> again"},
+            ],
+        )
+
+        result = adapter.authenticate_and_parse(self._mention("T3"))
+
+        assert result.catch_up_history == ["[Bob]: bob aside"]
+
+    def test_no_messages_since_previous_mention(self, tmp_path: Path) -> None:
+        adapter, client = self._adapter(
+            tmp_path,
+            [
+                {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+                {"ts": "T1", "bot_id": "B1", "text": "bot reply"},
+                {"ts": "T2", "user": "U1", "text": "<@UBOT> again"},
+            ],
+        )
+
+        result = adapter.authenticate_and_parse(self._mention("T2"))
+
+        client.conversations_replies.assert_called_once()
+        assert result.catch_up_history == []
+        assert result.channel_context == adapter.channel_context()
+
+    def test_collects_attachments_since_previous_mention(
+        self, tmp_path: Path
+    ) -> None:
+        adapter, _ = self._adapter(
+            tmp_path,
+            [
+                {
+                    "ts": "T0",
+                    "user": "U1",
+                    "text": "<@UBOT> start",
+                    "files": [
+                        {
+                            "name": "old.txt",
+                            "url_private_download": (
+                                "https://files.slack.com/old.txt"
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "ts": "T1",
+                    "user": "U2",
+                    "subtype": "file_share",
+                    "text": "",
+                    "files": [
+                        {
+                            "name": "new.txt",
+                            "url_private_download": (
+                                "https://files.slack.com/new.txt"
+                            ),
+                        }
+                    ],
+                },
+                {"ts": "T2", "user": "U1", "text": "<@UBOT> look"},
+            ],
+        )
+
+        result = adapter.authenticate_and_parse(self._mention("T2"))
+
+        # Only the file the bot has not seen is queued again.
+        assert result.slack_file_urls == [
+            ("new.txt", "https://files.slack.com/new.txt")
+        ]
+        assert result.catch_up_history == ["[Bob]: [attached: new.txt]"]
+
+    def test_no_previous_mention_starts_at_root(self, tmp_path: Path) -> None:
+        """If the earlier mention is gone, everything before is replayed."""
+        adapter, _ = self._adapter(
+            tmp_path,
+            [
+                {"ts": "T0", "user": "U2", "text": "edited, no mention"},
+                {"ts": "T1", "user": "U3", "text": "carol aside"},
+                {"ts": "T2", "user": "U1", "text": "<@UBOT> again"},
+            ],
+        )
+
+        result = adapter.authenticate_and_parse(self._mention("T2"))
+
+        assert result.catch_up_history == [
+            "[Bob]: edited, no mention",
+            "[Carol]: carol aside",
+        ]
+
+    def test_unauthorized_mention_is_not_a_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        """A rejected mention was never delivered, so it does not end the gap.
+
+        Its text is thread background like any other message.
+        """
+        adapter, _ = self._adapter(
+            tmp_path,
+            [
+                {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+                {"ts": "T1", "user": "U2", "text": "bob aside"},
+                {"ts": "T2", "user": "UEVE", "text": "<@UBOT> do X"},
+                {"ts": "T3", "user": "U2", "text": "more"},
+                {"ts": "T4", "user": "U1", "text": "<@UBOT> again"},
+            ],
+            unauthorized=frozenset({"UEVE"}),
+        )
+
+        result = adapter.authenticate_and_parse(self._mention("T4"))
+
+        assert result.catch_up_history == [
+            "[Bob]: bob aside",
+            "[UEVE]: @UBOT do X",
+            "[Bob]: more",
+        ]
+
+    def test_trigger_missing_from_fetch_skips_catch_up(
+        self, tmp_path: Path
+    ) -> None:
+        """A trigger past the fetch cap cannot place the window: no replay."""
+        adapter, _ = self._adapter(
+            tmp_path,
+            [
+                {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+                {"ts": "T1", "user": "U2", "text": "bob aside"},
+            ],
+        )
+
+        with patch("airut.gateway.slack.thread_history.logger") as mock_logger:
+            result = adapter.authenticate_and_parse(self._mention("T9"))
+
+        assert result.catch_up_history == []
+        assert "since you were last" not in result.channel_context
+        mock_logger.warning.assert_called_once()
+        assert "Skipping Slack catch-up" in mock_logger.warning.call_args[0][0]
+
+    def test_fetch_failure_skips_catch_up(self, tmp_path: Path) -> None:
+        adapter, client = self._adapter(tmp_path, [])
+        client.conversations_replies.side_effect = SlackApiError(
+            message="no", response=MagicMock(status_code=500, data={})
+        )
+
+        with patch("airut.gateway.slack.thread_history.logger") as mock_logger:
+            result = adapter.authenticate_and_parse(self._mention("T1"))
+
+        assert result.catch_up_history == []
+        # Only the fetch failure is logged, not a missing-trigger warning.
+        mock_logger.warning.assert_called_once()
+        assert "Failed to fetch" in mock_logger.warning.call_args[0][0]
+
+    def test_trims_to_limit(self, tmp_path: Path) -> None:
+        from airut.gateway.slack.thread_history import _HISTORY_REPLAY_LIMIT
+
+        messages: list[dict] = [
+            {"ts": "T0", "user": "U1", "text": "<@UBOT> start"}
+        ]
+        messages.extend(
+            {"ts": f"T0.{i}", "user": "U2", "text": f"msg{i}"}
+            for i in range(_HISTORY_REPLAY_LIMIT + 5)
+        )
+        messages.append({"ts": "TX", "user": "U1", "text": "<@UBOT> again"})
+        adapter, _ = self._adapter(tmp_path, messages)
+
+        result = adapter.authenticate_and_parse(self._mention("TX"))
+
+        assert result.catch_up_history[0] == "[5 earlier messages omitted]"
+        assert len(result.catch_up_history) == _HISTORY_REPLAY_LIMIT + 1
+        assert "[Bob]: msg4\n" not in result.channel_context
+        assert "[Bob]: msg5\n" in result.channel_context
+
+    def test_coalesced_follow_up_extends_preamble(self, tmp_path: Path) -> None:
+        """Two mentions during one run keep both catch-up windows."""
+        thread: list[dict] = [
+            {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+            {"ts": "T1", "user": "U2", "text": "bob aside"},
+            {"ts": "T2", "user": "U1", "text": "<@UBOT> second"},
+        ]
+        adapter, client = self._adapter(tmp_path, thread)
+        survivor = adapter.authenticate_and_parse(
+            self._mention("T2", "<@UBOT> second")
+        )
+        thread.extend(
+            [
+                {"ts": "T3", "user": "U3", "text": "carol aside"},
+                {"ts": "T4", "user": "U1", "text": "<@UBOT> third"},
+            ]
+        )
+        follow_up = adapter.authenticate_and_parse(
+            self._mention("T4", "<@UBOT> third")
+        )
+        assert follow_up.catch_up_history == ["[Carol]: carol aside"]
+
+        survivor.coalesce(follow_up)
+
+        assert survivor.catch_up_history == [
+            "[Bob]: bob aside",
+            "[Carol]: carol aside",
+        ]
+        assert survivor.channel_context.count("since you were last") == 1
+        assert survivor.channel_context.endswith(
+            "\n[Bob]: bob aside\n[Carol]: carol aside"
+        )
+        assert survivor.mention_candidate_ids == ["U1", "U2", "U3"]
+        assert client.conversations_replies.call_count == 2
+
+    def test_coalesce_starts_preamble_when_survivor_has_none(
+        self, tmp_path: Path
+    ) -> None:
+        thread: list[dict] = [
+            {"ts": "T0", "user": "U1", "text": "<@UBOT> start"},
+            {"ts": "T1", "user": "U1", "text": "<@UBOT> second"},
+        ]
+        adapter, _ = self._adapter(tmp_path, thread)
+        survivor = adapter.authenticate_and_parse(
+            self._mention("T1", "<@UBOT> second")
+        )
+        assert survivor.catch_up_history == []
+        thread.extend(
+            [
+                {"ts": "T2", "user": "U3", "text": "carol aside"},
+                {"ts": "T3", "user": "U1", "text": "<@UBOT> third"},
+            ]
+        )
+        follow_up = adapter.authenticate_and_parse(
+            self._mention("T3", "<@UBOT> third")
+        )
+
+        survivor.coalesce(follow_up)
+
+        assert survivor.channel_context == follow_up.channel_context
+        assert survivor.catch_up_history == ["[Carol]: carol aside"]
 
 
 class TestChannelReportPhase:
@@ -1963,6 +2341,25 @@ class TestSlackParsedMessageCoalesce:
             "first",
             "second",
         ]
+
+    def test_merges_mention_candidates(self) -> None:
+        """A coalesced follow-up's sender can be mentioned in the reply."""
+        survivor = self._msg("first", ["T1"])
+        survivor.mention_candidate_ids = ["U1", "UG"]
+        other = self._msg("second", ["T2"])
+        other.mention_candidate_ids = ["U2", "UG"]
+
+        survivor.coalesce(other)
+
+        assert survivor.mention_candidate_ids == ["U1", "UG", "U2"]
+
+    def test_no_catch_up_leaves_channel_context(self) -> None:
+        survivor = self._msg("first", ["T1"])
+        survivor.channel_context = "base"
+        survivor.coalesce(self._msg("second", ["T2"]))
+
+        assert survivor.channel_context == "base"
+        assert survivor.catch_up_history == []
 
     def test_non_slack_other_leaves_acked_ts(self) -> None:
         from airut.gateway.channel import ParsedMessage

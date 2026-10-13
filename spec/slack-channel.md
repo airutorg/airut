@@ -46,7 +46,12 @@ participate in unrelated conversation:
   bot has not yet joined.
 - Once engaged, every subsequent message in that thread is treated as additional
   input — no further `@`-mention required. This makes the bot feel like a
-  participant rather than a command-line tool.
+  participant rather than a command-line tool. Operators who prefer the bot to
+  stay out of side conversations can turn this off per repo with
+  `sticky_threads: false`: the bot then processes only messages that `@`-mention
+  it, and catches up on the thread messages posted since its previous mention
+  each time it is mentioned again (see
+  [Channel Engagement Rule](#channel-engagement-rule)).
 - The bot ignores messages in threads it has not been invited to via mention.
 - The bot ignores its own messages and messages from bot users. This is what
   stops two Airut instances sharing a channel from `@`-mentioning each other
@@ -99,6 +104,14 @@ User replies in the same thread (no mention required)
   -> Resumes the Airut conversation
   -> On completion, swaps :eyes: for :white_check_mark: / :x:
 
+With sticky_threads: false, users reply in the thread without mentioning
+  -> Events delivered but dropped: no reaction, no run
+User mentions the bot again in that thread
+  -> Bot adds :eyes: reaction
+  -> Bot fetches conversations.replies; messages posted since the
+     previous mention are formatted into the prompt as background
+  -> Resumes the Airut conversation
+
 User mentions bot inside an existing thread that bot has not joined
   -> app_mention with thread_ts pointing at an older root message
   -> Bot fetches conversations.replies to read prior thread history
@@ -144,11 +157,16 @@ For each non-DM message, the adapter decides whether to engage:
    `message.channels`/`.groups` handler keeps the content subtypes. The `bot_id`
    guard is identical in both, so a bot that `@`-mentions Airut cannot trigger a
    run. See [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted).
-2. If `(channel_id, thread_ts)` (using `message.ts` for top-level messages)
-   resolves to a known conversation: engage. This is the "sticky thread" path
-   that lets follow-ups land without re-mention.
+2. If `sticky_threads` is on (the default) and `(channel_id, thread_ts)` (using
+   `message.ts` for top-level messages) resolves to a known conversation:
+   engage. This is the "sticky thread" path that lets follow-ups land without
+   re-mention. With `sticky_threads: false` this step is skipped, so an
+   unmentioned follow-up falls through to step 4 and gets no reaction and no
+   run.
 3. Else if the message text contains the bot's `<@BOT_USER_ID>` token: engage,
-   replaying thread history if the mention is mid-thread (next section).
+   replaying thread history if the mention is mid-thread, or — with
+   `sticky_threads: false` — catching up on the messages posted since the
+   previous mention if the thread is already engaged (next section).
 4. Else: drop silently.
 
 DM (`message.im`) events bypass step 3 entirely — every DM is by definition
@@ -165,8 +183,8 @@ A single channel mention is delivered as both an `app_mention` and a
 When the bot is mentioned mid-thread for the first time, it fetches the prior
 messages with `conversations.replies(channel, ts=thread_ts)` and folds them into
 the initial prompt so Claude has the same context as a human reading the thread.
-Subsequent messages in the now-engaged thread arrive one at a time and do not
-require replay.
+With sticky threads on, subsequent messages in the now-engaged thread arrive one
+at a time and do not require replay.
 
 The replayed history is rendered as a preamble appended to `channel_context`:
 
@@ -193,16 +211,73 @@ downloaded into `inbox/` alongside the invocation's own attachments, and the
 rendered line notes them as `[attached: <names>]`, so a file shared before the
 bot was invited is still available to Claude.
 
-Display names come from the authorizer's user cache; missing entries fall back
-to the raw user ID. Inbound mention tokens inside the replayed bodies are
-resolved through the same path as the invocation message so Claude sees
-human-readable names rather than opaque IDs (see
+Display names come from the authorizer's user cache, fetched on a miss (the same
+`users.info` path as inbound mention tokens); a failed lookup falls back to the
+raw user ID. Inbound mention tokens inside the replayed bodies are resolved
+through the same path as the invocation message so Claude sees human-readable
+names rather than opaque IDs (see
 [Person Identification](#person-identification)).
 
 History replay is bounded to the most recent **200 messages** in the thread;
 older messages are summarized as `[N earlier messages omitted]` to keep the
 prompt size predictable. In practice channel threads almost never exceed this;
 it is a safety bound rather than a tuning parameter.
+
+#### Catch-Up Replay (`sticky_threads: false`)
+
+With sticky threads off, the listener drops unmentioned follow-ups in an engaged
+thread, so Claude would otherwise miss the side conversation it is being asked
+about. Each mention in an already-engaged thread therefore fetches the thread
+again and replays only the messages Claude has not seen: those strictly between
+the previous **delivered** mention and the triggering message. A delivered
+mention is a human-authored message that mentions the bot and whose author
+passes authorization; bot-authored mentions are dropped by the listener and an
+unauthorized user's mention is rejected, so neither marks what Claude last saw
+(their text is replayed as background like any other message). Messages after
+the trigger are excluded — a later mention is delivered on its own and later
+non-mentions belong to the next catch-up. If no earlier delivered mention is
+found (e.g. it was deleted or edited away), the window starts at the thread
+root. If the trigger itself is not among the fetched messages (a thread past the
+1000-message fetch cap), the window cannot be placed and the catch-up is skipped
+with a warning rather than guessed.
+
+The window is derived from the thread itself rather than from persisted state:
+in this mode every delivered channel message is a mention, so the previous
+delivered mention marks what Claude last saw. The derivation is best-effort for
+mentions that never reached the listener — one posted while the service was
+down, or a message edited to add a mention (edits are dropped) — which are
+treated as delivered, so the messages before them are not replayed. Filtering,
+rendering, attachment download, author collection, and the 200-message bound are
+the same as for mid-thread replay; only the intro differs:
+
+```
+In this Slack thread you only receive messages that mention you.  The
+messages below were posted in the thread since you were last mentioned
+and were not addressed to you, in order.  Use them as background; the
+attributed message(s) that follow this preamble are the ones that
+mentioned you.
+```
+
+When no messages were posted since the previous mention, no preamble is added.
+If several mentions coalesce while the conversation is busy, each one's catch-up
+lines are appended, in arrival order, to the surviving message's single preamble
+(see [Parsed Message](#parsed-message)).
+
+As with mid-thread replay, the background is the thread as any participant sees
+it: any human participant's messages are replayed, including users the
+authorization rules would reject, and their files are downloaded to `inbox/`.
+Authorization gates who can trigger a run, not which thread context Claude reads
+once an authorized user invokes it. (With sticky threads on, such users'
+follow-ups are rejected rather than replayed, because each one would otherwise
+trigger a run.)
+
+Turning `sticky_threads` off only changes how engaged threads treat follow-ups;
+first engagement, mid-thread replay, the DM surface, and the existing
+thread-to-conversation mappings are unaffected. Toggling it on a live thread is
+not reconciled: switching to `false` makes the first catch-up re-replay
+follow-ups that were already delivered under sticky mode (since the previous
+mention), and switching to `true` never delivers the unmentioned messages posted
+since the last mention.
 
 ### Thread Titles
 
@@ -741,6 +816,11 @@ The config exposes:
 - `authorized` — the authorization rules; at least one is required.
 - `allowed_channels` — optional channel-ID allowlist (see
   [Channel Allowlist](#channel-allowlist)).
+- `sticky_threads` — optional, default `true`. When `false`, channel messages
+  are processed only when they `@`-mention the bot, even in engaged threads (see
+  [Channel Engagement Rule](#channel-engagement-rule) and
+  [Catch-Up Replay](#catch-up-replay-sticky_threads-false)). Repo-scoped, so a
+  change restarts the repo's listener like the other Slack fields.
 
 ### Slack App Setup
 
@@ -830,14 +910,14 @@ dispatches on the channel config type to construct the right adapter.
 
 ### Adapter Method Contract
 
-| `ChannelAdapter` method    | Slack behaviour                                                                                                                                                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `authenticate_and_parse()` | Check authorization via the authorizer; make the engagement decision; replay mid-thread history via `conversations.replies`; resolve inbound mention tokens; in a channel add the `:eyes:` reaction                                   |
-| `save_attachments()`       | Download files listed on the parsed message using the bot token (gated to Slack file hosts), save to `inbox_dir`                                                                                                                      |
-| `send_acknowledgment()`    | Register the thread mapping and post the "I've started" confirmation (with optional dashboard link)                                                                                                                                   |
-| `report_phase()`           | DM: `PREPARING` → set loading status, `RUNNING` → clear it. Channel: `COMPLETED`/`FAILED` → swap `:eyes:` for `:white_check_mark:`/`:x:` on every acknowledged message; `PREPARING`/`RUNNING` are ignored                             |
-| `send_reply()`             | Render Markdown → `mrkdwn`, apply outbound mention rewriting against the per-thread candidate set, post via the `text` parameter (splitting/file-upload past the size limit), upload outbox files, and set the thread title (DM only) |
-| `send_error()`             | Post error text to the thread                                                                                                                                                                                                         |
+| `ChannelAdapter` method    | Slack behaviour                                                                                                                                                                                                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authenticate_and_parse()` | Check authorization via the authorizer; make the engagement decision; replay mid-thread history (or, with `sticky_threads: false`, the catch-up since the previous mention) via `conversations.replies`; resolve inbound mention tokens; in a channel add the `:eyes:` reaction |
+| `save_attachments()`       | Download files listed on the parsed message using the bot token (gated to Slack file hosts), save to `inbox_dir`                                                                                                                                                                |
+| `send_acknowledgment()`    | Register the thread mapping and post the "I've started" confirmation (with optional dashboard link)                                                                                                                                                                             |
+| `report_phase()`           | DM: `PREPARING` → set loading status, `RUNNING` → clear it. Channel: `COMPLETED`/`FAILED` → swap `:eyes:` for `:white_check_mark:`/`:x:` on every acknowledged message; `PREPARING`/`RUNNING` are ignored                                                                       |
+| `send_reply()`             | Render Markdown → `mrkdwn`, apply outbound mention rewriting against the per-thread candidate set, post via the `text` parameter (splitting/file-upload past the size limit), upload outbox files, and set the thread title (DM only)                                           |
+| `send_error()`             | Post error text to the thread                                                                                                                                                                                                                                                   |
 
 ### Listener
 
@@ -855,9 +935,10 @@ It wires two sets of handlers:
   `RawMessage` and submits it to the worker pool). Authentication happens in the
   worker thread, not in the event handler.
 - **Direct channel handlers:** `app_mention` is the primary engagement signal;
-  `message.channels`/`message.groups` are submitted only when the thread is
-  already engaged or the body mentions the bot. Both handlers drop events
-  carrying a `bot_id`, so bot-authored mentions never trigger a run (see
+  `message.channels`/`message.groups` are submitted only when the body mentions
+  the bot or, with `sticky_threads` on, the thread is already engaged. Both
+  handlers drop events carrying a `bot_id`, so bot-authored mentions never
+  trigger a run (see
   [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted)); they
   also drop system/edit subtypes while keeping content subtypes like
   `file_share`, so uploaded files are not lost. The membership check is done
@@ -878,13 +959,18 @@ timestamp, the list of `(filename, url)` pairs for deferred attachment download,
 the list of acknowledged message timestamps (seeded with the triggering message
 and extended on each coalesced follow-up, so the completion swap covers the
 whole burst), an `is_channel` flag (gates the DM-only `setStatus`/`setTitle`
-calls), and the set of user IDs eligible for outbound `@`-mention rewriting
-(sender, replayed thread authors, configured user-group members). Coalescing is
-polymorphic: the adapter's `coalesce()` override extends the
-acknowledged-timestamp list **and the pending file-download list** on top of the
-base entry merge, so attachments on a message that coalesces into a busy
-conversation are still saved to `inbox/`. The core sees a `ParsedMessage`; the
-adapter downcasts to access these fields when sending replies.
+calls), the set of user IDs eligible for outbound `@`-mention rewriting (sender,
+replayed thread authors, configured user-group members), and the rendered
+catch-up lines already folded into `channel_context` (`sticky_threads: false`
+only). Coalescing is polymorphic: the adapter's `coalesce()` override extends
+the acknowledged-timestamp list, **the pending file-download list**, and the
+mention-candidate set on top of the base entry merge, so attachments on a
+message that coalesces into a busy conversation are still saved to `inbox/` and
+its participants can be mentioned in the reply. A coalesced message's catch-up
+lines are appended to the survivor's catch-up preamble (starting one if the
+survivor had none), since the base merge keeps only the survivor's
+`channel_context`. The core sees a `ParsedMessage`; the adapter downcasts to
+access these fields when sending replies.
 
 ### Thread-to-Conversation Store
 

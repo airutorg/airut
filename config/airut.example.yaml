@@ -252,3 +252,6 @@ repos:
       # allowed_channels:
       #   - C0123456789
       #   - C9876543210
+
+      # Keep a mentioned thread engaged without re-mentioning (false = only @-mentions)
+      # sticky_threads: true

@@ -53,7 +53,9 @@ connection:
   message's thread becomes a new Airut conversation; every subsequent message in
   that thread is treated as additional input without needing to re-mention the
   bot. Mid-thread mentions cause the bot to pull prior thread history into
-  context.
+  context. Set `sticky_threads: false` to have the bot act only on messages that
+  `@`-mention it; it then catches up on what was said in the thread since its
+  previous mention each time it is mentioned again.
 - **Socket Mode** means Airut initiates an outbound WebSocket connection to
   Slack. No inbound HTTP endpoint, public DNS, or TLS certificates are needed —
   compatible with deployment behind a firewall.
@@ -133,6 +135,12 @@ repos:
       # allowed_channels:
       #   - C0123456789
       #   - C9876543210
+
+      # Optional: once mentioned in a channel thread, the bot treats every
+      # later message in it as input (default: true). Set to false to have
+      # it act only on messages that @-mention it; messages posted since
+      # its previous mention are then passed along as background.
+      # sticky_threads: false
 
     repo_url: https://github.com/your-org/your-repo.git
 
@@ -356,4 +364,6 @@ If the bot connects but messages don't appear:
    standard DM.
 3. For channels: confirm the bot is a member of the channel (`/invite @airut`),
    and that the channel ID is in `allowed_channels` if that list is configured.
+   With `sticky_threads: false`, thread replies that don't `@`-mention the bot
+   are ignored by design.
 4. Look for errors in the service logs during message handling.

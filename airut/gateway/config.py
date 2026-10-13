@@ -2001,11 +2001,16 @@ def _parse_slack_channel_config(
             channels.append(resolved)
         allowed_channels = tuple(channels)
 
+    # Sticky threads (default): once mentioned, every later message in the
+    # thread is input.  False requires an @-mention on each message.
+    sticky_threads = _resolve(slack.get("sticky_threads"), bool, default=True)
+
     return SlackChannelConfig(
         bot_token=bot_token,
         app_token=app_token,
         authorized=tuple(authorized),
         allowed_channels=allowed_channels,
+        sticky_threads=sticky_threads,
     )
 
 

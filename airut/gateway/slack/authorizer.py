@@ -72,24 +72,20 @@ class SlackAuthorizer:
     Args:
         client: Slack ``WebClient`` for API calls.
         rules: Authorization rules from config.
-        workspace_team_id: The workspace's team ID for external user
-            detection.  Resolved lazily from the first ``auth.test``
-            call if not provided.
     """
 
     def __init__(
         self,
         client: WebClient,
         rules: Sequence[dict[str, str | bool]],
-        workspace_team_id: str | None = None,
     ) -> None:
         self._client = client
         self._rules = rules
-        self._workspace_team_id = workspace_team_id
         self._lock = threading.Lock()
 
-        # Bot's own user ID, resolved lazily from the same auth.test call
-        # that resolves the workspace team ID.
+        # Workspace team ID (external user detection) and the bot's own
+        # user ID, both resolved lazily from a single auth.test call.
+        self._workspace_team_id: str | None = None
         self._bot_user_id: str | None = None
 
         # User info cache: user_id -> _CacheEntry[UserInfo]

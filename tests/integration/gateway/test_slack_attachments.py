@@ -15,7 +15,6 @@ patching ``urllib.request.urlopen`` in the adapter.
 
 import sys
 import threading
-import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,25 +22,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
+from .conftest import slack_download_patch
 from .environment import IntegrationEnvironment
-
-
-def _download_patch(url_to_content: dict[str, bytes]):
-    """Patch the adapter's ``urlopen`` to serve canned per-URL content."""
-
-    def fake_urlopen(
-        req: urllib.request.Request, *args: object, **kwargs: object
-    ) -> MagicMock:
-        resp = MagicMock()
-        resp.read.return_value = url_to_content[req.full_url]
-        resp.__enter__ = lambda s: s
-        resp.__exit__ = MagicMock(return_value=False)
-        return resp
-
-    return patch(
-        "airut.gateway.slack.adapter.urllib.request.urlopen",
-        side_effect=fake_urlopen,
-    )
 
 
 class TestSlackAttachments:
@@ -151,7 +133,7 @@ events = [
                 "https://files.slack.com/first": b"AAA",
                 "https://files.slack.com/second": b"BBB",
             }
-            with _download_patch(url_to_content):
+            with slack_download_patch(url_to_content):
                 slack_env.slack_server.inject_user_message(
                     user_id="U_ALICE",
                     text=mock_code,
@@ -234,7 +216,7 @@ events = [
         server.wait_for_ready()
 
         try:
-            with _download_patch(
+            with slack_download_patch(
                 {"https://files.slack.com/spec.txt": b"SPEC-BODY"}
             ):
                 server.inject_channel_message(

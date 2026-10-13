@@ -372,6 +372,7 @@ class IntegrationEnvironment:
         ),
         dashboard_enabled: bool = True,
         container_command: str = "podman",
+        sticky_threads: bool = True,
     ) -> "IntegrationEnvironment":
         """Create a Slack-only integration test environment.
 
@@ -384,6 +385,7 @@ class IntegrationEnvironment:
             authorized_rules: Slack authorization rules.
             dashboard_enabled: Whether to enable the dashboard.
             container_command: Container runtime command.
+            sticky_threads: Slack ``sticky_threads`` setting.
 
         Returns:
             A started IntegrationEnvironment with Slack channel.
@@ -430,6 +432,7 @@ class IntegrationEnvironment:
             bot_token="xoxb-fake-bot-token",
             app_token="xapp-fake-app-token",
             authorized=authorized_rules,
+            sticky_threads=sticky_threads,
         )
 
         repo_config = RepoServerConfig(
