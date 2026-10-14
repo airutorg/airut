@@ -66,8 +66,24 @@ url_prefixes:
     path: /graphql
     methods: [POST]
     graphql:
+      # Query root fields are restricted to a safe set (NOT "*"). This is
+      # defense-in-depth on top of GraphQL repository scoping: every allowed
+      # root field is either bound to a specific repository that the scope
+      # check validates (repository / node / nodes) or returns only schema
+      # metadata (__type / __schema). Owner-level enumeration entry points
+      # (user, organization, repositoryOwner, viewer, search, resource) are
+      # intentionally NOT listed: they can traverse to repositories outside
+      # the configured scope (e.g. user.pinnedItems, user.pullRequests,
+      # search, resource(url:)). If a legitimate operation is blocked, the
+      # 403 response names the offending field — add it here only if it
+      # cannot reach an out-of-scope repository. See
+      # doc/network-sandbox.md#graphql-operation-filtering.
       queries:
-        - "*"
+        - repository # single repo by owner/name — repo-scope checked
+        - node # single node by global ID — repo-scope checked
+        - nodes # bulk nodes by global ID — repo-scope checked
+        - __type # schema introspection (gh CLI field detection); no repo data
+        - __schema # schema introspection; no repo data
       mutations:
         # Pull request lifecycle
         - createPullRequest

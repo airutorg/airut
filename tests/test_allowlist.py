@@ -179,6 +179,49 @@ url_prefixes:
         url_pattern_hosts = [p.host for p in al.url_patterns]
         assert "api.anthropic.com" in url_pattern_hosts
 
+    def test_real_allowlist_graphql_queries_restricted(self) -> None:
+        """Shipped allowlist restricts GraphQL query roots (never ``"*"``).
+
+        Restricting the ``queries`` root-field allowlist to repo-bound
+        roots (``repository`` / ``node`` / ``nodes``) and introspection
+        (``__type`` / ``__schema``) blocks the owner-level enumeration
+        entry points (``user`` / ``organization`` / ``search`` / …) at the
+        operation layer. This is the defense-in-depth complement to the
+        GraphQL repository scope check and closes the whole class of
+        repository-returning connection / object-enumeration bypasses
+        (``user.pinnedItems``, ``user.pullRequests``, …).
+        """
+        allowlist_path = (
+            Path(__file__).parent.parent / ".airut" / "network-allowlist.yaml"
+        )
+        al = parse_allowlist_yaml(allowlist_path.read_bytes())
+        graphql = next(
+            p.graphql
+            for p in al.url_patterns
+            if p.host == "api.github.com"
+            and p.path == "/graphql"
+            and p.graphql is not None
+        )
+        queries = set(graphql.queries)
+        # Repo-bound / introspection roots the agent's workflow needs.
+        assert {"repository", "node", "__type"} <= queries
+        # No wildcard, and no owner-level enumeration entry point.
+        forbidden = {
+            "*",
+            "user",
+            "organization",
+            "repositoryOwner",
+            "viewer",
+            "search",
+            "resource",
+        }
+        assert not (queries & forbidden), (
+            f"queries must not allow enumeration roots: {queries & forbidden}"
+        )
+        # Mutations stay scoped to the PR/review/ref lifecycle.
+        assert "createPullRequest" in graphql.mutations
+        assert "createIssue" not in graphql.mutations
+
 
 class TestSerializeAllowlistJson:
     """Tests for serialize_allowlist_json()."""
