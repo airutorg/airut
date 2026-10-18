@@ -43,7 +43,7 @@ url_prefixes:
     path: ""
     methods: [POST]
 
-  # Python packages — read-only (uv sync in entrypoint)
+  # Python packages — read-only (uv sync / uv run inside the sandbox)
   - host: pypi.org
     path: ""
     methods: [GET, HEAD]
