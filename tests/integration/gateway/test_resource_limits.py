@@ -10,8 +10,8 @@ Tests the resource limits configuration flow end-to-end:
 2. Resource limits are threaded to sandbox.create_task()
 3. Task applies limits as podman flags
 
-Since integration tests use mock_podman (which wraps `uv run`), we cannot
-verify actual cgroup enforcement.  Instead, we verify that:
+Since integration tests use mock_podman (no real container runtime), we
+cannot verify actual cgroup enforcement.  Instead, we verify that:
 - Resource limits from server config are threaded through to create_task
 - Per-repo limits (including those resolved from !var) are applied
 """

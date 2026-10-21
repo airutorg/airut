@@ -87,6 +87,8 @@ os.environ["PYTHONPATH"] = (
     if _original_pythonpath
     else str(_project_root)
 )
+# Interpreter for mock_podman_wrapper.sh (see comment there)
+os.environ["MOCK_PODMAN_PYTHON"] = sys.executable
 
 
 # Enable socket access for all integration tests

@@ -16,7 +16,7 @@ State is stored in ``$MOCK_PODMAN_STATE_DIR/state.json`` when the
 environment variable is set.
 
 Invocation:
-    python -m tests.integration.mock_podman <args>
+    python -m tests.integration.gateway.mock_podman <args>
 
 Environment Variables:
     MOCK_PODMAN_STATE_DIR: Directory for persistent state file.
