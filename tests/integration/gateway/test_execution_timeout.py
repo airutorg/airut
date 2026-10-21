@@ -11,12 +11,13 @@ Tests the timeout code path in message_processing.py where:
 3. Task completes with CompletionReason.TIMEOUT
 4. Reply is persisted to conversation state as an error
 
-The real timeout mechanism (subprocess.TimeoutExpired → SIGKILL) cannot
-be exercised with mock_podman because the `uv run` wrapper keeps stdout
-open even after the child closes fd 1. Instead, we patch Sandbox to
-return a mock task whose execute() returns an ExecutionResult with
-Outcome.TIMEOUT. This exercises the full message_processing code path
-from outcome classification through error reply and state persistence.
+The real timeout mechanism (asyncio timeout → process.kill()) is not
+exercised here because it would require a hanging container process and
+a real wall-clock wait of at least the 10s minimum timeout. Instead, we
+patch Sandbox to return a mock task whose execute() returns an
+ExecutionResult with Outcome.TIMEOUT. This exercises the full
+message_processing code path from outcome classification through error
+reply and state persistence.
 """
 
 import sys
@@ -44,7 +45,7 @@ class _MockTimeoutTask:
 
     Returns an ExecutionResult with Outcome.TIMEOUT and empty response
     text. Mimics what the real sandbox returns when the container is
-    killed by TimeoutExpired.
+    killed after its execution timeout.
     """
 
     def __init__(self, event_log: EventLog) -> None:
