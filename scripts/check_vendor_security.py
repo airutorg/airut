@@ -19,10 +19,10 @@ Run as a module so the bundled ``airut`` package resolves instead of the
     uv run python -m scripts.check_vendor_security
 """
 
+import http.client
 import json
 import sys
 from typing import cast
-from urllib.error import URLError
 from urllib.request import Request
 
 from scripts.update_vendor import PACKAGES as _PACKAGES
@@ -43,6 +43,10 @@ _GITHUB_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
 }
 
+# Errors a lookup can raise once retries are exhausted: transport failures
+# (URLError, TimeoutError, ...), malformed responses, and invalid payloads.
+_LOOKUP_ERRORS = (OSError, http.client.HTTPException, ValueError)
+
 
 def _github_get(url: str) -> object:
     """Make a GET request to the GitHub API.
@@ -57,7 +61,9 @@ def _github_get(url: str) -> object:
         Parsed JSON response.
 
     Raises:
-        URLError: If the request fails after retries are exhausted.
+        OSError: If the request fails after retries are exhausted.
+        http.client.HTTPException: If the response is malformed.
+        ValueError: If the response body is not valid JSON.
     """
     request = Request(url, headers=_GITHUB_HEADERS)
     with urlopen_with_retry(request, timeout=30) as response:
@@ -75,6 +81,11 @@ def check_advisories(
 
     Returns:
         List of advisory dicts with 'ghsa_id', 'severity', and 'summary'.
+
+    Raises:
+        OSError: If the request fails after retries are exhausted.
+        http.client.HTTPException: If the response is malformed.
+        ValueError: If the response is not a list of advisories.
     """
     url = _ADVISORIES_URL.format(ecosystem="npm", package=npm_package)
     advisories = _github_get(url)
@@ -199,7 +210,7 @@ def _check_condition(ver: tuple[int, ...], condition: str) -> bool:
     return False
 
 
-def get_latest_version(npm_package: str) -> str | None:
+def get_latest_version(npm_package: str) -> str:
     """Get the latest version of an npm package from the npm registry.
 
     Transient failures (connection errors, timeouts, 429/5xx) are
@@ -209,21 +220,25 @@ def get_latest_version(npm_package: str) -> str | None:
         npm_package: The npm package name (e.g., "htmx.org").
 
     Returns:
-        Version string, or None on failure.
+        Version string.
+
+    Raises:
+        OSError: If the request fails after retries are exhausted.
+        http.client.HTTPException: If the response is malformed.
+        ValueError: If the response body is not valid JSON or carries no
+            version string.
     """
     url = f"https://registry.npmjs.org/{npm_package}/latest"
     request = Request(url, headers={"Accept": "application/json"})
-    try:
-        with urlopen_with_retry(request, timeout=30) as response:
-            data = json.loads(response.read())
-    except URLError:
-        return None
+    with urlopen_with_retry(request, timeout=30) as response:
+        data = json.loads(response.read())
+    msg = f"npm registry response for {npm_package} has no version"
     if not isinstance(data, dict):
-        return None
+        raise ValueError(msg)
     pkg = cast(dict[str, object], data)
     version = pkg.get("version")
     if not isinstance(version, str):
-        return None
+        raise ValueError(msg)
     return version
 
 
@@ -231,7 +246,8 @@ def main() -> int:
     """Run vendor security checks.
 
     Returns:
-        0 if no vulnerabilities found, 1 if vulnerabilities exist.
+        0 if no vulnerabilities found, 1 if vulnerabilities exist or a
+        check could not be completed.
     """
     if not VERSION_FILE.exists():
         print(f"ERROR: {VERSION_FILE} not found")
@@ -254,8 +270,11 @@ def main() -> int:
         # Check for security advisories — must succeed or CI fails
         try:
             advisories = check_advisories(info["npm_package"], version)
-        except (URLError, ValueError) as e:
-            print(f"ERROR: Could not check advisories for {name}: {e}")
+        except _LOOKUP_ERRORS as e:
+            print(
+                f"ERROR: Could not check advisories for {name}: "
+                f"{type(e).__name__}: {e}"
+            )
             return 1
 
         if advisories:
@@ -270,11 +289,15 @@ def main() -> int:
                     print(f"  Details: {adv['html_url']}")
 
         # Check for newer versions — must succeed or CI fails
-        latest = get_latest_version(info["npm_package"])
-        if latest is None:
-            print(f"ERROR: Could not check latest version for {name}")
+        try:
+            latest = get_latest_version(info["npm_package"])
+        except _LOOKUP_ERRORS as e:
+            print(
+                f"ERROR: Could not check latest version for {name}: "
+                f"{type(e).__name__}: {e}"
+            )
             return 1
-        elif latest != version:
+        if latest != version:
             latest_tuple = _parse_version(latest)
             current_tuple = _parse_version(version)
             if (

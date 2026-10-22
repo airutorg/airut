@@ -5,6 +5,7 @@
 
 """Tests for scripts/check_vendor_security.py."""
 
+import http.client
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
@@ -411,50 +412,52 @@ class TestGetLatestVersion:
 
         assert result == "2.0.9"
 
-    def test_returns_none_on_url_error(self) -> None:
-        """Returns None when the request fails after retries are exhausted."""
+    def test_raises_on_network_failure(self) -> None:
+        """Propagates the error when retries are exhausted."""
         with (
             patch(
                 "scripts.check_vendor_security.urlopen_with_retry",
-                side_effect=URLError("timeout"),
+                side_effect=TimeoutError("The read operation timed out"),
             ),
+            pytest.raises(TimeoutError),
         ):
-            result = check_vendor_security.get_latest_version("htmx.org")
+            check_vendor_security.get_latest_version("htmx.org")
 
-        assert result is None
-
-    def test_returns_none_on_non_dict_response(self) -> None:
-        """Returns None when the response is not a dict."""
-        with patch(
-            "scripts.check_vendor_security.urlopen_with_retry"
-        ) as mock_open:
+    def test_raises_on_non_dict_response(self) -> None:
+        """Raises ValueError when the response is not a dict."""
+        with (
+            patch(
+                "scripts.check_vendor_security.urlopen_with_retry"
+            ) as mock_open,
+            pytest.raises(ValueError, match="htmx.org has no version"),
+        ):
             mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b"[]"
-            result = check_vendor_security.get_latest_version("htmx.org")
+            check_vendor_security.get_latest_version("htmx.org")
 
-        assert result is None
-
-    def test_returns_none_on_non_string_version(self) -> None:
-        """Returns None when version field is not a string."""
-        with patch(
-            "scripts.check_vendor_security.urlopen_with_retry"
-        ) as mock_open:
+    def test_raises_on_non_string_version(self) -> None:
+        """Raises ValueError when version field is not a string."""
+        with (
+            patch(
+                "scripts.check_vendor_security.urlopen_with_retry"
+            ) as mock_open,
+            pytest.raises(ValueError, match="htmx.org has no version"),
+        ):
             mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"version": 123}'
-            result = check_vendor_security.get_latest_version("htmx.org")
+            check_vendor_security.get_latest_version("htmx.org")
 
-        assert result is None
-
-    def test_returns_none_on_missing_version(self) -> None:
-        """Returns None when version field is missing."""
-        with patch(
-            "scripts.check_vendor_security.urlopen_with_retry"
-        ) as mock_open:
+    def test_raises_on_missing_version(self) -> None:
+        """Raises ValueError when version field is missing."""
+        with (
+            patch(
+                "scripts.check_vendor_security.urlopen_with_retry"
+            ) as mock_open,
+            pytest.raises(ValueError, match="htmx.org has no version"),
+        ):
             mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"name": "htmx.org"}'
-            result = check_vendor_security.get_latest_version("htmx.org")
-
-        assert result is None
+            check_vendor_security.get_latest_version("htmx.org")
 
 
 class TestMain:
@@ -645,9 +648,10 @@ class TestMain:
         version_file = tmp_path / "VERSION"
         version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
 
-        def mock_latest(npm_package: str) -> str | None:
+        def mock_latest(npm_package: str) -> str:
             if npm_package == "htmx-ext-sse":
-                return None
+                msg = "npm registry response for htmx-ext-sse has no version"
+                raise ValueError(msg)
             return "2.0.8"
 
         with (
@@ -670,7 +674,7 @@ class TestMain:
         assert result == 1
         captured = capsys.readouterr()
         assert "Could not check latest version" in captured.out
-        assert "htmx-ext-sse" in captured.out
+        assert "htmx-ext-sse has no version" in captured.out
 
     def test_fails_on_advisory_check_network_failure(
         self,
@@ -699,6 +703,103 @@ class TestMain:
         assert result == 1
         captured = capsys.readouterr()
         assert "Could not check advisories" in captured.out
+
+    def test_fails_cleanly_on_advisory_read_timeout(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A bare TimeoutError from the advisory fetch is reported, not raised.
+
+        urllib only wraps request-phase errors in URLError; a timeout
+        waiting for response headers escapes urlopen_with_retry() as a
+        bare TimeoutError once retries are exhausted.
+        """
+        version_file = tmp_path / "VERSION"
+        version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
+
+        with (
+            patch.object(
+                check_vendor_security,
+                "VERSION_FILE",
+                version_file,
+            ),
+            patch(
+                "airut.http.urllib.request.urlopen",
+                side_effect=TimeoutError("The read operation timed out"),
+            ),
+            patch("airut.http.time.sleep"),
+        ):
+            result = check_vendor_security.main()
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Could not check advisories for htmx" in captured.out
+        assert "timed out" in captured.out
+
+    def test_fails_cleanly_on_latest_version_read_timeout(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A bare TimeoutError from the npm fetch is reported, not raised."""
+        version_file = tmp_path / "VERSION"
+        version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
+
+        with (
+            patch.object(
+                check_vendor_security,
+                "VERSION_FILE",
+                version_file,
+            ),
+            patch(
+                "scripts.check_vendor_security.check_advisories",
+                return_value=[],
+            ),
+            patch(
+                "airut.http.urllib.request.urlopen",
+                side_effect=TimeoutError("The read operation timed out"),
+            ),
+            patch("airut.http.time.sleep"),
+        ):
+            result = check_vendor_security.main()
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Could not check latest version for htmx" in captured.out
+        assert "timed out" in captured.out
+
+    def test_fails_cleanly_on_latest_version_truncated_response(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """An HTTPException from the npm fetch is reported, not raised."""
+        version_file = tmp_path / "VERSION"
+        version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
+
+        with (
+            patch.object(
+                check_vendor_security,
+                "VERSION_FILE",
+                version_file,
+            ),
+            patch(
+                "scripts.check_vendor_security.check_advisories",
+                return_value=[],
+            ),
+            patch(
+                "airut.http.urllib.request.urlopen",
+                side_effect=http.client.BadStatusLine(""),
+            ),
+            patch("airut.http.time.sleep"),
+        ):
+            result = check_vendor_security.main()
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Could not check latest version for htmx" in captured.out
+        assert "BadStatusLine" in captured.out
 
     def test_fails_on_advisory_check_invalid_response(
         self,
