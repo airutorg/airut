@@ -23,7 +23,7 @@ markdown text ──▶ pre-process ──▶ mistune parser ──┤
                                        └─ (future renderers)
 ```
 
-**Parser**: mistune v3 (`mistune>=3.2,<4`), a zero-dependency CommonMark parser.
+**Parser**: mistune v3 (`mistune>=3.3.4`), a zero-dependency CommonMark parser.
 The `table` and `table_in_quote` plugins are enabled.
 
 **Pre-processor**: `_prepare_tables()` fixes two mistune table plugin

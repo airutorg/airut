@@ -57,6 +57,9 @@ dependencies = [
 #   `SETTINGS_ENABLE_PUSH` validation raises `h2.exceptions.ProtocolError`,
 #   which mitmproxy already catches around `receive_data` and turns into a
 #   normal protocol-error teardown.
+# - brotli >=1.2.1: fixes GHSA-9v8h-qqgm-4m35 / PYSEC-2026-4322 (out-of-bounds
+#   write in the decoder on crafted streams). mitmproxy 12.2.3 pins
+#   brotli <=1.2.0; 1.2.1 is a patch release with the same API.
 override-dependencies = [
     "tornado>=6.5.5",
     "pyopenssl>=26.0.0",
@@ -65,4 +68,5 @@ override-dependencies = [
     "msgpack>=1.2.1",
     "cryptography>=50.0.0",
     "h2>=4.4.1",
+    "brotli>=1.2.1",
 ]
