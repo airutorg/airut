@@ -14,6 +14,7 @@ import pytest
 
 from airut.sandbox._network import (
     CA_CONTAINER_PATH,
+    CA_ENV_VARS,
     get_ca_cert_path,
     get_network_args,
 )
@@ -74,6 +75,10 @@ class TestGetNetworkArgs:
         assert f"REQUESTS_CA_BUNDLE={CA_CONTAINER_PATH}" in env_args
         assert f"SSL_CERT_FILE={CA_CONTAINER_PATH}" in env_args
         assert f"CURL_CA_BUNDLE={CA_CONTAINER_PATH}" in env_args
+        # Nix images point these at their own bundle; ours must win
+        assert f"NIX_SSL_CERT_FILE={CA_CONTAINER_PATH}" in env_args
+        assert f"GIT_SSL_CAINFO={CA_CONTAINER_PATH}" in env_args
+        assert env_args == [f"{var}={CA_CONTAINER_PATH}" for var in CA_ENV_VARS]
 
     def test_no_http_proxy_env_vars(self, tmp_path: Path) -> None:
         """Transparent proxy: no HTTP_PROXY or HTTPS_PROXY env vars."""
