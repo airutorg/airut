@@ -208,7 +208,9 @@ that notification can be processed. Disabling background tasks makes Bash
 commands and subagents run synchronously, so the turn blocks until they finish.
 Subagents still work — they just run inline rather than being backgrounded.
 Guaranteeing correct `-p` behavior is the sandbox's responsibility, not the
-repo's, so it is set here rather than in the repo Dockerfile.
+repo's, so it is set here rather than in the repo Dockerfile. The agent
+entrypoint re-applies the same values after the image's environment hook, so the
+hook cannot override them either (see [image.md](image.md#entrypoint-contract)).
 
 **Stateful accumulator**: An `ExecutionAccumulator` processes events and raw
 lines during streaming. Outcome classification flags are set from raw lines

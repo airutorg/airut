@@ -147,11 +147,22 @@ references.
 
 **Key requirements:**
 
+- `bash` must be installed (the Airut entrypoint is a bash script)
+- The Claude Code binary's dynamic loader must be at its standard path: for the
+  glibc build Airut uses on glibc hosts, `/lib64/ld-linux-x86-64.so.2` (x86_64)
+  or `/lib/ld-linux-aarch64.so.1` (arm64). Glibc-based distributions (Debian,
+  Ubuntu, Fedora) have it; Nix-based images need a symlink, and musl-based
+  images such as Alpine need glibc. See
+  [Image Requirements](../spec/image.md#image-requirements)
 - `git` should be installed for version control operations
 - The Claude Code binary does **not** need to be installed in the image — Airut
   downloads and caches it on the host, then bind-mounts it read-only into each
   container at `/opt/claude/claude`. The version is controlled by the
   `claude_version` per-repo config field.
+- Tools that need an activation step rather than a system-wide install (a Nix
+  devShell, conda, mise) can be set up by an optional `/etc/airut/env.sh` in the
+  image, which Airut loads before every task. See
+  [Environment Hook](../spec/image.md#environment-hook).
 
 **For GitHub repositories:** Install `gh` (GitHub CLI) in the container and use
 the `gh auth git-credential` credential helper. This ensures all git operations

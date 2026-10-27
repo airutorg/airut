@@ -6,11 +6,13 @@
 """Shared pytest fixtures for sandbox tests."""
 
 import json
+from pathlib import Path
 
 import pytest
 
 from airut.claude_output import StreamEvent, parse_stream_events
 from airut.sandbox._run_container import _RawResult
+from tests.sandbox.entrypoint_harness import FakeContainer
 
 
 def create_mock_run_container(
@@ -92,3 +94,9 @@ def sample_streaming_output() -> str:
         },
     ]
     return "\n".join(json.dumps(e) for e in events)
+
+
+@pytest.fixture
+def container(tmp_path: Path) -> FakeContainer:
+    """Fake container root for running entrypoints, under tmp_path."""
+    return FakeContainer(tmp_path)
