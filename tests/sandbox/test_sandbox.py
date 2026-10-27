@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from airut.sandbox._image_cache import ImageCache
+from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
 from airut.sandbox.sandbox import Sandbox, SandboxConfig
 from airut.sandbox.task import AgentTask, CommandTask
 from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
@@ -149,6 +149,9 @@ class TestSandboxPruneImages:
         mock_cache.prune_images.assert_called_once()
 
 
+_REPO_SPEC = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+
+
 class TestSandboxEnsureImage:
     """Tests for Sandbox.ensure_image()."""
 
@@ -172,7 +175,7 @@ class TestSandboxEnsureImage:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        tag = sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
+        tag = sandbox.ensure_image(_REPO_SPEC)
 
         assert tag == "airut-overlay:def456"
         assert mock_cache.ensure.call_count == 2
@@ -213,7 +216,7 @@ class TestSandboxEnsureImage:
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
-        sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
+        sandbox.ensure_image(_REPO_SPEC)
 
         # Overlay call should have force=True
         overlay_call = mock_cache.ensure.call_args_list[1]
@@ -239,7 +242,7 @@ class TestSandboxEnsureImage:
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
-        sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
+        sandbox.ensure_image(_REPO_SPEC)
 
         # Overlay call should have force=False
         overlay_call = mock_cache.ensure.call_args_list[1]
@@ -252,7 +255,7 @@ class TestSandboxEnsureImage:
         mock_cache_class: MagicMock,
         mock_pm_class: MagicMock,
     ) -> None:
-        """ensure_image() passes context files to repo spec."""
+        """ensure_image() builds the repo image from the given spec."""
         mock_cache = MagicMock(spec=ImageCache)
         mock_cache_class.return_value = mock_cache
         mock_cache.tag_for.return_value = "airut-repo:abc123"
@@ -265,11 +268,15 @@ class TestSandboxEnsureImage:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        context = {"gitconfig": b"[user]\n\tname = Test\n"}
-        sandbox.ensure_image(b"FROM ubuntu:24.04\n", context)
+        spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"bin/setup.sh": b"#!/bin/sh\n"},
+            executable_files=frozenset({"bin/setup.sh"}),
+        )
+        sandbox.ensure_image(spec)
 
-        repo_spec = mock_cache.ensure.call_args_list[0][0][0]
-        assert repo_spec.context_files == context
+        assert mock_cache.ensure.call_args_list[0][0][0] is spec
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     @patch("airut.sandbox.sandbox.ImageCache")
@@ -290,9 +297,7 @@ class TestSandboxEnsureImage:
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
-        sandbox.ensure_image(
-            b"FROM ubuntu:24.04\n", {}, passthrough_entrypoint=True
-        )
+        sandbox.ensure_image(_REPO_SPEC, passthrough_entrypoint=True)
 
         # The overlay spec should contain the passthrough entrypoint
         overlay_spec = mock_cache.ensure.call_args_list[1][0][0]

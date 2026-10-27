@@ -103,7 +103,29 @@ def handle_image_inspect(args: list[str]) -> int:
 
 
 def handle_build(args: list[str]) -> int:
-    """Handle 'podman build' – no-op, pretend success."""
+    """Handle 'podman build' – record the build context, pretend success.
+
+    Writes ``builds/<tag>.json`` next to the state file, mapping each
+    file in the build context directory (the last argument) to its text
+    content and executable bit, so tests can check what an image would
+    have been built from.
+    """
+    path = _state_path()
+    if path is None or "-t" not in args:
+        return 0
+    tag = args[args.index("-t") + 1]
+    context = Path(args[-1])
+    files = {
+        f.relative_to(context).as_posix(): {
+            "content": f.read_text(errors="replace"),
+            "executable": bool(f.stat().st_mode & 0o111),
+        }
+        for f in sorted(context.rglob("*"))
+        if f.is_file()
+    }
+    record = path.parent / "builds" / f"{tag.replace(':', '_')}.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps(files))
     return 0
 
 

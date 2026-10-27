@@ -48,7 +48,8 @@ Layer 2: Server Overlay (generated in code)
   network-allowlist.yaml          # network sandbox allowlist config
   container/
     Dockerfile                    # repo-defined base image
-    <other files>                 # additional files for build context
+    <other files, subdirectories> # additional build context
+    flake.nix -> ../../flake.nix  # symlinks to files elsewhere in the repo
 
 # On the Airut server (generated in code)
 airut/sandbox/
@@ -66,18 +67,44 @@ airut/_bundled/proxy/
   aws_signing.py                  # AWS SigV4/SigV4A request re-signing
 ```
 
-All files in `.airut/container/` are copied to the build context, allowing the
+Everything in `.airut/container/` is copied to the build context, allowing the
 Dockerfile to use `COPY` instructions to include additional files (e.g.,
-configuration files, scripts) in the image.
+configuration files, scripts) in the image:
+
+- **Subdirectories** are included recursively.
+- **Symlinks** are replaced by their targets, which may be files or directories
+  anywhere in the repository. This lets an image be built from files that live
+  elsewhere, e.g. `flake.nix -> ../../flake.nix`, without making the whole
+  repository the build context (which would rebuild the image on every commit).
+  Targets are resolved within the repository, like the OS would: absolute
+  targets, targets outside it, dangling links, paths through anything but a
+  directory (a file, a missing entry, a submodule) and links that would include
+  an enclosing directory (cycles) are errors, as are other entry types such as
+  submodules.
+- **The executable bit** of files is preserved.
+- **`.git` is never included**, even when the context is the repository root.
+- **Size is limited** to 10,000 files and directories (each path through a
+  symlink counts) and 256 MiB, so directory symlinks that fan out cannot exhaust
+  the server while the mirror is locked.
+
+The gateway reads the context from the git mirror's default branch and the CLI
+from disk (symlinks may point anywhere in the enclosing git repository, i.e. the
+nearest ancestor with a `.git` entry, or the context directory itself if there
+is none). Both use the same collection code (`airut/sandbox/build_context.py`),
+so they produce the same build context and image hash. Because the hash covers
+the targets' content, changing a linked file (e.g. `flake.lock`) rebuilds the
+image.
 
 ## Build Flow
 
 ### Per-Task Build (at task start)
 
 ```
-1. List all files in .airut/container/ from git mirror (main branch)
-2. Read Dockerfile and any additional context files
-3. Compute repo_hash = sha256(Dockerfile + sorted context files)
+1. Collect .airut/container/ from git mirror (main branch), following
+   subdirectories and symlinks
+2. Separate the Dockerfile from the other context files
+3. Compute repo_hash = sha256(Dockerfile + sorted context file paths, contents
+   and executable bits)
 4. Compute overlay_hash = sha256(overlay Dockerfile + entrypoint filename + entrypoint content)
 
 5. Check repo image: airut-repo:<repo_hash>
@@ -95,9 +122,10 @@ configuration files, scripts) in the image.
 
 **Repo image build** (step 5):
 
-- List all files in `.airut/container/` via `GitMirrorCache.list_directory()`
-- Read each file's content via `GitMirrorCache.read_file()`
-- Write all files to a temporary directory (build context)
+- Collect the context via `GitMirrorCache.default_branch_tree()` (one commit of
+  the default branch, read under the mirror's shared lock)
+- Write all files to a temporary directory (build context), recreating
+  subdirectories and executable bits
 - Build with `podman build -t airut-repo:<hash> -f <tmpdir>/Dockerfile <tmpdir>`
 - The Dockerfile can use `COPY` to include any files from the container
   directory
@@ -120,7 +148,8 @@ All image management is handled by `ImageCache`
 (`airut/sandbox/_image_cache.py`) — a unified cache that manages repo, overlay,
 and proxy images through a single interface. Each image is described by an
 `ImageBuildSpec` (frozen dataclass with `kind`, `dockerfile`, and optional
-`context_files`), and tagged as `{resource_prefix}-{kind}:{sha256}`.
+`context_files` and `executable_files`), and tagged as
+`{resource_prefix}-{kind}:{sha256}`.
 
 | Condition                                        | Action                                               |
 | ------------------------------------------------ | ---------------------------------------------------- |

@@ -128,8 +128,11 @@ proxy=<sha256-hex-digest>
 
 The hashes match those used by `ImageCache.tag_for()` internally. The repo hash
 is computed from the Dockerfile and context files; the proxy hash from the
-bundled proxy package files. The overlay hash is not output because the overlay
-image is too cheap to cache.
+bundled proxy package files. The context directory is collected the same way as
+by the gateway -- subdirectories included, symlinks followed within the
+enclosing git repository (see [image.md](image.md#file-locations)) -- so the
+hash matches the gateway's for the same commit. The overlay hash is not output
+because the overlay image is too cheap to cache.
 
 #### `airut-sandbox image save`
 

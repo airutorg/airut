@@ -18,7 +18,11 @@ Benefits:
 import fcntl
 import logging
 import subprocess
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
+
+from airut.sandbox.context_trees import GitTree
 
 
 logger = logging.getLogger(__name__)
@@ -169,22 +173,20 @@ class GitMirrorCache:
             # Lock released automatically when context exits
             logger.debug("Exclusive lock released")
 
-    def list_directory(self, path: str) -> list[str]:
-        """List files in a directory from the mirror's default branch.
+    @contextmanager
+    def default_branch_tree(self) -> Generator[GitTree]:
+        """Read the default branch's current commit as a tree.
 
-        Uses ``git ls-tree`` to enumerate files in a directory. Only returns
-        regular files (blobs), not subdirectories.
+        Holds a shared lock while the tree is in use, so the mirror is not
+        updated mid-read, and pins the commit so every read sees the same
+        snapshot.
 
-        Args:
-            path: Path relative to the repository root
-                (e.g. ``.airut/container``).
-
-        Returns:
-            List of filenames (not full paths) in the directory.
+        Yields:
+            Tree of the default branch's head commit.
 
         Raises:
-            MirrorError: If the mirror doesn't exist, the directory is not
-                found, or the default branch cannot be determined.
+            MirrorError: If the mirror doesn't exist or the default branch
+                cannot be resolved.
         """
         if not self.mirror_path.exists():
             raise MirrorError(
@@ -197,40 +199,27 @@ class GitMirrorCache:
         with open(self.lock_file, "w") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
 
-            branch = self._get_default_branch_from_mirror()
-            ref = f"refs/heads/{branch}"
-
-            # Ensure path ends with / to list directory contents
-            dir_path = path.rstrip("/") + "/"
-
+            ref = f"refs/heads/{self._get_default_branch_from_mirror()}"
             try:
                 result = subprocess.run(
                     [
                         "git",
                         "-C",
                         str(self.mirror_path),
-                        "ls-tree",
-                        "--name-only",
-                        ref,
-                        dir_path,
+                        "rev-parse",
+                        "--verify",
+                        f"{ref}^{{commit}}",
                     ],
                     check=True,
                     capture_output=True,
                     text=True,
                 )
-                # ls-tree returns full paths, extract just filenames
-                files = []
-                for line in result.stdout.strip().split("\n"):
-                    if line:
-                        # Extract filename from path
-                        filename = line.split("/")[-1]
-                        files.append(filename)
-                return files
             except subprocess.CalledProcessError as e:
                 error_msg = e.stderr.strip() if e.stderr else str(e)
                 raise MirrorError(
-                    f"Failed to list {path} from mirror at {ref}: {error_msg}"
+                    f"Failed to resolve {ref} in mirror: {error_msg}"
                 ) from e
+            yield GitTree(self.mirror_path, result.stdout.strip())
 
     def read_file(self, path: str) -> bytes:
         """Read a file from the mirror's default branch.

@@ -128,12 +128,21 @@ orchestrator.
 **Quick example:**
 
 ```python
-from airut.sandbox import Sandbox, SandboxConfig, Mount, ContainerEnv, Outcome
+from airut.sandbox import (
+    ContainerEnv,
+    ImageBuildSpec,
+    Mount,
+    Outcome,
+    Sandbox,
+    SandboxConfig,
+)
 
 sandbox = Sandbox(SandboxConfig())
 sandbox.startup()
 
-image = sandbox.ensure_image(dockerfile, context_files)
+image = sandbox.ensure_image(
+    ImageBuildSpec(kind="repo", dockerfile=dockerfile, context_files=files)
+)
 task = sandbox.create_task(
     execution_context_id="my-run-1",
     execution_context_dir=run_dir,

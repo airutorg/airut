@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.memory_tree import use_repo_files
+
 
 def make_sample_raw() -> dict[str, Any]:
     """Create a sample raw config dict for testing.
@@ -186,9 +188,13 @@ def docker_dir(tmp_path: Path) -> Path:
 def mock_mirror(tmp_path: Path) -> MagicMock:
     """Create a mock GitMirrorCache that returns a test Dockerfile."""
     mock = MagicMock()
-    mock.list_directory.return_value = ["Dockerfile"]
-    mock.read_file.return_value = (
-        b"FROM python:3.13-slim\nRUN pip install claude-code\n"
+    use_repo_files(
+        mock,
+        {
+            ".airut/container/Dockerfile": (
+                b"FROM python:3.13-slim\nRUN pip install claude-code\n"
+            )
+        },
     )
     return mock
 

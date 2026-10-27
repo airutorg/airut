@@ -1798,7 +1798,7 @@ class TestExecute:
         dockerfile = context / "Dockerfile"
         dockerfile.write_text("FROM alpine")
         (context / "requirements.txt").write_bytes(b"flask\n")
-        # Create a subdirectory that should be ignored (is_file check)
+        # An empty subdirectory contributes no files
         (context / "subdir").mkdir()
 
         mock_prepare.return_value = PreparedSecrets(
@@ -1825,7 +1825,7 @@ class TestExecute:
         _execute(args, _SandboxCliConfig(network_sandbox=False))
 
         ensure_image_call = mock_sandbox.ensure_image.call_args
-        context_files = ensure_image_call[0][1]
+        context_files = ensure_image_call[0][0].context_files
         assert "requirements.txt" in context_files
         assert "Dockerfile" not in context_files
         assert "subdir" not in context_files
@@ -1873,7 +1873,7 @@ class TestExecute:
         _execute(args, _SandboxCliConfig(network_sandbox=False))
 
         ensure_image_call = mock_sandbox.ensure_image.call_args
-        context_files = ensure_image_call[0][1]
+        context_files = ensure_image_call[0][0].context_files
         assert "extra.sh" in context_files
 
     @patch("airut.sandbox_cli.Sandbox")
@@ -2010,7 +2010,7 @@ class TestExecute:
         _execute(args, _SandboxCliConfig(network_sandbox=False))
 
         ensure_image_call = mock_sandbox.ensure_image.call_args
-        context_files = ensure_image_call[0][1]
+        context_files = ensure_image_call[0][0].context_files
         assert context_files == {}
 
     @patch("airut.sandbox_cli.Sandbox")
@@ -3056,6 +3056,102 @@ class TestBuildRepoSpec:
 
         spec = _build_repo_spec(dockerfile, tmp_path / "missing")
         assert spec.context_files == {}
+
+    def test_symlinks_and_subdirectories(self, tmp_path: Path) -> None:
+        """Symlinks within the repo and subdirectories are collected."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "flake.nix").write_text("{ }")
+        (tmp_path / "nix").mkdir()
+        (tmp_path / "nix" / "shell.nix").write_text("shell")
+        context = tmp_path / ".airut" / "container"
+        context.mkdir(parents=True)
+        dockerfile = context / "Dockerfile"
+        dockerfile.write_text("FROM nixos/nix\n")
+        (context / "flake.nix").symlink_to("../../flake.nix")
+        (context / "nix").symlink_to("../../nix")
+        script = context / "bin" / "setup.sh"
+        script.parent.mkdir()
+        script.write_text("#!/bin/sh\n")
+        script.chmod(0o755)
+
+        spec = _build_repo_spec(dockerfile, context)
+
+        assert spec.context_files == {
+            "bin/setup.sh": b"#!/bin/sh\n",
+            "flake.nix": b"{ }",
+            "nix/shell.nix": b"shell",
+        }
+        assert spec.executable_files == frozenset({"bin/setup.sh"})
+
+    def test_symlink_outside_repo_rejected(self, tmp_path: Path) -> None:
+        """Symlinks may not leave the enclosing repository."""
+        from airut.sandbox_cli import _ConfigError
+
+        repo = tmp_path / "repo"
+        context = repo / ".airut" / "container"
+        context.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (tmp_path / "secret").write_text("host file")
+        dockerfile = context / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        (context / "secret").symlink_to("../../../secret")
+
+        with pytest.raises(_ConfigError, match="outside the repository"):
+            _build_repo_spec(dockerfile, context)
+
+    def test_without_repo_context_dir_is_the_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        """Outside a git repo, symlinks may not leave the context dir."""
+        from airut.sandbox_cli import _ConfigError
+
+        context = tmp_path / "context"
+        context.mkdir()
+        (tmp_path / "sibling").write_text("x")
+        dockerfile = context / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        (context / "sibling").symlink_to("../sibling")
+
+        with pytest.raises(_ConfigError, match="outside the repository"):
+            _build_repo_spec(dockerfile, context)
+
+    def test_unreadable_context_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OS errors while reading the context are configuration errors."""
+        from airut.sandbox.context_trees import FilesystemTree
+        from airut.sandbox_cli import _ConfigError
+
+        context = tmp_path / "context"
+        context.mkdir()
+        dockerfile = context / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+
+        def denied(self: FilesystemTree, path: str) -> bytes:
+            raise PermissionError(f"denied: {path}")
+
+        monkeypatch.setattr(FilesystemTree, "read", denied)
+
+        with pytest.raises(_ConfigError, match="denied: Dockerfile"):
+            _build_repo_spec(dockerfile, context)
+
+    def test_relative_context_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative context dir (the CLI default) resolves from cwd."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "flake.lock").write_text("{}")
+        context = tmp_path / ".airut" / "container"
+        context.mkdir(parents=True)
+        (context / "Dockerfile").write_text("FROM alpine\n")
+        (context / "flake.lock").symlink_to("../../flake.lock")
+        monkeypatch.chdir(tmp_path)
+
+        spec = _build_repo_spec(
+            Path(".airut/container/Dockerfile"), Path(".airut/container")
+        )
+
+        assert spec.context_files == {"flake.lock": b"{}"}
 
 
 # -------------------------------------------------------------------

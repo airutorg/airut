@@ -27,8 +27,13 @@ from airut.gateway.service.message_processing import (
 from airut.sandbox import ExecutionResult, Outcome
 from airut.sandbox.claude_binary import ClaudeBinaryError
 from airut.sandbox.types import ResourceLimits
+from tests.memory_tree import use_repo_files
 
 from .conftest import make_service, update_global, update_repo
+
+
+# Repository files making up a minimal default container directory.
+_CONTAINER_FILES = {".airut/container/Dockerfile": b"FROM python:3.13-slim\n"}
 
 
 def _make_parsed_message(
@@ -432,11 +437,9 @@ class TestProcessMessage:
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
 
         def _read_file(path: str) -> bytes:
-            if "Dockerfile" in path:
-                return b"FROM python:3.13-slim\n"
             if "network-allowlist" in path:
                 return b"domains: []\nurl_prefixes: []\n"
             return b""
@@ -1634,11 +1637,9 @@ class TestClaudeBinaryError:
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
 
         def _read_file(path: str) -> bytes:
-            if "Dockerfile" in path:
-                return b"FROM python:3.13-slim\n"
             if "network-allowlist" in path:
                 return b"domains: []\nurl_prefixes: []\n"
             return b""
@@ -1712,8 +1713,7 @@ class TestSandboxDisabledWarning:
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
-        mock_mirror.read_file.return_value = b"FROM python:3.13-slim\n"
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
         handler.conversation_manager.mirror = mock_mirror
 
         mock_cs = MagicMock()
@@ -1833,11 +1833,9 @@ class TestBuildImageErrors:
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
 
         def _read_file(path: str) -> bytes:
-            if "Dockerfile" in path:
-                return b"FROM python:3.13-slim\n"
             if "network-allowlist" in path:
                 return b"domains: []\nurl_prefixes: []\n"
             return b""
@@ -1862,12 +1860,12 @@ class TestBuildImageErrors:
 
         return svc, handler, mock_conv_store, adapter
 
-    def test_list_directory_error_raises_image_build_error(
+    def test_mirror_error_raises_image_build_error(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
-        """mirror.list_directory failure is caught and sent as error."""
+        """A mirror failure is caught and sent as error."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
-        handler.conversation_manager.mirror.list_directory.side_effect = (
+        handler.conversation_manager.mirror.default_branch_tree.side_effect = (
             RuntimeError("mirror error")
         )
         parsed = _make_parsed_message(body="Do something")
@@ -1887,17 +1885,14 @@ class TestBuildImageErrors:
         error_msg = adapter.send_error.call_args[0][2]
         assert "ImageBuildError" in error_msg
 
-    def test_read_file_error_raises_image_build_error(
+    def test_invalid_build_context_raises_image_build_error(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
-        """mirror.read_file failure is caught and sent as error."""
+        """An unreadable build context is caught and sent as error."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
-
-        handler.conversation_manager.mirror.list_directory.return_value = [
-            "Dockerfile"
-        ]
-        handler.conversation_manager.mirror.read_file.side_effect = (
-            RuntimeError("read error")
+        use_repo_files(
+            handler.conversation_manager.mirror,
+            {".airut/other/Dockerfile": b"FROM scratch\n"},
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -1921,12 +1916,12 @@ class TestBuildImageErrors:
         """Missing Dockerfile in directory listing raises ImageBuildError."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
 
-        handler.conversation_manager.mirror.list_directory.return_value = [
-            "requirements.txt",
-            "setup.py",
-        ]
-        handler.conversation_manager.mirror.read_file.side_effect = (
-            lambda path: b"content"
+        use_repo_files(
+            handler.conversation_manager.mirror,
+            {
+                ".airut/container/requirements.txt": b"content",
+                ".airut/container/setup.py": b"content",
+            },
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -1948,9 +1943,13 @@ class TestBuildImageErrors:
     def test_custom_container_path_used(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
-        """container_path from repo config is passed to mirror."""
+        """The build context is read from the configured container_path."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, container_path=".devcontainer")
+        use_repo_files(
+            handler.conversation_manager.mirror,
+            {".devcontainer/Dockerfile": b"FROM devcontainer\n"},
+        )
 
         parsed = _make_parsed_message(body="Do something")
 
@@ -1960,10 +1959,8 @@ class TestBuildImageErrors:
         ):
             process_message(svc, parsed, "task1", handler, adapter)
 
-        # Verify the mirror was queried with the custom path
-        handler.conversation_manager.mirror.list_directory.assert_called_with(
-            ".devcontainer"
-        )
+        repo_spec = svc.sandbox.ensure_image.call_args.args[0]
+        assert repo_spec.dockerfile == b"FROM devcontainer\n"
 
 
 class TestBuildImagePassthrough:
@@ -1975,8 +1972,7 @@ class TestBuildImagePassthrough:
         """passthrough_entrypoint=True is forwarded to ensure_image."""
         svc, handler = make_service(email_config, tmp_path)
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
-        mock_mirror.read_file.return_value = b"FROM ubuntu:24.04\n"
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
         svc.sandbox.ensure_image.return_value = "airut:passthrough"
 
         tag = build_image(svc, mock_mirror, passthrough_entrypoint=True)
@@ -1992,8 +1988,7 @@ class TestBuildImagePassthrough:
         """Default build_image uses agent entrypoint (passthrough=False)."""
         svc, handler = make_service(email_config, tmp_path)
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
-        mock_mirror.read_file.return_value = b"FROM ubuntu:24.04\n"
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
         svc.sandbox.ensure_image.return_value = "airut:agent"
 
         build_image(svc, mock_mirror)
@@ -2036,11 +2031,9 @@ class TestAllowlistParseError:
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
 
         def _read_file(path: str) -> bytes:
-            if "Dockerfile" in path:
-                return b"FROM python:3.13-slim\n"
             if "network-allowlist" in path:
                 raise RuntimeError("allowlist read error")
             return b""
@@ -2110,11 +2103,9 @@ class TestConvertReplacementMap:
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
 
         def _read_file(path: str) -> bytes:
-            if "Dockerfile" in path:
-                return b"FROM python:3.13-slim\n"
             if "network-allowlist" in path:
                 return b"domains: []\nurl_prefixes: []\n"
             return b""
@@ -2391,11 +2382,9 @@ class TestRunInSandbox:
             tmp_path / "conversations"
         )
         mock_mirror = MagicMock()
-        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        use_repo_files(mock_mirror, _CONTAINER_FILES)
 
         def _read_file(path: str) -> bytes:
-            if "Dockerfile" in path:
-                return b"FROM python:3.13-slim\n"
             if "network-allowlist" in path:
                 return b"domains: []\nurl_prefixes: []\n"
             return b""

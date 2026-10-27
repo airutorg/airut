@@ -43,24 +43,55 @@ class ImageBuildSpec:
             (e.g. "repo", "overlay", "proxy").
         dockerfile: Dockerfile content (bytes).
         context_files: Additional files for build context. Mapping
-            of filename to content bytes. All files are written to
-            a temporary directory alongside the Dockerfile for the
-            build.
+            of relative POSIX path (subdirectories allowed) to content
+            bytes. All files are written to a temporary directory
+            alongside the Dockerfile for the build.
+        executable_files: Paths in ``context_files`` written with the
+            executable bit set.
     """
 
     kind: str
     dockerfile: bytes
     context_files: dict[str, bytes] = field(default_factory=dict)
+    executable_files: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        unknown = self.executable_files - self.context_files.keys()
+        if unknown:
+            msg = f"Executable files not in context: {sorted(unknown)}"
+            raise ValueError(msg)
 
 
 def content_hash(spec: ImageBuildSpec) -> str:
-    """SHA-256 of dockerfile + sorted context file names and contents."""
+    """SHA-256 of dockerfile + sorted context file paths and contents.
+
+    The executable bit is hashed only when set, so contexts without
+    executable files keep their hash from before it was tracked.  Like
+    the unseparated path/content concatenation, the marker is not
+    collision-proof against crafted content; the inputs come from the
+    repository being built, which gains nothing from a collision.
+    """
     h = hashlib.sha256()
     h.update(spec.dockerfile)
     for name in sorted(spec.context_files):
-        h.update(name.encode())
+        h.update(name.encode("utf-8", "surrogateescape"))
         h.update(spec.context_files[name])
+        if name in spec.executable_files:
+            h.update(b"\0executable")
     return h.hexdigest()
+
+
+def _context_path(root: Path, name: str) -> Path:
+    """Return where context file *name* goes under build directory *root*.
+
+    Raises:
+        ValueError: If *name* is not a plain relative POSIX path.
+    """
+    parts = name.split("/")
+    if "\\" in name or any(part in ("", ".", "..") for part in parts):
+        msg = f"Invalid context file name: {name!r}"
+        raise ValueError(msg)
+    return root.joinpath(*parts)
 
 
 # Go's time.Time.String() format: "2006-01-02 15:04:05.999999999 -0700 MST"
@@ -332,10 +363,11 @@ class ImageCache:
             df_path.write_bytes(spec.dockerfile)
 
             for name, content in spec.context_files.items():
-                if "/" in name or "\\" in name or name in (".", ".."):
-                    msg = f"Invalid context file name: {name!r}"
-                    raise ValueError(msg)
-                (Path(tmpdir) / name).write_bytes(content)
+                path = _context_path(Path(tmpdir), name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+                if name in spec.executable_files:
+                    path.chmod(0o755)
 
             cmd = [self._cmd, "build", "-t", tag, "-f", str(df_path)]
             if no_cache:
