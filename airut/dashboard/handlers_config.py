@@ -33,15 +33,15 @@ from airut.config.editor import (
     get_raw_value,
     raw_values_equal,
     rename_var_references,
-    schema_for_editor,
+)
+from airut.config.server_schema import (
+    email_schema,
+    global_schema,
+    repo_schema,
+    slack_schema,
 )
 from airut.config.snapshot import ConfigSnapshot
-from airut.config.source import (
-    YAML_EMAIL_STRUCTURE,
-    YAML_GLOBAL_STRUCTURE,
-    YAML_REPO_STRUCTURE,
-    ConfigSource,
-)
+from airut.config.source import ConfigSource
 from airut.dashboard.templating import render_template
 from airut.gateway.config import SIGNING_TYPE_AWS_SIGV4
 
@@ -290,42 +290,6 @@ class ConfigEditorHandlers:
         self._buffer = EditBuffer(snapshot.raw, self._get_generation())
         return self._buffer
 
-    def _get_global_schema(self) -> list[EditorFieldSchema]:
-        """Get editor schema for GlobalConfig."""
-        from airut.gateway.config import GlobalConfig
-
-        return schema_for_editor(GlobalConfig, structure=YAML_GLOBAL_STRUCTURE)
-
-    def _get_repo_schema(self, repo_id: str) -> list[EditorFieldSchema]:
-        """Get editor schema for a repo's RepoServerConfig fields."""
-        from airut.gateway.config import RepoServerConfig
-
-        prefix = f"repos.{repo_id}"
-        return schema_for_editor(
-            RepoServerConfig,
-            path_prefix=prefix,
-            structure=YAML_REPO_STRUCTURE,
-            exclude={"repo_id", "channels"},
-        )
-
-    def _get_email_schema(self, repo_id: str) -> list[EditorFieldSchema]:
-        """Get editor schema for an email channel within a repo."""
-        from airut.gateway.config import EmailChannelConfig
-
-        prefix = f"repos.{repo_id}.email"
-        return schema_for_editor(
-            EmailChannelConfig,
-            path_prefix=prefix,
-            structure=YAML_EMAIL_STRUCTURE,
-        )
-
-    def _get_slack_schema(self, repo_id: str) -> list[EditorFieldSchema]:
-        """Get editor schema for a Slack channel within a repo."""
-        from airut.gateway.slack.config import SlackChannelConfig
-
-        prefix = f"repos.{repo_id}.slack"
-        return schema_for_editor(SlackChannelConfig, path_prefix=prefix)
-
     def _get_common_repo_ids(self) -> set[str]:
         """Get repo IDs that exist in both the buffer and live snapshot.
 
@@ -369,26 +333,22 @@ class ConfigEditorHandlers:
 
     def _find_field_in_all_schemas(self, path: str) -> EditorFieldSchema | None:
         """Search for a field schema across all schemas."""
-        found = _find_field_schema(self._get_global_schema(), path)
+        found = _find_field_schema(global_schema(), path)
         if found:
             return found
 
         if self._buffer is not None:
             for repo_id, repo_data in self._buffer.raw.get("repos", {}).items():
-                found = _find_field_schema(self._get_repo_schema(repo_id), path)
+                found = _find_field_schema(repo_schema(repo_id), path)
                 if found:
                     return found
                 if isinstance(repo_data, dict):
                     if "email" in repo_data:
-                        found = _find_field_schema(
-                            self._get_email_schema(repo_id), path
-                        )
+                        found = _find_field_schema(email_schema(repo_id), path)
                         if found:
                             return found
                     if "slack" in repo_data:
-                        found = _find_field_schema(
-                            self._get_slack_schema(repo_id), path
-                        )
+                        found = _find_field_schema(slack_schema(repo_id), path)
                         if found:
                             return found
         return None
@@ -404,14 +364,14 @@ class ConfigEditorHandlers:
         where the value is absent (``MISSING``) or ``None``.
         """
         result: list[tuple[EditorFieldSchema, object]] = []
-        for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
+        for fs in collect_leaf_fields(repo_schema(repo_id)):
             val = get_raw_value(raw, fs.path)
             if val is not None and val is not MISSING:
                 result.append((fs, val))
         repo_data = (raw or {}).get("repos", {}).get(repo_id, {})
         for ch_type, get_schema in (
-            ("email", self._get_email_schema),
-            ("slack", self._get_slack_schema),
+            ("email", email_schema),
+            ("slack", slack_schema),
         ):
             if ch_type in repo_data:
                 for fs in collect_leaf_fields(get_schema(repo_id)):
@@ -447,8 +407,8 @@ class ConfigEditorHandlers:
         live_repo = (snapshot.raw or {}).get("repos", {}).get(repo_id, {})
 
         for ch_type, get_schema in (
-            ("email", self._get_email_schema),
-            ("slack", self._get_slack_schema),
+            ("email", email_schema),
+            ("slack", slack_schema),
         ):
             buf_has = ch_type in buf_repo
             live_has = ch_type in live_repo
@@ -484,7 +444,7 @@ class ConfigEditorHandlers:
         )
 
         # Global fields
-        global_schema = self._get_global_schema()
+        global_fields = global_schema()
 
         def _count_leaf(fs: EditorFieldSchema) -> int:
             buf_val = get_raw_value(buffer.raw, fs.path)
@@ -497,7 +457,7 @@ class ConfigEditorHandlers:
                 return 1
             return 0
 
-        for fs in collect_leaf_fields(global_schema):
+        for fs in collect_leaf_fields(global_fields):
             count += _count_leaf(fs)
 
         # Per-field diff only for repos present on both sides
@@ -511,7 +471,7 @@ class ConfigEditorHandlers:
             count += 1
 
         for repo_id in sorted(self._get_common_repo_ids()):
-            for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
+            for fs in collect_leaf_fields(repo_schema(repo_id)):
                 count += _count_leaf(fs)
 
             # Channel fields
@@ -589,7 +549,7 @@ class ConfigEditorHandlers:
                 content_type="text/html",
             )
 
-        schema = self._get_global_schema()
+        schema = global_schema()
         stale = buffer.is_stale(self._get_generation())
         var_refs = find_var_references(buffer.raw)
 
@@ -658,7 +618,7 @@ class ConfigEditorHandlers:
                 content_type="text/html",
             )
 
-        schema = self._get_repo_schema(repo_id)
+        schema = repo_schema(repo_id)
         stale = buffer.is_stale(self._get_generation())
 
         repo_data = repos.get(repo_id, {})
@@ -681,12 +641,8 @@ class ConfigEditorHandlers:
                 read_only=read_only,
                 has_email=has_email,
                 has_slack=has_slack,
-                email_schema=self._get_email_schema(repo_id)
-                if has_email
-                else [],
-                slack_schema=self._get_slack_schema(repo_id)
-                if has_slack
-                else [],
+                email_schema=email_schema(repo_id) if has_email else [],
+                slack_schema=slack_schema(repo_id) if has_slack else [],
             ),
             content_type="text/html",
         )
@@ -1084,12 +1040,8 @@ class ConfigEditorHandlers:
                     buffer=buffer,
                     has_email=has_email,
                     has_slack=has_slack,
-                    email_schema=self._get_email_schema(repo_id)
-                    if has_email
-                    else [],
-                    slack_schema=self._get_slack_schema(repo_id)
-                    if has_slack
-                    else [],
+                    email_schema=email_schema(repo_id) if has_email else [],
+                    slack_schema=slack_schema(repo_id) if has_slack else [],
                 ),
                 content_type="text/html",
             )
@@ -1171,7 +1123,7 @@ class ConfigEditorHandlers:
                     )
 
         # Global fields
-        _diff_fields(self._get_global_schema())
+        _diff_fields(global_schema())
 
         # Per-field diff only for repos present on both sides
         def _ch_change(rid: str, ch: str, old: str, new: str) -> None:
@@ -1186,7 +1138,7 @@ class ConfigEditorHandlers:
             )
 
         for repo_id in sorted(self._get_common_repo_ids()):
-            _diff_fields(self._get_repo_schema(repo_id))
+            _diff_fields(repo_schema(repo_id))
 
             self._walk_channel_diffs(
                 repo_id,

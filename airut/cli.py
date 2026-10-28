@@ -35,6 +35,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from airut._json_types import JsonDict
 from airut.gateway.config import (
@@ -44,6 +45,11 @@ from airut.gateway.config import (
     get_dotenv_path,
     get_state_dir,
 )
+
+
+if TYPE_CHECKING:
+    from airut.config.snapshot import ConfigSnapshot
+    from airut.version import GitVersionInfo
 
 
 logger = logging.getLogger(__name__)
@@ -567,128 +573,172 @@ _RESTART_CMD = "systemctl --user restart airut"
 # ── check subcommand ────────────────────────────────────────────────
 
 
-def cmd_check(argv: list[str]) -> int:
-    """Run readiness checks and print installation status.
-
-    Displays version information, configuration status, system
-    dependencies, and service health.  Dependency and configuration
-    failures affect the exit code; service status is informational only.
-
-    Args:
-        argv: Arguments (``--config PATH``).
+def _print_version_section(
+    s: _Style, *, offline: bool
+) -> tuple[GitVersionInfo, bool]:
+    """Print the version and, unless offline, upstream update status.
 
     Returns:
-        0 if all checks pass, 1 if any check fails.
+        The installed version info, and whether it is a Nix install.
     """
-    s = _Style(_use_color())
-    all_ok = True
-    args = _parse_args(argv)
-    config_path = args.config_path
-
-    # ── Version ─────────────────────────────────────────────────
     from airut.version import check_upstream_version, get_git_version_info
 
     vi = get_git_version_info()
-    version_label = vi.version or vi.sha_short
-    print(s.bold(f"Airut {version_label}"))
+    print(s.bold(f"Airut {vi.version or vi.sha_short}"))
     nix = _is_nix_install()
     if nix:
         print(f"  {_NIX_MANAGED}; update it through your Nix configuration.")
 
-    upstream = check_upstream_version(vi)
+    upstream = None if offline else check_upstream_version(vi)
     if upstream and upstream.update_available:
         if upstream.source == "pypi":
-            print(
-                f"  {s.yellow('Update available:')} "
-                f"{upstream.current} → {upstream.latest}"
-            )
-            print(f"  Run {s.cyan('airut update')} to update.")
+            current, latest = upstream.current, upstream.latest
         else:
-            short_current = upstream.current[:7]
-            short_latest = upstream.latest[:7]
-            print(
-                f"  {s.yellow('Update available:')} "
-                f"{short_current} → {short_latest}"
-            )
-            print(f"  Run {s.cyan('airut update')} to update.")
+            current, latest = upstream.current[:7], upstream.latest[:7]
+        print(f"  {s.yellow('Update available:')} {current} → {latest}")
+        print(f"  Run {s.cyan('airut update')} to update.")
     print()
+    return vi, nix
 
-    # ── Configuration ───────────────────────────────────────────
-    print(s.bold("Configuration"))
+
+def _print_schema_status(s: _Style, args: _Args) -> None:
+    """Print the config file's schema version and any migration hint."""
+    from airut.config.migration import (
+        CURRENT_CONFIG_VERSION,
+        get_file_config_version,
+    )
+    from airut.config.source import YamlConfigSource
+
+    config_path = args.config_path
+    try:
+        file_version = get_file_config_version(config_path)
+    except ConfigError:
+        # Informational; config parse errors are reported already.
+        return
+    if file_version == CURRENT_CONFIG_VERSION:
+        print(f"  Schema:      {s.green('up to date')} (v{file_version})")
+        return
+    print(
+        f"  Schema:      {s.yellow('migration pending')} "
+        f"(v{file_version} → v{CURRENT_CONFIG_VERSION})"
+    )
+    if YamlConfigSource(config_path).read_only_reason():
+        print(
+            "               Migrate it where the config is "
+            "managed (until then it is migrated in memory)."
+        )
+        return
+    migrate_cmd = "airut migrate"
+    if args.config_from_flag:
+        migrate_cmd += f" --config {shlex.quote(str(config_path))}"
+    print(
+        f"               Run {s.cyan(migrate_cmd)} "
+        f"to update, or save from dashboard."
+    )
+
+
+def _print_store_secrets(
+    s: _Style, config_path: Path, snapshot: ConfigSnapshot[ServerConfig]
+) -> None:
+    """Warn about secrets that end up in the Nix store.
+
+    Store files are world-readable, and stay in the store until garbage
+    collected: both secrets written literally into a config in the store
+    and ``!file`` references to files in the store leak.
+    """
+    from airut.config.offline import is_file_in, is_literal, secret_values
+    from airut.version import NIX_STORE
+
+    config_in_store = config_path.resolve().is_relative_to(NIX_STORE)
+    paths = [
+        path
+        for path, value in secret_values(snapshot.raw or {})
+        if (config_in_store and is_literal(value))
+        or is_file_in(value, NIX_STORE)
+    ]
+    if not paths:
+        return
+    print(
+        f"  Secrets:     {s.yellow('!')} in the Nix store, which is "
+        f"world-readable:"
+    )
+    for path in paths:
+        print(f"               {path}")
+    print("               Use !env, or !file outside the store, instead.")
+
+
+def _print_config_section(
+    s: _Style, args: _Args, *, offline: bool
+) -> tuple[bool, ServerConfig | None]:
+    """Print the configuration section.
+
+    Offline, ``!env``/``!file`` references are not read (their values
+    are treated as present), and a missing config file is an error.
+
+    Returns:
+        Whether the config is valid, and the loaded config (None on
+        error).
+    """
+    from airut.config.offline import OfflineConfigSource
+
+    config_path = args.config_path
+    print(s.bold("Configuration" + (" (offline)" if offline else "")))
     print(f"  Config file: {s.dim(str(config_path))}")
 
-    config: ServerConfig | None = None
     if not config_path.exists():
+        if offline:
+            print(f"  Status:      {s.red('not found')}")
+            return False, None
         print(
             f"  Status:      {s.yellow('not found')} — "
             f"default values will be used"
         )
-        config = ServerConfig.default().value
-    else:
-        try:
+        _print_paths(s, config_path)
+        return True, ServerConfig.default().value
+
+    ok = True
+    config: ServerConfig | None = None
+    offline_source = OfflineConfigSource(config_path) if offline else None
+    try:
+        if offline_source:
+            snapshot = ServerConfig.from_source(offline_source)
+        else:
             snapshot = ServerConfig.from_yaml(config_path)
-            config = snapshot.value
-            if config.repos:
-                repo_ids = ", ".join(sorted(config.repos))
-                print(
-                    f"  Status:      {s.green('ok')} — "
-                    f"{len(config.repos)} repo(s) ({repo_ids})"
-                )
-            else:
-                print(f"  Status:      {s.green('ok')} — no repos configured")
-        except (ConfigError, ValueError, Exception) as e:
-            print(f"  Status:      {s.red('error')} — {e}")
-            all_ok = False
-
-    # Config schema version
-    if config_path.exists():
-        try:
-            from airut.config.migration import (
-                CURRENT_CONFIG_VERSION,
-                get_file_config_version,
+        config = snapshot.value
+        if config.repos:
+            repo_ids = ", ".join(sorted(config.repos))
+            detail = f"{len(config.repos)} repo(s) ({repo_ids})"
+        else:
+            detail = "no repos configured"
+        print(f"  Status:      {s.green('ok')} — {detail}")
+        if offline_source:
+            print(
+                f"  References:  {offline_source.references} !env/!file "
+                f"value(s) not read"
             )
+        _print_store_secrets(s, config_path, snapshot)
+    except (ConfigError, ValueError, Exception) as e:
+        print(f"  Status:      {s.red('error')} — {e}")
+        ok = False
 
-            file_version = get_file_config_version(config_path)
-            if file_version == CURRENT_CONFIG_VERSION:
-                print(
-                    f"  Schema:      {s.green('up to date')} (v{file_version})"
-                )
-            else:
-                print(
-                    f"  Schema:      "
-                    f"{s.yellow('migration pending')} "
-                    f"(v{file_version} → v{CURRENT_CONFIG_VERSION})"
-                )
-                from airut.config.source import YamlConfigSource
+    _print_schema_status(s, args)
+    if not offline:
+        _print_paths(s, config_path)
+    return ok, config
 
-                if YamlConfigSource(config_path).read_only_reason():
-                    print(
-                        "               Migrate it where the config is "
-                        "managed (until then it is migrated in memory)."
-                    )
-                else:
-                    migrate_cmd = "airut migrate"
-                    if args.config_from_flag:
-                        quoted = shlex.quote(str(config_path))
-                        migrate_cmd += f" --config {quoted}"
-                    print(
-                        f"               Run {s.cyan(migrate_cmd)} "
-                        f"to update, or save from dashboard."
-                    )
-        except ConfigError:
-            # Schema check is informational; config parse errors are
-            # already reported above.
-            pass
 
+def _print_paths(s: _Style, config_path: Path) -> None:
+    """Print the ``.env`` file (if any) and the state directory."""
     dotenv_path = get_dotenv_path(config_path)
     if dotenv_path.exists():
         print(f"  Env file:    {s.dim(str(dotenv_path))}")
     print(f"  State dir:   {s.dim(str(get_state_dir()))}")
 
-    print()
 
-    # ── System dependencies ─────────────────────────────────────
+def _print_dependency_section(s: _Style) -> bool:
+    """Print system dependency checks; return whether all passed."""
     print(s.bold("Dependencies"))
+    all_ok = True
     for name, version_cmd, min_ver in [
         ("git", ["git", "--version"], _MIN_VERSIONS["git"]),
         ("podman", ["podman", "--version"], _MIN_VERSIONS["podman"]),
@@ -700,8 +750,11 @@ def cmd_check(argv: list[str]) -> int:
             print(f"  {s.red('✗')} {detail}")
             all_ok = False
     print()
+    return all_ok
 
-    # ── Cgroups (informational) ─────────────────────────────────
+
+def _print_cgroup_section(s: _Style) -> None:
+    """Print the (informational) cgroups v2 check."""
     print(s.bold("Cgroups"))
     cgroup_ok, cgroup_detail = _check_cgroups_v2()
     if cgroup_ok:
@@ -710,40 +763,71 @@ def cmd_check(argv: list[str]) -> int:
         print(f"  {s.yellow('!')} {cgroup_detail}")
     print()
 
-    # ── Service status (informational) ──────────────────────────
+
+def _print_service_section(
+    s: _Style, vi: GitVersionInfo, config: ServerConfig | None, *, nix: bool
+) -> None:
+    """Print the (informational) service status."""
     print(s.bold("Service"))
     if nix:
         print(f"  {s.dim('Managed by your Nix configuration.')}")
-    elif _is_service_installed():
-        if _is_service_running():
-            label = s.green("running")
-            if config:
-                url = _dashboard_url(config)
-                label += f"  {s.dim(url)}"
-            print(f"  airut.service: {label}")
-
-            # Check running version against local version
-            if config:
-                local_url = _local_dashboard_url(config)
-                rv = _fetch_running_version(local_url)
-                if rv:
-                    running_sha = rv.get("sha_short", "")
-                    if running_sha and running_sha != vi.sha_short:
-                        rl = rv.get("version") or running_sha
-                        print(
-                            f"  {s.yellow('Version mismatch:')} "
-                            f"running {rl}, "
-                            f"installed {version_label}"
-                        )
-                        print(f"  Run {s.cyan(_RESTART_CMD)} to apply.")
-        else:
-            print(f"  airut.service: {s.yellow('stopped')}")
-    else:
+    elif not _is_service_installed():
         print(f"  airut.service: {s.yellow('not installed')}")
         print(f"  Run {s.cyan('airut install-service')} to install.")
+    elif not _is_service_running():
+        print(f"  airut.service: {s.yellow('stopped')}")
+    else:
+        label = s.green("running")
+        if config:
+            label += f"  {s.dim(_dashboard_url(config))}"
+        print(f"  airut.service: {label}")
+
+        # Check running version against local version
+        if config:
+            rv = _fetch_running_version(_local_dashboard_url(config))
+            if rv:
+                running_sha = rv.get("sha_short", "")
+                if running_sha and running_sha != vi.sha_short:
+                    rl = rv.get("version") or running_sha
+                    print(
+                        f"  {s.yellow('Version mismatch:')} "
+                        f"running {rl}, "
+                        f"installed {vi.version or vi.sha_short}"
+                    )
+                    print(f"  Run {s.cyan(_RESTART_CMD)} to apply.")
     print()
 
-    # ── Summary ─────────────────────────────────────────────────
+
+def cmd_check(argv: list[str]) -> int:
+    """Run readiness checks and print installation status.
+
+    Displays version information, configuration status, system
+    dependencies, and service health.  Dependency and configuration
+    failures affect the exit code; service status is informational only.
+
+    With ``--offline``, only validates the config, without reading
+    ``!env``/``!file`` values or checking the network, dependencies or
+    service — for checking a config where its secrets are not available,
+    e.g. in a Nix build.
+
+    Args:
+        argv: Arguments (``--config PATH``, ``--offline``).
+
+    Returns:
+        0 if all checks pass, 1 if any check fails.
+    """
+    s = _Style(_use_color())
+    args = _parse_args(argv, flags=frozenset({"--offline"}))
+    offline = "--offline" in args.flags
+
+    vi, nix = _print_version_section(s, offline=offline)
+    all_ok, config = _print_config_section(s, args, offline=offline)
+    print()
+    if not offline:
+        all_ok = _print_dependency_section(s) and all_ok
+        _print_cgroup_section(s)
+        _print_service_section(s, vi, config, nix=nix)
+
     if all_ok:
         print(s.green("All checks passed."))
     else:
@@ -1190,12 +1274,15 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         f"{_CONFIG_OPTION_HELP}"
     ),
     "check": (
-        "usage: airut check [--config PATH]\n\n"
+        "usage: airut check [--config PATH] [--offline]\n\n"
         "Verify config, system dependencies, and service status.\n"
         "Shows pending config schema migrations if any.\n"
         "Exit code 0 if all checks pass, 1 otherwise.\n\n"
         "options:\n"
-        f"{_CONFIG_OPTION_HELP}"
+        f"{_CONFIG_OPTION_HELP}\n"
+        "  --offline      Only validate the config, without reading\n"
+        "                 !env/!file values or checking the network,\n"
+        "                 dependencies or service (e.g. in a Nix build)"
     ),
     "migrate": (
         "usage: airut migrate [--config PATH]\n\n"

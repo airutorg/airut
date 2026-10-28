@@ -79,6 +79,10 @@ class FileRef:
     def __hash__(self) -> int:
         return hash(("FileRef", self.path))
 
+    def expanded_path(self) -> Path:
+        """The path with ``~`` and environment variables expanded."""
+        return Path(os.path.expandvars(self.path)).expanduser()
+
     def read(self) -> str | None:
         """Read the referenced file as UTF-8.
 
@@ -97,7 +101,7 @@ class FileRef:
         """
         if not self.path:
             return None
-        path = Path(os.path.expandvars(self.path)).expanduser()
+        path = self.expanded_path()
         if not path.is_absolute():
             raise FileRefError(
                 f"!file {self.path}: path must be absolute after expanding "
@@ -114,10 +118,30 @@ class FileRef:
         raise FileRefError(f"!file {self.path}: not a regular file")
 
 
+class Unresolved:
+    """Stand-in for an ``!env``/``!file`` reference in an offline check.
+
+    Offline (e.g. in a Nix build sandbox) the referenced values are not
+    available; the check validates everything else with these in their
+    place.  Stringifies as ``<!env NAME>`` / ``<!file PATH>``.
+    """
+
+    def __init__(self, ref: EnvVar | FileRef) -> None:
+        self.ref = ref
+
+    def __str__(self) -> str:
+        if isinstance(self.ref, EnvVar):
+            return f"<!env {self.ref.var_name}>"
+        return f"<!file {self.ref.path}>"
+
+    def __repr__(self) -> str:
+        return f"Unresolved({self.ref!r})"
+
+
 #: Type alias for any value produced by YAML parsing with ``!env``/``!var``
 #: support.  PyYAML SafeLoader produces str, int, float, bool, None, list,
 #: dict; the custom tags produce :class:`EnvVar`, :class:`VarRef` and
-#: :class:`FileRef`.
+#: :class:`FileRef`; an offline check substitutes :class:`Unresolved`.
 type YamlValue = (
     str
     | int
@@ -126,6 +150,7 @@ type YamlValue = (
     | EnvVar
     | VarRef
     | FileRef
+    | Unresolved
     | None
     | list[YamlValue]
     | dict[str, YamlValue]
@@ -160,7 +185,8 @@ def raw_resolve(value: YamlValue) -> str | None:
 
     Returns ``None`` if the value is ``None``, the env var is not set,
     or the referenced file does not exist.  Returns empty string if the
-    env var is set to empty string.
+    env var is set to empty string.  An ``Unresolved`` stand-in (offline
+    check) becomes its placeholder text.
 
     Raises:
         FileRefError: If a ``FileRef`` cannot be read.

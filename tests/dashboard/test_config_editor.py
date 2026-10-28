@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 import pytest
 from werkzeug.test import Client
 
+from airut.config.server_schema import repo_schema
 from airut.config.snapshot import ConfigSnapshot
 from airut.config.source import YamlConfigSource
 from airut.dashboard.server import DashboardServer
@@ -1221,9 +1222,9 @@ class TestRepoPageExcludesRepoId:
     def test_repo_schema_excludes_repo_id(
         self, harness: ConfigEditorHarness
     ) -> None:
-        """_get_repo_schema must not include the repo_id field."""
+        """repo_schema must not include the repo_id field."""
         harness.client.get("/config")
-        schema = harness.server._config_handlers._get_repo_schema("test-repo")
+        schema = repo_schema("test-repo")
         names = {s.name for s in schema}
         assert "repo_id" not in names
 

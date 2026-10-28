@@ -13,10 +13,15 @@ throughout the raw config dict.  Called as a pre-processing step before
 from typing import Any
 
 from airut.gateway.config import ConfigError
-from airut.yaml_env import VarRef, raw_resolve
+from airut.yaml_env import Unresolved, VarRef, raw_resolve
 
 
-def resolve_vars_section(raw: dict[str, Any]) -> dict[str, str | None]:
+#: A resolved variable: its value, ``None`` if unset, or (in an offline
+#: check) the ``Unresolved`` stand-in for its reference.
+type VarValue = str | Unresolved | None
+
+
+def resolve_vars_section(raw: dict[str, Any]) -> dict[str, VarValue]:
     """Read ``vars:`` from the raw dict and resolve each value.
 
     Variable values may be literals, ``!env`` or ``!file`` references.  ``!var``
@@ -27,7 +32,8 @@ def resolve_vars_section(raw: dict[str, Any]) -> dict[str, str | None]:
 
     Returns:
         Resolved vars table ``{name: resolved_value}``.  Missing env vars
-        produce ``None``.
+        produce ``None``.  ``Unresolved`` stand-ins are kept as they
+        are, so fields referencing the variable see the stand-in.
 
     Raises:
         ConfigError: If a var value is a ``VarRef`` (var-to-var).
@@ -39,7 +45,7 @@ def resolve_vars_section(raw: dict[str, Any]) -> dict[str, str | None]:
     if not isinstance(vars_section, dict):
         raise ConfigError("'vars' must be a YAML mapping")
 
-    table: dict[str, str | None] = {}
+    table: dict[str, VarValue] = {}
     for name, value in vars_section.items():
         name = str(name)
         if isinstance(value, VarRef):
@@ -52,14 +58,16 @@ def resolve_vars_section(raw: dict[str, Any]) -> dict[str, str | None]:
                 f"vars.{name}: variable values must be scalars, "
                 f"not {type(value).__name__}"
             )
-        table[name] = raw_resolve(value)
+        table[name] = (
+            value if isinstance(value, Unresolved) else raw_resolve(value)
+        )
 
     return table
 
 
 def resolve_var_refs(
     raw: dict[str, Any],
-    table: dict[str, str | None],
+    table: dict[str, VarValue],
 ) -> dict[str, Any]:
     """Walk *raw* and replace every ``VarRef`` with its resolved value.
 
@@ -83,8 +91,8 @@ def resolve_var_refs(
 
 def _resolve_ref(
     ref: VarRef,
-    table: dict[str, str | None],
-) -> str | None:
+    table: dict[str, VarValue],
+) -> VarValue:
     """Look up a single ``VarRef`` in the vars table."""
     if ref.var_name not in table:
         raise ConfigError(
@@ -95,7 +103,7 @@ def _resolve_ref(
 
 def _walk(
     obj: Any,  # noqa: ANN401 — recursive tree walker needs Any
-    table: dict[str, str | None],
+    table: dict[str, VarValue],
 ) -> None:
     """Recursively resolve ``VarRef`` in a nested structure (in place)."""
     if isinstance(obj, dict):
