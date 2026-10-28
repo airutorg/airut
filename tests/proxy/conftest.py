@@ -165,6 +165,7 @@ def _install_mitmproxy_mock() -> None:
         ) -> None:
             self.status_code = status_code
             self.content = content
+            self.stream = False
 
         @staticmethod
         def make(

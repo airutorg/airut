@@ -61,6 +61,24 @@ single fnmatch-matching segment to reach upstream as a traversal sequence), and
 rejects path traversal sequences (`/../`, trailing `/..`) that upstream servers
 would normalize, potentially bypassing prefix-based allowlist rules.
 
+**Responses are streamed.** The proxy never inspects response bodies, so every
+response is streamed to the client as it arrives instead of being held in full
+in proxy memory first. This matters for large downloads such as Nix store paths
+or ML wheels. For HTTP/1.1 clients TCP backpressure bounds what the proxy holds;
+mitmproxy applies no upstream backpressure for HTTP/2 clients, so one that reads
+slower than upstream sends can still make data queue in the proxy. Streaming
+also delivers server-sent events (including Claude's API responses)
+incrementally rather than when the response completes, and an upstream failure
+after the headers were sent truncates the response instead of producing a 502.
+
+**Requests are buffered** (except AWS chunked uploads, which are re-signed chunk
+by chunk): the request-body filters, the GitHub App GraphQL repo-scope check and
+deferred AWS payload hashing need the whole body before anything is forwarded.
+Streaming is therefore enabled per response in the `responseheaders` hook, not
+with mitmproxy's `stream_large_bodies` option, which would also stream large
+request bodies upstream before they are inspected. A failed AWS re-signed
+response under `DEBUG_SIGNING` stays buffered so its body can be logged.
+
 Note: Non-existent domains will appear to resolve from within the container.
 This is by design — the DNS responder intentionally avoids upstream DNS
 resolution to prevent DNS exfiltration (encoding stolen data in queries to

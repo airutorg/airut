@@ -1304,6 +1304,67 @@ class TestRequestBodyFilterPathDecoding:
 
 
 # ---------------------------------------------------------------------------
+# ProxyFilter.responseheaders — response streaming
+# ---------------------------------------------------------------------------
+
+
+class TestProxyFilterResponseHeaders:
+    """Tests for ProxyFilter.responseheaders() hook."""
+
+    def test_streams_response(self) -> None:
+        """Response bodies are streamed rather than buffered."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        pf.responseheaders(flow)
+        assert flow.response is not None
+        assert flow.response.stream is True
+
+    def test_streams_error_response(self) -> None:
+        """Error responses are streamed too."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=500)
+        pf.responseheaders(flow)
+        assert flow.response is not None
+        assert flow.response.stream is True
+
+    def test_no_response(self) -> None:
+        """A flow without a response is left alone."""
+        pf = ProxyFilter()
+        flow = _flow()
+        pf.responseheaders(flow)
+        assert flow.response is None
+
+    def test_aws_resigned_success_streamed_with_debug(self) -> None:
+        """DEBUG_SIGNING only buffers failed re-signed responses."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        flow.metadata["aws_resigned"] = True
+        with patch("airut._bundled.proxy.proxy_filter.DEBUG_SIGNING", True):
+            pf.responseheaders(flow)
+        assert flow.response is not None
+        assert flow.response.stream is True
+
+    def test_aws_resigned_error_streamed_without_debug(self) -> None:
+        """Failed re-signed responses stream when DEBUG_SIGNING is off."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=403)
+        flow.metadata["aws_resigned"] = True
+        pf.responseheaders(flow)
+        assert flow.response is not None
+        assert flow.response.stream is True
+
+    @patch("airut._bundled.proxy.proxy_filter.DEBUG_SIGNING", True)
+    def test_aws_error_body_buffered_for_debug_logging(self) -> None:
+        """Bodies that response() logs under DEBUG_SIGNING stay buffered."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=403)
+        flow.metadata["aws_resigned"] = True
+        pf.responseheaders(flow)
+        assert flow.response is not None
+        assert flow.response.stream is False
+
+
+# ---------------------------------------------------------------------------
 # ProxyFilter.response — logging
 # ---------------------------------------------------------------------------
 

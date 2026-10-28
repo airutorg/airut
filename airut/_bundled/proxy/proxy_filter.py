@@ -1662,6 +1662,37 @@ class ProxyFilter:
             flow.metadata.pop("chunked_resigner", None)
             return data
 
+    @staticmethod
+    def _logs_error_body(flow: http.HTTPFlow) -> bool:
+        """Whether ``response()`` logs this flow's response body.
+
+        Only failed AWS re-signed requests under ``DEBUG_SIGNING`` --
+        the body reveals the specific AWS error type.
+        """
+        return (
+            DEBUG_SIGNING
+            and bool(flow.metadata.get("aws_resigned"))
+            and flow.response is not None
+            and flow.response.status_code >= 400
+        )
+
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        """Stream response bodies to the client instead of buffering.
+
+        mitmproxy buffers each response in full before forwarding it
+        unless told to stream.  The proxy never inspects response
+        bodies, so buffering only costs memory (large for package
+        downloads such as Nix store paths) and delays server-sent
+        events until the response completes.
+
+        Streaming is set per response rather than with mitmproxy's
+        ``stream_large_bodies`` option, which also streams large
+        request bodies past the request-body filters.
+        """
+        if flow.response is None or self._logs_error_body(flow):
+            return
+        flow.response.stream = True
+
     def response(self, flow: http.HTTPFlow) -> None:
         """Emit one access-decision log line per request.
 
@@ -1726,12 +1757,8 @@ class ProxyFilter:
         # Log response body for failed AWS re-signed requests when
         # DEBUG_SIGNING is enabled.  Reveals the specific AWS error
         # type (SignatureDoesNotMatch, AccessDeniedException, etc.).
-        if (
-            DEBUG_SIGNING
-            and flow.metadata.get("aws_resigned")
-            and flow.response is not None
-            and flow.response.status_code >= 400
-        ):
+        if self._logs_error_body(flow):
+            assert flow.response is not None
             body = getattr(flow.response, "content", None)
             if body:
                 try:
