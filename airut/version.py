@@ -41,6 +41,10 @@ PACKAGE_NAME = "airut"
 GITHUB_OWNER = "airutorg"
 GITHUB_REPO = "airut"
 
+#: The Nix store.  An installation there is managed by a Nix
+#: configuration, which also provides updates and the service.
+NIX_STORE = Path("/nix/store")
+
 
 @dataclass
 class GitVersionInfo:
@@ -67,7 +71,7 @@ class InstallSource:
 
     Attributes:
         kind: One of ``"pypi"``, ``"vcs"``, ``"editable"``, ``"local-dir"``,
-            ``"archive"``, or ``"unknown"``.
+            ``"archive"``, ``"nix"``, or ``"unknown"``.
         url: Remote URL for VCS or archive installs, local path for
             editable/local-dir installs.  None for PyPI installs.
         vcs_commit: Resolved commit hash for VCS installs.
@@ -83,12 +87,17 @@ class InstallSource:
 def get_install_source() -> InstallSource:
     """Determine how the package was installed.
 
-    Uses PEP 610 ``direct_url.json`` metadata from the distribution info.
-    Absence of ``direct_url.json`` indicates a standard index install (PyPI).
+    A package in the Nix store is a ``"nix"`` install, whatever its
+    metadata says.  Otherwise uses PEP 610 ``direct_url.json`` metadata
+    from the distribution info.  Absence of ``direct_url.json`` indicates
+    a standard index install (PyPI).
 
     Returns:
         InstallSource describing the installation origin.
     """
+    if Path(__file__).resolve().is_relative_to(NIX_STORE):
+        return InstallSource(kind="nix")
+
     try:
         dist = distribution(PACKAGE_NAME)
     except PackageNotFoundError:
@@ -157,8 +166,9 @@ def check_upstream_version(
     For VCS (GitHub) installs, queries the GitHub API for the latest
     commit on the requested branch.
 
-    For editable, local-dir, and unknown installs, returns None since
-    there is no meaningful upstream to check.
+    For editable, local-dir, Nix and unknown installs, returns None
+    since there is no meaningful upstream to check (a Nix install is
+    updated through its Nix configuration).
 
     Args:
         version_info: Current version info from ``get_git_version_info()``.
@@ -180,7 +190,7 @@ def check_upstream_version(
             timeout=timeout,
         )
 
-    # Editable / local-dir / archive / unknown — nothing to check.
+    # Editable / local-dir / archive / nix / unknown — nothing to check.
     return None
 
 

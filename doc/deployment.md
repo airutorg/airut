@@ -648,6 +648,10 @@ service, applying the upgrade, and restarting the service automatically:
 airut update
 ```
 
+With a Nix install, your Nix configuration provides updates and the service:
+`airut update`, `airut install-service` and `airut uninstall-service` refuse to
+run (exit 1).
+
 If already up to date, the command exits without touching the service. When an
 upgrade is applied and the systemd service is installed, `airut update` will:
 

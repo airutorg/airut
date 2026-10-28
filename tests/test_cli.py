@@ -6,6 +6,7 @@
 """Tests for airut/cli.py — multi-command CLI."""
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -41,7 +42,7 @@ from airut.cli import (
     cmd_uninstall_service,
     cmd_update,
 )
-from airut.version import UpstreamVersion
+from airut.version import InstallSource, UpstreamVersion
 
 
 # ── _parse_version ──────────────────────────────────────────────────
@@ -2544,6 +2545,87 @@ class TestCli:
 
         for cmd in _DISPATCH:
             assert cmd in _SUBCOMMAND_HELP, f"Missing help for '{cmd}'"
+
+
+# ── Nix installs ─────────────────────────────────────────────────
+
+
+class TestNixInstall:
+    """A Nix configuration provides updates and the service."""
+
+    def test_update_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch(
+                "airut.version.get_install_source",
+                return_value=InstallSource(kind="nix"),
+            ),
+            patch("airut.cli.subprocess.run") as mock_run,
+            patch("airut.cli._use_color", return_value=False),
+        ):
+            assert cmd_update(["--force"]) == 1
+        mock_run.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Cannot update: Airut is installed in the Nix store." in out
+        assert "Nix configuration" in out
+
+    @pytest.mark.parametrize(
+        ("command", "target"),
+        [
+            (cmd_install_service, "install_services"),
+            (cmd_uninstall_service, "uninstall_services"),
+        ],
+    )
+    def test_service_management_refused(
+        self,
+        command: Callable[[list[str]], int],
+        target: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The systemd user unit is not installed or removed."""
+        with (
+            patch(
+                "airut.version.get_install_source",
+                return_value=InstallSource(kind="nix"),
+            ),
+            patch(f"airut.install_services.{target}") as mock_target,
+        ):
+            assert command([]) == 1
+        mock_target.assert_not_called()
+        assert "the service comes from your Nix configuration" in caplog.text
+
+    def test_uninstall_mentions_leftover_unit(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A unit left from a uv install can still be removed by hand."""
+        with (
+            patch(
+                "airut.version.get_install_source",
+                return_value=InstallSource(kind="nix"),
+            ),
+            patch("airut.install_services.uninstall_services"),
+        ):
+            cmd_uninstall_service([])
+        assert "systemctl --user disable --now airut.service" in caplog.text
+
+    def test_check_skips_service_probe(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Check reports the Nix install instead of the user unit."""
+        _path, ctx = _check_patches(tmp_path, service_installed=False)
+        with (
+            ctx,
+            patch(
+                "airut.version.get_install_source",
+                return_value=InstallSource(kind="nix"),
+            ),
+            patch("airut.cli._is_service_installed") as mock_installed,
+        ):
+            assert cmd_check([]) == 0
+        mock_installed.assert_not_called()
+        out = capsys.readouterr().out
+        assert "update it through your Nix configuration" in out
+        assert "Managed by your Nix configuration." in out
+        assert "install-service" not in out
 
 
 # ── cmd_install_service ────────────────────────────────────────────

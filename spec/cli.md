@@ -30,6 +30,22 @@ Unknown commands exit with code 2.
 Per-subcommand help is available via `airut <command> --help`, which prints
 usage and options without executing the command.
 
+### Nix Installs
+
+When the `airut` package itself lives in the Nix store (`/nix/store`), a Nix
+configuration provides both the updates and the service, so:
+
+- `update`, `install-service` and `uninstall-service` refuse (exit 1) and point
+  at the Nix configuration;
+- `check` reports that and skips the user-service probe and the upstream update
+  check (so does the dashboard's version check).
+
+Detection uses the package's own location (resolving symlinks), as a Nix-built
+package has no PEP 610 `direct_url.json` and would otherwise look like a PyPI
+install. The interpreter's location does not count: a uv tool install running on
+a Nix-provided Python is not a Nix install. `uninstall-service` mentions how to
+remove a unit left over from an earlier uv install.
+
 ### Config File Selection
 
 Every subcommand that uses the server config (`init`, `check`, `migrate`,
@@ -95,9 +111,9 @@ all critical checks pass, 1 otherwise.
 
 **Version checking** uses `check_upstream_version()` from `airut/version.py`.
 For PyPI installs, it queries the PyPI JSON API. For VCS (GitHub) installs, it
-queries the GitHub API for the latest commit. Editable and local-dir installs
-skip the check. See `airut/version.py` for the `InstallSource` detection via PEP
-610 `direct_url.json`.
+queries the GitHub API for the latest commit. Editable, local-dir and
+[Nix](#nix-installs) installs skip the check. See `airut/version.py` for the
+`InstallSource` detection via PEP 610 `direct_url.json`.
 
 **Dependency checking** uses `shutil.which()` to locate binaries and runs their
 version commands with a 10-second timeout. Version strings are parsed tolerantly
@@ -116,7 +132,8 @@ version commands with a 10-second timeout. Version strings are parsed tolerantly
   hint to run `airut migrate` or save from the dashboard
 - Skipped when no config file exists or the file is unparseable
 
-**Service status** is informational only:
+**Service status** is informational only (and skipped for
+[Nix installs](#nix-installs)):
 
 - Checks if `~/.config/systemd/user/airut.service` exists
 - Queries `systemctl --user is-active airut.service`
