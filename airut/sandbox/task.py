@@ -344,18 +344,19 @@ class AgentTask:
         task_proxy: _ContextProxy | None,
     ) -> ExecutionResult:
         """Run the container with the given configuration."""
-        # Build claude command
-        claude_cmd = [CLAUDE_BINARY_CONTAINER_PATH]
+        # Options only: the agent entrypoint supplies the binary and the
+        # prompt goes on stdin.  Claude prepends any positional argument
+        # (e.g. the binary path, or "-") to the prompt.
+        claude_args: list[str] = []
         if session_id:
-            claude_cmd.extend(["--resume", session_id])
+            claude_args.extend(["--resume", session_id])
             logger.info("Resuming Claude session: %s", session_id)
-        claude_cmd.extend(["--model", model])
+        claude_args.extend(["--model", model])
         if effort is not None:
-            claude_cmd.extend(["--effort", effort])
-        claude_cmd.extend(
+            claude_args.extend(["--effort", effort])
+        claude_args.extend(
             [
                 "-p",
-                "-",  # Read prompt from stdin
                 "--dangerously-skip-permissions",
                 "--output-format",
                 "stream-json",
@@ -436,7 +437,7 @@ class AgentTask:
                 env=claude_env,
                 resource_limits=self._resource_limits,
                 network_args=network_args,
-                command=claude_cmd,
+                command=claude_args,
                 stdin_data=prompt,
                 on_stdout_line=on_stdout_cb,
                 on_stderr_line=on_stderr_cb,

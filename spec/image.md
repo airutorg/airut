@@ -338,7 +338,10 @@ every task the full retry budget. With no previous resolution to fall back on
 
 All Claude Code CLI flags (`--dangerously-skip-permissions`, `--model`,
 `--resume`, `--output-format`, etc.) are passed through as arguments by the
-executor -- the entrypoint does not add any flags.
+executor -- the entrypoint does not add any flags. The container command holds
+only Claude's options, with no positional arguments: the entrypoint supplies the
+binary and the prompt is sent on stdin (Claude would prepend any positional
+argument to it).
 
 ### Passthrough Entrypoint
 
