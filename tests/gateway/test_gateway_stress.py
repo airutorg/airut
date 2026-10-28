@@ -15,10 +15,10 @@ Tests cover:
 - Adversarial/malformed inputs
 """
 
-import concurrent.futures
 import os
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -38,6 +38,7 @@ from airut.gateway.config import RepoServerConfig
 
 from .service.conftest import (
     InterruptEvent,
+    expire_shutdown_wait,
     make_message,
     make_service,
     update_global,
@@ -662,8 +663,10 @@ class TestShutdownEdgeCases:
         """Stop with executor but no pending futures."""
         svc, _ = make_service(email_config, tmp_path)
         svc._executor_pool = MagicMock()
-        svc.stop()
-        # Should not call concurrent.futures.wait since no futures
+        with patch("concurrent.futures.wait") as mock_wait:
+            svc.stop()
+        mock_wait.assert_not_called()
+        svc._executor_pool.shutdown.assert_called_once()
 
     def test_stop_cancels_timed_out_futures(
         self, email_config, tmp_path: Path
@@ -673,18 +676,15 @@ class TestShutdownEdgeCases:
         svc._executor_pool = MagicMock()
         update_global(svc, shutdown_timeout_seconds=1)
 
-        f1 = MagicMock(spec=concurrent.futures.Future)
-        f2 = MagicMock(spec=concurrent.futures.Future)
+        f1: Future[None] = Future()
+        f1.set_result(None)
+        f2: Future[None] = Future()
         svc._pending_futures = {f1, f2}
 
-        with patch(
-            "concurrent.futures.wait",
-            return_value=({f1}, {f2}),
-        ):
+        with expire_shutdown_wait():
             svc.stop()
 
-        f2.cancel.assert_called_once()
-        f1.cancel.assert_not_called()
+        assert f2.cancelled()
 
     def test_stop_shuts_down_sandbox(
         self, email_config, tmp_path: Path

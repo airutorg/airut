@@ -750,11 +750,18 @@ thread pool.
 ### Thread Pool Architecture
 
 - **Worker pool**: `ThreadPoolExecutor` with configurable size
-  (`MAX_CONCURRENT_EXECUTIONS`, default: 3)
+  (`execution.max_concurrent`, default: 3)
 - **Message flow**: Channel listeners run in internal threads; messages are
   submitted to the worker pool for parallel execution
-- **Graceful shutdown**: Waits for pending executions with configurable timeout
-  (`SHUTDOWN_TIMEOUT_SECONDS`, default: 60)
+- **Graceful shutdown**: Stops listeners, then waits for pending executions
+  against a single deadline (`execution.shutdown_timeout`, default: 60 s),
+  including follow-up messages drained into the pool during the wait. The
+  sandbox is torn down only after the wait, so running tasks keep their network
+  during the grace period; sandboxed tasks still running at the deadline are
+  terminated by that teardown. The grace period covers signals sent to the
+  gateway process alone (as with the systemd unit's `KillMode=mixed`); Ctrl-C in
+  a terminal signals the whole process group, including the `podman run`
+  clients, which forward it to the task containers.
 
 ### Concurrency Safety
 

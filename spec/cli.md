@@ -212,6 +212,8 @@ After=network.target
 ExecStart={airut_path} run-gateway --resilient
 Restart=always
 RestartSec=10
+KillMode=mixed
+TimeoutStopSec=300
 StandardOutput=journal
 StandardError=journal
 
@@ -222,6 +224,15 @@ WantedBy=default.target
 The service runs `airut run-gateway --resilient`, which delegates to
 `airut.gateway.service:main()`. `Restart=always` with 10-second backoff ensures
 the gateway recovers from transient failures.
+
+`KillMode=mixed` sends the stop signal to the gateway alone. With the default
+(`control-group`), systemd also signals the `podman run` clients, which forward
+it to the task containers and end running tasks before the gateway can drain
+them (see
+[Graceful shutdown](gateway-architecture.md#thread-pool-architecture)).
+`TimeoutStopSec=300` leaves room for the drain (`execution.shutdown_timeout`,
+default 60 s) plus listener and sandbox teardown; a shutdown timeout near or
+above it lets systemd kill the gateway mid-drain, skipping the teardown.
 
 **Implementation:** `airut/install_services.py` contains the service management
 logic. The CLI command (`cmd_install_service`) sets up logging and delegates to
@@ -348,7 +359,8 @@ cycle, which would briefly interrupt email processing for no benefit.
 
 ### Why Block on In-Flight Tasks?
 
-Stopping the gateway while tasks are running would kill active Claude Code
-containers, potentially losing work in progress. The pre-flight check queries
-the dashboard health endpoint for task counts and blocks unless the operator
-explicitly opts in with `--force` or `--wait`.
+Stopping the gateway gives running tasks only `execution.shutdown_timeout`
+(default 60 s) to finish before their Claude Code containers are killed,
+potentially losing work in progress. The pre-flight check queries the dashboard
+health endpoint for task counts and blocks unless the operator explicitly opts
+in with `--force` or `--wait`.

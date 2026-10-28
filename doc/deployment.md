@@ -333,7 +333,7 @@ is no "flat" single-repo configuration.
 ```yaml
 execution:
   max_concurrent: 3          # Parallel task limit
-  shutdown_timeout: 60       # Graceful shutdown wait
+  shutdown_timeout: 60       # Graceful shutdown wait (< unit TimeoutStopSec=300)
   conversation_max_age_days: 7
 
 dashboard:

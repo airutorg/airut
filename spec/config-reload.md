@@ -110,7 +110,10 @@ double-reload.
 
 Reload logic lives in `GatewayService._on_config_changed()`. It is the sole
 entry point for all reloads (inotify and SIGHUP). Concurrent calls are dropped
-(only one reload runs at a time).
+(only one reload runs at a time). Once shutdown begins, no reload is applied:
+neither a new one nor a deferred repo or server reload picked up by a task
+finishing during the shutdown drain, which would otherwise restart components
+that shutdown already stopped.
 
 #### Reload Flow
 
