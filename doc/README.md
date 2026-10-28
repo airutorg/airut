@@ -57,6 +57,7 @@ Named "Airut" (Finnish: herald/messenger).
 - [Deployment](deployment.md) — Installation, configuration, and service
   management
 - [Repo onboarding](repo-onboarding.md) — Onboarding new repositories
+- [Nix-based images](nix-images.md) — Building the repo image from a Nix flake
 - [Gerrit onboarding](gerrit-onboarding.md) — Gerrit-specific onboarding
 - [Agentic operation](agentic-operation.md) — Message-to-PR workflow patterns
   and best practices

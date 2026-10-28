@@ -23,6 +23,7 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/slack-setup.md` — Slack channel setup (Socket Mode, authorization rules)
 - `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for email (IMAP/SMTP)
 - `doc/repo-onboarding.md` — onboarding new repositories
+- `doc/nix-images.md` — building the repo container image from a Nix flake
 - `doc/gerrit-onboarding.md` — Gerrit-specific onboarding
 - `doc/agentic-operation.md` — message-to-PR workflow patterns
 - `doc/periodic-tasks.md` — cron-triggered scheduled tasks with email delivery

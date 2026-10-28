@@ -236,7 +236,8 @@ airut_status=$?
 echo "airut: cannot execute $airut_claude (status $airut_status)" >&2
 if [ "$airut_status" -eq 127 ] && [ -e "$airut_claude" ]; then
     echo "airut: the binary exists, so the image most likely lacks the" \\
-        "dynamic loader it needs at its standard path, e.g." \\
+        "dynamic loader it needs at its standard path (or has a dangling" \\
+        "symlink there), e.g." \\
         "/lib64/ld-linux-x86-64.so.2 (glibc, x86_64)," \\
         "/lib/ld-linux-aarch64.so.1 (glibc, arm64) or" \\
         "/lib/ld-musl-<arch>.so.1 (musl hosts)" >&2

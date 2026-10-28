@@ -407,6 +407,13 @@ A malicious Dockerfile cannot `COPY /etc/passwd` or use `../` traversal to
 escape the build context. The server operator controls what credentials are
 available — repos only define the container image and network allowlist.
 
+The build itself runs with the server's network, outside the network sandbox,
+and executes whatever the Dockerfile runs. Its dependencies are trusted like any
+build dependency of the repository. This includes package managers that run code
+from their inputs: a Nix-based image evaluates the repository's flake inputs
+while building, and tasks that run Nix in the container do so with Nix's own
+build sandbox disabled (see [nix-images.md](nix-images.md#trust)).
+
 ## Fail-Secure Defaults
 
 **Email:**

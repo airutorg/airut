@@ -121,14 +121,18 @@ class FakeContainer:
         )
 
 
-def write_binary_without_loader(dest: Path) -> None:
+def write_binary_without_loader(
+    dest: Path, interpreter: bytes = b"/nonexistent/ld.so"
+) -> None:
     """Write a dynamically linked executable whose loader is missing.
 
     Copies the host's bash (dynamically linked on every mainstream
-    distribution) and points its ELF interpreter (PT_INTERP) at a path
-    that does not exist -- what the Claude binary looks like in an image
-    without the glibc loader.  Executing it fails with ENOENT although
-    the file exists, on every bash version.
+    distribution) and points its ELF interpreter (PT_INTERP) at
+    *interpreter*, which must not resolve to a file -- what the Claude
+    binary looks like in an image without the glibc loader.  Executing
+    it fails with ENOENT although the file exists, on every bash
+    version.  A relative *interpreter* is resolved by the kernel from
+    the working directory.
     """
     assert BASH is not None
     data = bytearray(Path(BASH).resolve().read_bytes())
@@ -149,9 +153,8 @@ def write_binary_without_loader(dest: Path) -> None:
             continue
         offset = struct.unpack_from(field_fmt, data, header + offset_field)[0]
         size = struct.unpack_from(field_fmt, data, header + size_field)[0]
-        interp = b"/nonexistent/ld.so"
-        assert len(interp) < size, "interpreter path too short to patch"
-        data[offset : offset + size] = interp.ljust(size, b"\0")
+        assert len(interpreter) < size, "interpreter path too long to patch"
+        data[offset : offset + size] = interpreter.ljust(size, b"\0")
         dest.write_bytes(bytes(data))
         dest.chmod(0o755)
         return
