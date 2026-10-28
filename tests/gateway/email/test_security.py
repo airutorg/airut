@@ -265,10 +265,12 @@ class TestAuthservIdMismatchLogging:
 
     def test_logs_header_on_mismatch(self, caplog: pytest.LogCaptureFixture):
         """Warning includes actual header so misconfigurations are obvious."""
-        auth = SenderAuthenticator(TRUSTED)
         header = "wrong.server.com; dmarc=pass; spf=pass"
         msg = _msg(auth_results=header)
-        with caplog.at_level(logging.WARNING, logger="airut.gateway.security"):
+        with caplog.at_level(
+            logging.WARNING, logger="airut.gateway.email.security"
+        ):
+            auth = SenderAuthenticator(TRUSTED)
             auth.authenticate(msg)
         assert len(caplog.records) == 1
         record = caplog.records[0]

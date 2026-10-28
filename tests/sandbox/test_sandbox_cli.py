@@ -186,95 +186,68 @@ class TestParseArgs:
 
 
 class TestSetupLogging:
-    """Tests for logging configuration."""
+    """Tests for logging configuration.
 
-    def _cleanup_root_logger(self) -> None:
-        """Remove handlers added by _setup_logging from root logger."""
-        root = logging.getLogger()
-        for h in root.handlers[:]:
-            root.removeHandler(h)
-            h.close()
+    The root logger changes these tests make are undone by the root
+    conftest's ``_restore_root_logger`` fixture.
+    """
 
     def test_default_level(self) -> None:
         """Default level is ERROR (quiet by default)."""
         _setup_logging()
-        try:
-            root = logging.getLogger()
-            assert root.level == logging.ERROR
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        assert root.level == logging.ERROR
 
     def test_verbose_level(self) -> None:
         """Verbose enables INFO level."""
         _setup_logging(verbose=True)
-        try:
-            root = logging.getLogger()
-            assert root.level == logging.INFO
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        assert root.level == logging.INFO
 
     def test_debug_level(self) -> None:
         """Debug enables DEBUG level."""
         _setup_logging(debug=True)
-        try:
-            root = logging.getLogger()
-            assert root.level == logging.DEBUG
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        assert root.level == logging.DEBUG
 
     def test_debug_overrides_verbose(self) -> None:
         """Debug takes precedence over verbose."""
         _setup_logging(verbose=True, debug=True)
-        try:
-            root = logging.getLogger()
-            assert root.level == logging.DEBUG
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        assert root.level == logging.DEBUG
 
     def test_stream_is_stderr(self) -> None:
         """Default output goes to stderr via StreamHandler."""
         _setup_logging()
-        try:
-            root = logging.getLogger()
-            handler = root.handlers[-1]
-            assert isinstance(handler, logging.StreamHandler)
-            assert handler.stream is sys.stderr
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        handler = root.handlers[-1]
+        assert isinstance(handler, logging.StreamHandler)
+        assert handler.stream is sys.stderr
 
     def test_log_file(self, tmp_path: Path) -> None:
         """--log PATH writes to a file via FileHandler."""
         log_path = tmp_path / "sandbox.log"
         _setup_logging(log_file=log_path)
-        try:
-            root = logging.getLogger()
-            handler = root.handlers[-1]
-            assert isinstance(handler, logging.FileHandler)
-            assert Path(handler.baseFilename) == log_path.resolve()
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        handler = root.handlers[-1]
+        assert isinstance(handler, logging.FileHandler)
+        assert Path(handler.baseFilename) == log_path.resolve()
 
     def test_log_file_creates_parents(self, tmp_path: Path) -> None:
         """--log PATH creates parent directories."""
         log_path = tmp_path / "deep" / "nested" / "sandbox.log"
         _setup_logging(log_file=log_path)
-        try:
-            assert log_path.parent.exists()
-        finally:
-            self._cleanup_root_logger()
+        assert log_path.parent.exists()
 
     def test_log_file_appends(self, tmp_path: Path) -> None:
         """--log PATH appends to existing file."""
         log_path = tmp_path / "sandbox.log"
         log_path.write_text("existing content\n")
         _setup_logging(log_file=log_path)
-        try:
-            root = logging.getLogger()
-            handler = root.handlers[-1]
-            assert isinstance(handler, logging.FileHandler)
-            assert handler.mode == "a"
-        finally:
-            self._cleanup_root_logger()
+        root = logging.getLogger()
+        handler = root.handlers[-1]
+        assert isinstance(handler, logging.FileHandler)
+        assert handler.mode == "a"
 
 
 # -------------------------------------------------------------------

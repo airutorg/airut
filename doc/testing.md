@@ -18,6 +18,9 @@ Key properties:
   tests that need sockets must opt in explicitly
 - **Parallel execution** — `pytest-xdist` runs tests across all available cores
 - **Warnings as errors** — all Python warnings are treated as test failures
+- **No leaked logging state** — an autouse fixture restores the root logger's
+  level and handlers after every test, so tests that configure logging (e.g. the
+  CLI's) cannot change what later `caplog` tests capture
 
 ## Integration Tests
 

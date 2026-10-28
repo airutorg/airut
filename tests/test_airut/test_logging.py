@@ -141,10 +141,11 @@ class TestConfigureLogging:
     """Tests for configure_logging function."""
 
     def teardown_method(self) -> None:
-        """Reset logging after each test."""
-        root = logging.getLogger()
-        root.handlers.clear()
-        root.setLevel(logging.WARNING)
+        """Reset registered secrets after each test.
+
+        Root logger changes are undone by the root conftest's
+        ``_restore_root_logger`` fixture.
+        """
         SecretFilter.clear_secrets()
 
     def test_sets_log_level(self) -> None:
