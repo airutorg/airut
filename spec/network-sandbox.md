@@ -117,13 +117,28 @@ The proxy is managed by `ProxyManager` in `airut/sandbox/_proxy.py`:
 mitmproxy intercepts HTTPS by terminating TLS with its own CA. All tools in the
 container must trust this CA:
 
-| Tool/Library          | Trust mechanism                        |
-| --------------------- | -------------------------------------- |
-| Node.js (Claude CLI)  | `NODE_EXTRA_CA_CERTS` env var          |
-| Python requests       | `REQUESTS_CA_BUNDLE` env var           |
-| Python ssl module     | `SSL_CERT_FILE` env var                |
-| curl                  | `CURL_CA_BUNDLE` env var               |
-| git, uv, system tools | `update-ca-certificates` in entrypoint |
+| Tool/Library                   | Trust mechanism               |
+| ------------------------------ | ----------------------------- |
+| Node.js (Claude CLI)           | `NODE_EXTRA_CA_CERTS` env var |
+| Python requests                | `REQUESTS_CA_BUNDLE` env var  |
+| OpenSSL, Python ssl, Go, uv    | `SSL_CERT_FILE` env var       |
+| curl                           | `CURL_CA_BUNDLE` env var      |
+| Nix, Nix-built OpenSSL         | `NIX_SSL_CERT_FILE` env var   |
+| git                            | `GIT_SSL_CAINFO` env var      |
+| Tools reading the system store | System CA bundle (see below)  |
+
+All env vars point at the proxy CA alone. Every HTTPS connection from the
+container goes through the proxy, so that is the correct trust root for all of
+them, and it overrides any value the image sets (Nix images set
+`NIX_SSL_CERT_FILE` and `GIT_SSL_CAINFO` to their own bundle).
+
+The entrypoint also adds the proxy CA to the system store. On images with
+`update-ca-certificates` (Debian, Ubuntu, Alpine) it runs that tool. Otherwise
+(e.g. Nix-based images) it appends the CA to
+`/etc/ssl/certs/ca-certificates.crt` itself, replacing the file rather than
+writing through it when the bundle file is a symlink into a read-only store.
+Failure in either path is not fatal and never affects the sandboxed command's
+stdin or stdout.
 
 ## Session Network Logging
 

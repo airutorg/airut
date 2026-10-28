@@ -215,12 +215,11 @@ enables INFO-level messages (sandbox startup, image build progress, shutdown).
 details) and implies `--verbose`. When `--log` is specified, the chosen level
 applies to the log file; stderr receives no log output.
 
-**Entrypoint output**: The container entrypoint is silent by default -- the
-`update-ca-certificates` step redirects all output to `/dev/null`. When
-`--verbose` or `--debug` is used, the entrypoint outputs CA certificate setup
-details to stderr. This is controlled via the `AIRUT_VERBOSE` environment
-variable, which the CLI injects into the container when `--verbose` or `--debug`
-is specified.
+**Entrypoint output**: The container entrypoint is silent by default -- its
+setup steps (CA certificate trust) redirect all output to `/dev/null`. When
+`--verbose` or `--debug` is used, the entrypoint outputs setup details to
+stderr. This is controlled via the `AIRUT_VERBOSE` environment variable, which
+the CLI injects into the container when `--verbose` or `--debug` is specified.
 
 ## Configuration
 

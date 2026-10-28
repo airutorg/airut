@@ -198,8 +198,15 @@ Used by `AgentTask`. Performs setup then runs the bind-mounted Claude Code
 binary:
 
 1. Sets `IS_SANDBOX=1` so Claude Code runs in permissive mode
-2. Trusts the mitmproxy CA certificate (for network sandbox)
+2. Trusts the mitmproxy CA certificate (for network sandbox), via
+   `update-ca-certificates` or, when the image lacks it, by appending the CA to
+   the system bundle (see
+   [network-sandbox.md](network-sandbox.md#ca-certificate-trust))
 3. Runs `exec /opt/claude/claude "$@"` (bind-mounted from host cache)
+
+Setup is silent unless `AIRUT_VERBOSE=1` is set in the container environment, in
+which case setup output goes to stderr. The sandboxed command's stdout is never
+touched.
 
 The Claude Code binary is not installed inside the container image. Instead,
 `AgentTask` bind-mounts the host-cached binary at `/opt/claude/claude`

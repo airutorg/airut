@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 
 CA_CONTAINER_PATH = "/usr/local/share/ca-certificates/mitmproxy-ca.crt"
 
+# Environment variables that point TLS stacks at the proxy CA.  Every
+# HTTPS connection from the container goes through the proxy, so the
+# proxy CA alone is the correct trust root for all of them.  Images may
+# set some of these to their own bundle (Nix images set
+# NIX_SSL_CERT_FILE and GIT_SSL_CAINFO), so all are set explicitly.
+CA_ENV_VARS = (
+    "NODE_EXTRA_CA_CERTS",  # Node.js
+    "REQUESTS_CA_BUNDLE",  # Python requests
+    "SSL_CERT_FILE",  # OpenSSL, Python ssl, Go
+    "CURL_CA_BUNDLE",  # curl
+    "NIX_SSL_CERT_FILE",  # Nix, Nix-built OpenSSL (wins over SSL_CERT_FILE)
+    "GIT_SSL_CAINFO",  # git
+)
+
 
 def get_ca_cert_path() -> Path:
     """Get path to the mitmproxy CA certificate.
@@ -72,10 +86,8 @@ def get_network_args(network_name: str, proxy_ip: str) -> list[str]:
     args.extend(["-v", f"{ca_cert_path}:{CA_CONTAINER_PATH}:ro"])
 
     # Trust CA in all common TLS stacks
-    args.extend(["-e", f"NODE_EXTRA_CA_CERTS={CA_CONTAINER_PATH}"])
-    args.extend(["-e", f"REQUESTS_CA_BUNDLE={CA_CONTAINER_PATH}"])
-    args.extend(["-e", f"SSL_CERT_FILE={CA_CONTAINER_PATH}"])
-    args.extend(["-e", f"CURL_CA_BUNDLE={CA_CONTAINER_PATH}"])
+    for var in CA_ENV_VARS:
+        args.extend(["-e", f"{var}={CA_CONTAINER_PATH}"])
 
     logger.info(
         "Network sandbox enabled: proxy_ip=%s, network=%s",
