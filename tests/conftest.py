@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import warnings
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -64,6 +66,48 @@ def make_sample_raw() -> dict[str, Any]:
             },
         },
     }
+
+
+def _is_pytest_handler(handler: logging.Handler) -> bool:
+    """Whether *handler* is one of pytest's own capture handlers."""
+    return type(handler).__module__.startswith("_pytest")
+
+
+@contextmanager
+def preserve_root_logger() -> Generator[None]:
+    """Restore the root logger's level and handlers on exit.
+
+    Handlers added inside are removed and closed (pytest's own are
+    never closed); handlers removed inside are added back.
+    """
+    root = logging.getLogger()
+    level = root.level
+    handlers = root.handlers[:]
+    try:
+        yield
+    finally:
+        root.setLevel(level)
+        for handler in root.handlers[:]:
+            if handler not in handlers and not _is_pytest_handler(handler):
+                root.removeHandler(handler)
+                handler.close()
+        for handler in handlers:
+            if handler not in root.handlers:
+                root.addHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _restore_root_logger() -> Iterator[None]:
+    """Undo root logger changes made by a test.
+
+    Code under test may configure logging globally -- the airut-sandbox
+    CLI's ``_setup_logging`` sets the root level and adds a handler.
+    Leaked into later tests, a root level other than the default WARNING
+    makes ``caplog`` tests capture nothing (ERROR) or extra records
+    (DEBUG), so they pass or fail depending on test order.
+    """
+    with preserve_root_logger():
+        yield
 
 
 @pytest.fixture(autouse=True)
