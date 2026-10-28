@@ -12,6 +12,7 @@ reconstructing nested YAML structure on save.
 """
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -31,6 +32,14 @@ class ConfigSource(Protocol):
     def save(self, data: dict[str, Any]) -> None:
         """Write raw config dict back to the backing store."""
         ...
+
+    def read_only_reason(self) -> str | None:
+        """Why ``save()`` is unavailable, or None if it is available."""
+        ...
+
+
+class ConfigReadOnlyError(Exception):
+    """Raised when saving to a read-only config source."""
 
 
 #: Maps flat GlobalConfig field names to nested YAML paths.
@@ -150,13 +159,40 @@ def make_tag_dumper() -> type[yaml.Dumper]:
 class YamlConfigSource:
     """Load and save config from/to a YAML file with ``!env`` support.
 
+    The file is read-only when *read_only* is set or when saving would
+    not work or would break how the file is managed: the path is a
+    symlink (saving would replace the link, e.g. into the Nix store,
+    with a plain file), or the file or its directory is not writable.
+
     Attributes:
         path: Path to the YAML config file.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
         self.last_file_sha256: str | None = None
+        self._read_only = read_only
+
+    def read_only_reason(self) -> str | None:
+        """Why the config file cannot be saved, or None if it can.
+
+        Checked on each call: writability can change at runtime.
+        """
+        if self._read_only:
+            return "the gateway runs with --read-only-config"
+        if self.path.is_symlink():
+            return f"{self.path} is a symlink, managed elsewhere"
+        if self.path.exists() and not os.access(self.path, os.W_OK):
+            return f"{self.path} is not writable"
+        # Saving writes a temp file next to the config, so the
+        # directory (or its nearest existing ancestor, which save()
+        # creates the rest of) must be writable too.
+        directory = self.path.parent
+        while not directory.exists() and directory != directory.parent:
+            directory = directory.parent
+        if not os.access(directory, os.W_OK):
+            return f"{directory} is not writable"
+        return None
 
     def load(self) -> dict[str, Any]:
         """Load raw config dict from YAML, resolving ``!env`` tags.
@@ -202,7 +238,14 @@ class YamlConfigSource:
 
         Args:
             data: Config dict in nested YAML format.
+
+        Raises:
+            ConfigReadOnlyError: If the file is read-only (see
+                ``read_only_reason()``).
         """
+        reason = self.read_only_reason()
+        if reason is not None:
+            raise ConfigReadOnlyError(f"Config is read-only: {reason}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".yaml.tmp")
         with open(tmp, "w") as f:

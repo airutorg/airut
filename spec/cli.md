@@ -140,6 +140,10 @@ Apply pending config schema migrations to the config file.
 - If already up to date, prints "already up to date (vN)" and returns 0
 - On success, prints "Migrated config schema: vN → vM" and returns 0
 - On error (parse failure, invalid version), prints the error and returns 1
+- A read-only config (a symlink, or a file or directory that is not writable;
+  see [config-editor.md](config-editor.md#read-only-mode)) is left untouched and
+  reported as an error: migrate it where it is managed (`check` says so instead
+  of suggesting `airut migrate`)
 
 **When to use:** Run `airut migrate` after updating airut to a version with a
 new config schema. Alternatively, saving from the dashboard config editor also
@@ -277,18 +281,19 @@ Stop and remove the airut systemd user service.
 ### run-gateway
 
 ```
-airut run-gateway [--config PATH] [--resilient] [--debug]
+airut run-gateway [--config PATH] [--read-only-config] [--resilient] [--debug]
 ```
 
 Start the email gateway service. Normally invoked by systemd, not run directly.
 
 **Options:**
 
-| Flag            | Behavior                                                          |
-| --------------- | ----------------------------------------------------------------- |
-| `--config PATH` | Config file (see [Config File Selection](#config-file-selection)) |
-| `--resilient`   | Stay alive on boot failure, show error on dashboard               |
-| `--debug`       | Enable debug logging                                              |
+| Flag                 | Behavior                                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| `--config PATH`      | Config file (see [Config File Selection](#config-file-selection))                                   |
+| `--read-only-config` | Dashboard config editor is a read-only viewer ([config-editor.md](config-editor.md#read-only-mode)) |
+| `--resilient`        | Stay alive on boot failure, show error on dashboard                                                 |
+| `--debug`            | Enable debug logging                                                                                |
 
 Delegates immediately to `airut.gateway.service:main()` with the remaining
 arguments. See [gateway-architecture.md](gateway-architecture.md) for the

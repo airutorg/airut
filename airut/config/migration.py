@@ -398,7 +398,7 @@ def migrate_config_file(config_path: Path) -> tuple[int, int]:
     Raises:
         ConfigError: If the file cannot be read, parsed, or migrated.
     """
-    from airut.config.source import YamlConfigSource
+    from airut.config.source import ConfigReadOnlyError, YamlConfigSource
 
     source = YamlConfigSource(config_path)
 
@@ -414,6 +414,12 @@ def migrate_config_file(config_path: Path) -> tuple[int, int]:
     new_version = raw["config_version"]
 
     if old_version != new_version:
-        source.save(raw)
+        try:
+            source.save(raw)
+        except ConfigReadOnlyError as e:
+            raise ConfigError(
+                f"{e}. Migrate the config where it is managed; until "
+                "then it is migrated in memory on every load."
+            ) from e
 
     return old_version, new_version

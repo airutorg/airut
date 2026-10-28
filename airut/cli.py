@@ -624,13 +624,22 @@ def cmd_check(argv: list[str]) -> int:
                     f"{s.yellow('migration pending')} "
                     f"(v{file_version} → v{CURRENT_CONFIG_VERSION})"
                 )
-                migrate_cmd = "airut migrate"
-                if args.config_from_flag:
-                    migrate_cmd += f" --config {shlex.quote(str(config_path))}"
-                print(
-                    f"               Run {s.cyan(migrate_cmd)} "
-                    f"to update, or save from dashboard."
-                )
+                from airut.config.source import YamlConfigSource
+
+                if YamlConfigSource(config_path).read_only_reason():
+                    print(
+                        "               Migrate it where the config is "
+                        "managed (until then it is migrated in memory)."
+                    )
+                else:
+                    migrate_cmd = "airut migrate"
+                    if args.config_from_flag:
+                        quoted = shlex.quote(str(config_path))
+                        migrate_cmd += f" --config {quoted}"
+                    print(
+                        f"               Run {s.cyan(migrate_cmd)} "
+                        f"to update, or save from dashboard."
+                    )
         except ConfigError:
             # Schema check is informational; config parse errors are
             # already reported above.
@@ -1165,12 +1174,14 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "Stop and remove the airut systemd user service."
     ),
     "run-gateway": (
-        "usage: airut run-gateway [--config PATH] [--resilient]"
-        " [--debug]\n\n"
+        "usage: airut run-gateway [--config PATH] [--read-only-config]"
+        " [--resilient] [--debug]\n\n"
         "Start the email gateway service"
         " (normally managed by systemd).\n\n"
         "options:\n"
         f"{_CONFIG_OPTION_HELP}\n"
+        "  --read-only-config\n"
+        "                 Show the dashboard config editor read-only\n"
         "  --resilient    Stay alive on boot failure"
         " (error on dashboard)\n"
         "  --debug        Enable debug logging"

@@ -435,6 +435,10 @@ class InMemoryConfigSource:
         """Not supported — in-memory source is read-only."""
         raise NotImplementedError("In-memory source is read-only")
 
+    def read_only_reason(self) -> str:
+        """Always read-only."""
+        return "in-memory source"
+
 
 # ---------------------------------------------------------------------------
 # Edit buffer

@@ -2650,6 +2650,23 @@ class TestCmdCheckSchema:
         out = capsys.readouterr().out
         assert f"airut migrate --config {config_path}" in out
 
+    def test_schema_migration_hint_for_read_only_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A config managed elsewhere is not pointed at `airut migrate`."""
+        config_path, ctx = _check_patches(
+            tmp_path, config_text="config_version: 3\n" + _VALID_CONFIG
+        )
+        target = tmp_path / "managed.yaml"
+        config_path.rename(target)
+        config_path.symlink_to(target)
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "migration pending" in out
+        assert "Migrate it where the config is managed" in out
+        assert "airut migrate" not in out
+
     def test_schema_no_version_defaults_to_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -2721,6 +2738,25 @@ class TestCmdMigrate:
         assert f"config_version: {CURRENT_CONFIG_VERSION}" in (
             config_path.read_text()
         )
+
+    def test_migrate_read_only_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A config managed elsewhere (symlink) is reported, not crashed on."""
+        target = tmp_path / "managed.yaml"
+        target.write_text("config_version: 3\n" + _VALID_CONFIG)
+        link = tmp_path / "airut.yaml"
+        link.symlink_to(target)
+
+        with patch("airut.cli._use_color", return_value=False):
+            result = cmd_migrate(["--config", str(link)])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Config is read-only" in out
+        assert "Migrate the config where it is managed" in out
+        assert link.is_symlink()
+        assert target.read_text().startswith("config_version: 3\n")
 
     def test_migrate_up_to_date(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

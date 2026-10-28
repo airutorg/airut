@@ -2030,7 +2030,24 @@ class TestMain:
             ),
         ):
             assert main([]) == 2
-        mock_source.assert_called_once_with(config_file)
+        mock_source.assert_called_once_with(config_file, read_only=False)
+
+    def test_read_only_config_flag(self, tmp_path: Path) -> None:
+        """--read-only-config makes the config source read-only."""
+        config_file = tmp_path / "airut.yaml"
+        with (
+            patch("airut.gateway.service.gateway.configure_logging"),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ) as mock_source,
+            patch(
+                "airut.gateway.service.gateway.GatewayService",
+                side_effect=RuntimeError("stop here"),
+            ),
+        ):
+            argv = ["--config", str(config_file), "--read-only-config"]
+            assert main(argv) == 2
+        mock_source.assert_called_once_with(config_file, read_only=True)
 
     def test_config_error(self, tmp_path: Path) -> None:
         # Create a config file so main() takes the from_source path
@@ -2054,7 +2071,10 @@ class TestMain:
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 1
 
@@ -2078,7 +2098,10 @@ class TestMain:
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 2
 
@@ -2105,7 +2128,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 3
         mock_svc.stop.assert_called_once()
@@ -2133,7 +2159,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 0
         mock_svc.stop.assert_called_once()
@@ -2160,7 +2189,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 0
         mock_svc.stop.assert_called_once()
@@ -2187,7 +2219,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=True, resilient=False, config=None
+                debug=True,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             main()
 
@@ -2218,7 +2253,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             main()
 
@@ -2259,7 +2297,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             main()
 
@@ -2291,7 +2332,10 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=True, config=None
+                debug=False,
+                resilient=True,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 0
         mock_svc.start.assert_called_once_with(resilient=True)
@@ -2319,10 +2363,13 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=custom_path
+                debug=False,
+                resilient=False,
+                config=custom_path,
+                read_only_config=False,
             )
             assert main() == 0
-        mock_source.assert_called_once_with(custom_path)
+        mock_source.assert_called_once_with(custom_path, read_only=False)
 
     def test_config_path_default_none(self, tmp_path: Path) -> None:
         """Without --config, uses get_config_path() default."""
@@ -2347,10 +2394,13 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False, config=None
+                debug=False,
+                resilient=False,
+                config=None,
+                read_only_config=False,
             )
             assert main() == 0
-        mock_source.assert_called_once_with(default_path)
+        mock_source.assert_called_once_with(default_path, read_only=False)
 
 
 class TestUpstreamDnsResolution:
