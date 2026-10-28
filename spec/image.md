@@ -233,12 +233,18 @@ The repo image may be based on any distribution (Debian, Ubuntu, Alpine, Nix,
   (Debian, Ubuntu, Fedora) have the loader; Nix images need a symlink at the
   standard path; musl-based images such as Alpine need glibc installed when the
   host uses glibc. The agent entrypoint points this out if the binary cannot be
-  executed. `git` is also expected (and `gh` for GitHub repos), see
+  executed, including when the loader path is a dangling symlink. `git` is also
+  expected (and `gh` for GitHub repos), see
   [doc/repo-onboarding.md](../doc/repo-onboarding.md).
+- **For agent tasks, `/bin/bash`:** Claude Code's shell tool finds bash on
+  `PATH`, but other parts of Claude Code run `/bin/bash` directly. Images that
+  keep bash elsewhere (Nix) should link it there.
 
 Everything else the repo needs, including how its tools are put on `PATH`, is up
 to the image. Tools set up by an activation step rather than installed
 system-wide (a Nix devShell, conda, mise) can use the environment hook below.
+
+[doc/nix-images.md](../doc/nix-images.md) gives a recipe for Nix-based images.
 
 ## Entrypoint Contract
 

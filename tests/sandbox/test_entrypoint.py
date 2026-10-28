@@ -235,6 +235,24 @@ class TestExec:
         assert "/lib64/ld-linux-x86-64.so.2" in result.stderr
         assert result.stdout == ""
 
+    def test_agent_explains_dangling_loader_link(
+        self, container: FakeContainer
+    ) -> None:
+        """A loader path that is a dangling symlink gets the same hint.
+
+        This is how a Nix image fails when the loader link points at a
+        store path that was never built.
+        """
+        claude = container.root / "claude"
+        write_binary_without_loader(claude, interpreter=b"ld-link")
+        (container.workdir / "ld-link").symlink_to("/nonexistent/ld.so")
+
+        result = container.run("agent")
+
+        assert result.returncode == 127
+        assert "dangling symlink" in result.stderr
+        assert "/lib64/ld-linux-x86-64.so.2" in result.stderr
+
     def test_agent_missing_binary_has_no_loader_hint(
         self, container: FakeContainer
     ) -> None:

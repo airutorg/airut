@@ -23,6 +23,7 @@ Code interaction via email and/or Slack.
 - [Configuration Reference](#configuration-reference)
 - [Troubleshooting](#troubleshooting)
   - [Container Build Failures](#container-build-failures)
+  - [Testing Image Changes Before Merge](#testing-image-changes-before-merge)
   - [Network Requests Blocked](#network-requests-blocked)
   - [Git Authentication Failures](#git-authentication-failures)
   - [Session Not Resuming](#session-not-resuming)
@@ -107,6 +108,12 @@ url_prefixes:
   - host: api.github.com
     path: /graphql
     methods: [POST]
+  # API root (URL templates and token scope headers only). Without it,
+  # `gh auth status` reports "The token in GH_TOKEN is invalid" although
+  # every other call works.
+  - host: api.github.com
+    path: /
+    methods: [GET]
   - host: uploads.github.com
     path: /repos/your-org/your-repo*
     methods: [POST]
@@ -149,11 +156,17 @@ The container directory may contain subdirectories and symlinks to files or
 directories elsewhere in the repository, which Airut replaces by their targets.
 For example, `ln -s ../../flake.nix .airut/container/flake.nix` lets the
 Dockerfile `COPY flake.nix` from the repository root. See
-[spec/image.md](../spec/image.md#file-locations) for the rules.
+[spec/image.md](../spec/image.md#file-locations) for the rules. Make sure
+formatters and linters skip the container directory or leave symlinks alone: a
+tool that rewrites a linked file replaces the link with a stale copy.
+
+**Nix:** to build the image from the repository's flake, see
+[nix-images.md](nix-images.md).
 
 **Key requirements:**
 
-- `bash` must be installed (the Airut entrypoint is a bash script)
+- `bash` must be installed and reachable as `/bin/bash` (the Airut entrypoint is
+  a bash script, and parts of Claude Code run `/bin/bash` directly)
 - The Claude Code binary's dynamic loader must be at its standard path: for the
   glibc build Airut uses on glibc hosts, `/lib64/ld-linux-x86-64.so.2` (x86_64)
   or `/lib/ld-linux-aarch64.so.1` (arm64). Glibc-based distributions (Debian,
@@ -557,6 +570,66 @@ journalctl --user -u airut | grep -i build
 # - Network access blocked during build
 # - Missing dependencies in Dockerfile
 ```
+
+### Testing Image Changes Before Merge
+
+The gateway builds the image from the default branch only, so a broken
+Dockerfile stops every task once merged. To test a change first, run
+`airut-sandbox` on a throwaway branch in GitHub Actions. The branch supplies the
+Dockerfile and allowlist under test; the sandbox config (`sandbox.yaml`, which
+decides whether the network sandbox is on and how `GH_TOKEN` is masked) comes
+from the default branch:
+
+```yaml
+jobs:
+  image-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      # ... install uv ...
+      - name: Download Claude Code
+        run: |
+          v=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)
+          curl -fsSL -o "$RUNNER_TEMP/claude" \
+            "https://downloads.claude.ai/claude-code-releases/$v/linux-x64/claude"
+          chmod +x "$RUNNER_TEMP/claude"
+      - name: Run checks in the new image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv tool install airut
+          airut-sandbox run --config trusted/.airut/sandbox.yaml \
+            --verbose --network-log-live \
+            --mount "$RUNNER_TEMP/claude:/opt/claude/claude:ro" \
+            -- ./check.sh
+```
+
+- **Trust:** the job runs the branch's Dockerfile, allowlist and `check.sh` with
+  a GitHub token present, so only run it on branches pushed by people you trust.
+  The default branch's `sandbox.yaml` should keep the network sandbox on (the
+  default) and mask `GH_TOKEN`. The [sandbox action](ci-sandbox.md) cannot be
+  used for this: it deliberately reads all of `.airut/` from the base branch.
+- To test unreleased Airut changes, install with
+  `uv tool install airut --from git+https://github.com/airutorg/airut.git@<commit>`.
+- `persist-credentials: false` keeps checkout's token out of the git config,
+  where it would bypass the credential helper you mean to test.
+- Mounting the Claude binary at `/opt/claude/claude` lets `check.sh` run
+  `/opt/claude/claude --version`, which checks the dynamic loader the way the
+  agent entrypoint needs it.
+- `--network-log-live` shows every allowed and blocked request, which is how to
+  check the allowlist.
+- `check.sh` can run the repository's CI, `gh api`, `git ls-remote` and anything
+  else tasks need. It runs with the passthrough entrypoint, so it does not
+  exercise a real agent task; the first gateway task after merge does.
 
 ### Network Requests Blocked
 
