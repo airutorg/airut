@@ -145,20 +145,19 @@ class Sandbox:
 
     def ensure_image(
         self,
-        dockerfile: bytes,
-        context_files: dict[str, bytes],
+        repo_spec: ImageBuildSpec,
         *,
         passthrough_entrypoint: bool = False,
     ) -> str:
         """Build or reuse two-layer container image.
 
-        Builds the repo image from the provided Dockerfile and context
-        files, then builds the overlay with the generated entrypoint.
-        Images are cached by content hash with staleness checking.
+        Builds the repo image from *repo_spec*, then builds the overlay
+        with the generated entrypoint.  Images are cached by content hash
+        with staleness checking.
 
         Args:
-            dockerfile: Raw Dockerfile content.
-            context_files: Additional files for build context.
+            repo_spec: Repo image Dockerfile and build context (kind
+                ``"repo"``).
             passthrough_entrypoint: If True, use the passthrough
                 entrypoint (``exec "$@"``) instead of the Claude
                 entrypoint (``exec claude "$@"``).
@@ -169,12 +168,6 @@ class Sandbox:
         Raises:
             ImageBuildError: If image build fails.
         """
-        repo_spec = ImageBuildSpec(
-            kind="repo",
-            dockerfile=dockerfile,
-            context_files=context_files,
-        )
-
         # Detect whether repo was rebuilt (for force-cascading to overlay).
         repo_tag = self._image_cache.tag_for(repo_spec)
         repo_created_before = self._image_cache.get_image_created(repo_tag)

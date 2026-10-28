@@ -59,6 +59,13 @@ from airut.sandbox import (
     prepare_secrets,
 )
 from airut.sandbox._image_cache import ImageCache
+from airut.sandbox.build_context import (
+    BuildContextError,
+    ContextFiles,
+    collect_context_files,
+    repo_image_spec,
+)
+from airut.sandbox.context_trees import FilesystemTree
 from airut.sandbox.task import CommandTask
 from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
 
@@ -787,10 +794,31 @@ def _resolve_image_paths(
     return dockerfile_path, context_dir
 
 
+def _repo_root(path: Path) -> Path:
+    """Return the repository containing *path*, or *path* if none.
+
+    The repository root is the nearest ancestor (or *path* itself) with a
+    ``.git`` entry.  Symlinks in the build context may point anywhere
+    inside it.  Symlinks in *path* itself are not resolved, so the result
+    is always an ancestor of the absolute *path*.
+    """
+    absolute = Path(os.path.abspath(path))
+    for candidate in (absolute, *absolute.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return absolute
+
+
 def _build_repo_spec(
     dockerfile_path: Path, context_dir: Path
 ) -> ImageBuildSpec:
     """Construct ImageBuildSpec for the repo image.
+
+    The context directory is collected with the same rules as the
+    gateway uses for the git mirror: subdirectories are included and
+    symlinks are followed within the enclosing repository.  A top-level
+    ``Dockerfile`` in it is not part of the context (the Dockerfile is
+    read from *dockerfile_path*).
 
     Args:
         dockerfile_path: Path to Dockerfile.
@@ -800,22 +828,26 @@ def _build_repo_spec(
         ImageBuildSpec for the repo image.
 
     Raises:
-        _ConfigError: If Dockerfile does not exist.
+        _ConfigError: If Dockerfile does not exist or the context
+            directory contains an unsupported entry.
     """
     if not dockerfile_path.exists():
         raise _ConfigError(f"Dockerfile not found: {dockerfile_path}")
 
     dockerfile = dockerfile_path.read_bytes()
-    context_files: dict[str, bytes] = {}
+    context = ContextFiles(files={}, executable=frozenset())
     if context_dir.is_dir():
-        for child in sorted(context_dir.iterdir()):
-            if child.is_file() and child.name != "Dockerfile":
-                context_files[child.name] = child.read_bytes()
-    return ImageBuildSpec(
-        kind="repo",
-        dockerfile=dockerfile,
-        context_files=context_files,
-    )
+        root = _repo_root(context_dir)
+        relative = Path(os.path.abspath(context_dir)).relative_to(root)
+        try:
+            context = collect_context_files(
+                FilesystemTree(root), relative.as_posix()
+            )
+        except (BuildContextError, OSError) as e:
+            raise _ConfigError(
+                f"Invalid build context {context_dir}: {e}"
+            ) from e
+    return repo_image_spec(dockerfile, context)
 
 
 def _build_image_specs(
@@ -1083,8 +1115,7 @@ async def _execute_async(
         try:
             logger.info("Building container image")
             image_tag = sandbox.ensure_image(
-                repo_spec.dockerfile,
-                repo_spec.context_files,
+                repo_spec,
                 passthrough_entrypoint=True,
             )
 

@@ -395,8 +395,12 @@ The repo-defined Dockerfile (`.airut/container/Dockerfile`) cannot access
 arbitrary server files during build:
 
 - Build context is an ephemeral temp directory, not the server filesystem
-- Only files from `.airut/container/` are copied to the build context
-- Files are read via git mirror (`git show`), preventing path traversal
+- Only files from `.airut/container/`, and the in-repository targets of symlinks
+  in it, are copied to the build context
+- Files are read from the git mirror (`git ls-tree` / `git cat-file`), never
+  from the server filesystem. Symlinks in the container directory are resolved
+  inside the repository's git tree; absolute targets and targets outside the
+  repository are rejected
 - `COPY` instructions can only access files within the build context
 
 A malicious Dockerfile cannot `COPY /etc/passwd` or use `../` traversal to

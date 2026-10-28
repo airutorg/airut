@@ -3,10 +3,12 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Tests for lib/sandbox/_image_cache.py -- unified image cache."""
+"""Tests for airut/sandbox/_image_cache.py -- unified image cache."""
 
+import hashlib
 import subprocess
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -85,6 +87,36 @@ class TestContentHash:
         )
         assert content_hash(s1) == content_hash(s2)
 
+    def test_hash_unchanged_without_executable_files(self) -> None:
+        """Contexts without executable files keep their earlier hash.
+
+        Tracking the executable bit must not rebuild existing images.
+        """
+        spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"b.txt": b"2", "a/c.txt": b"1"},
+        )
+        expected = hashlib.sha256(
+            b"FROM ubuntu:24.04\n" + b"a/c.txt" + b"1" + b"b.txt" + b"2"
+        ).hexdigest()
+        assert content_hash(spec) == expected
+
+    def test_executable_bit_affects_hash(self) -> None:
+        """Making a context file executable changes the hash."""
+        s1 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"run.sh": b"#!/bin/sh\n"},
+        )
+        s2 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"run.sh": b"#!/bin/sh\n"},
+            executable_files=frozenset({"run.sh"}),
+        )
+        assert content_hash(s1) != content_hash(s2)
+
 
 class TestImageBuildSpec:
     """Tests for ImageBuildSpec dataclass."""
@@ -104,6 +136,16 @@ class TestImageBuildSpec:
             context_files={"script.py": b"print('hello')"},
         )
         assert spec.context_files == {"script.py": b"print('hello')"}
+
+    def test_rejects_executable_file_not_in_context(self) -> None:
+        """Executable paths must name context files."""
+        with pytest.raises(ValueError, match="not in context"):
+            ImageBuildSpec(
+                kind="repo",
+                dockerfile=b"FROM ubuntu\n",
+                context_files={"a.sh": b""},
+                executable_files=frozenset({"b.sh"}),
+            )
 
     def test_frozen(self) -> None:
         """ImageBuildSpec is immutable."""
@@ -348,6 +390,75 @@ class TestImageCacheEnsure:
 
         with pytest.raises(ValueError, match="Invalid context file name"):
             cache.ensure(spec)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["/etc/passwd", "a/../../b", "./a", "a//b", "a/", "", "a\\b"],
+    )
+    def test_rejects_non_plain_relative_paths(self, name: str) -> None:
+        """Only plain relative POSIX paths are accepted."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={name: b"x"},
+        )
+        with (
+            patch(
+                "airut.sandbox._image_cache.subprocess.run",
+                return_value=MagicMock(returncode=1),
+            ),
+            pytest.raises(ValueError, match="Invalid context file name"),
+        ):
+            cache.ensure(spec)
+
+    def test_nested_and_executable_files_written(self) -> None:
+        """Subdirectories are created and executable bits applied."""
+        seen: dict[str, tuple[bytes, bool]] = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            if cmd[1] == "build":
+                context = Path(cmd[-1])
+                for path in sorted(context.rglob("*")):
+                    if path.is_file():
+                        rel = path.relative_to(context).as_posix()
+                        seen[rel] = (
+                            path.read_bytes(),
+                            bool(path.stat().st_mode & 0o100),
+                        )
+                return MagicMock(returncode=0)
+            return MagicMock(returncode=1)  # inspect: not found
+
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={
+                "flake.nix": b"{ }",
+                "nix/shell.nix": b"{ }",
+                "bin/setup.sh": b"#!/bin/sh\n",
+            },
+            executable_files=frozenset({"bin/setup.sh"}),
+        )
+        with patch(
+            "airut.sandbox._image_cache.subprocess.run", side_effect=fake_run
+        ):
+            cache.ensure(spec)
+
+        assert seen == {
+            "Dockerfile": (b"FROM ubuntu:24.04\n", False),
+            "bin/setup.sh": (b"#!/bin/sh\n", True),
+            "flake.nix": (b"{ }", False),
+            "nix/shell.nix": (b"{ }", False),
+        }
 
 
 class TestFormatAge:

@@ -5,6 +5,7 @@
 
 """Tests for GitMirrorCache."""
 
+import fcntl
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -642,134 +643,74 @@ def test_read_file_uses_shared_lock(mirror_cache, temp_paths):
         assert mock_flock.call_args[0][1] == 1  # fcntl.LOCK_SH
 
 
-# -- Tests for list_directory --
+# -- Tests for default_branch_tree --
 
 
-def test_list_directory_success(mirror_cache, temp_paths):
-    """Test listing files in a directory from the mirror."""
-    temp_paths["mirror"].mkdir(parents=True)
+def _real_mirror(master_repo: Path, tmp_path: Path) -> GitMirrorCache:
+    """Create a real mirror of *master_repo*."""
+    cache = GitMirrorCache(
+        mirror_path=tmp_path / "real-mirror.git",
+        origin_url=str(master_repo),
+    )
+    cache.ensure_mirror_exists()
+    return cache
 
-    with (
-        patch("subprocess.run") as mock_run,
-        patch("fcntl.flock"),
-    ):
 
-        def run_side_effect(cmd, **kwargs):
-            if "symbolic-ref" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout="refs/heads/main\n", stderr=""
-                )
-            if "ls-tree" in cmd:
-                # ls-tree returns full paths
-                return subprocess.CompletedProcess(
-                    cmd,
-                    0,
-                    stdout=(
-                        ".airut/container/Dockerfile\n"
-                        ".airut/container/gitconfig\n"
-                    ),
-                    stderr="",
-                )
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+def test_default_branch_tree_reads_head_commit(master_repo, tmp_path):
+    """The tree shows the default branch as of the mirror's last update."""
+    cache = _real_mirror(master_repo, tmp_path)
+    (master_repo / "later.txt").write_text("not mirrored yet")
+    subprocess.run(["git", "add", "."], cwd=master_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "later"], cwd=master_repo, check=True
+    )
 
-        mock_run.side_effect = run_side_effect
+    with cache.default_branch_tree() as tree:
+        assert tree.read(".airut/container/Dockerfile") == (
+            b"FROM python:3.13-slim\nRUN pip install claude-code\n"
+        )
+        assert tree.stat("later.txt") is None
 
-        result = mirror_cache.list_directory(".airut/container")
 
-        assert result == ["Dockerfile", "gitconfig"]
+def test_default_branch_tree_holds_shared_lock(master_repo, tmp_path):
+    """Updates (exclusive lock) are blocked while the tree is in use."""
+    cache = _real_mirror(master_repo, tmp_path)
 
-        # Verify ls-tree command - should include trailing slash
-        ls_tree_call = mock_run.call_args_list[1]
-        args = ls_tree_call[0][0]
-        assert args == [
+    def try_exclusive() -> bool:
+        with open(cache.lock_file, "w") as other:
+            try:
+                fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            return True
+
+    with cache.default_branch_tree():
+        assert not try_exclusive()
+    assert try_exclusive()
+
+
+def test_default_branch_tree_no_mirror(mirror_cache, temp_paths):
+    """Fails if the mirror doesn't exist."""
+    with pytest.raises(MirrorError, match="Mirror does not exist"):
+        with mirror_cache.default_branch_tree():
+            pass
+
+
+def test_default_branch_tree_unresolvable_branch(master_repo, tmp_path):
+    """Fails if the default branch has no commit."""
+    cache = _real_mirror(master_repo, tmp_path)
+    subprocess.run(
+        [
             "git",
             "-C",
-            str(temp_paths["mirror"]),
-            "ls-tree",
-            "--name-only",
-            "refs/heads/main",
-            ".airut/container/",
-        ]
+            str(cache.mirror_path),
+            "symbolic-ref",
+            "HEAD",
+            "refs/heads/missing",
+        ],
+        check=True,
+    )
 
-
-def test_list_directory_no_mirror(mirror_cache, temp_paths):
-    """Test list_directory fails if mirror doesn't exist."""
-    with pytest.raises(MirrorError, match="Mirror does not exist"):
-        mirror_cache.list_directory(".airut/container")
-
-
-def test_list_directory_not_found(mirror_cache, temp_paths):
-    """Test list_directory fails if directory doesn't exist in mirror."""
-    temp_paths["mirror"].mkdir(parents=True)
-
-    with (
-        patch("subprocess.run") as mock_run,
-        patch("fcntl.flock"),
-    ):
-        call_count = [0]
-
-        def run_side_effect(cmd, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                # symbolic-ref succeeds
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout="refs/heads/main\n", stderr=""
-                )
-            # ls-tree fails
-            raise subprocess.CalledProcessError(
-                128, cmd, stderr="fatal: path not found"
-            )
-
-        mock_run.side_effect = run_side_effect
-
-        with pytest.raises(MirrorError, match="Failed to list"):
-            mirror_cache.list_directory("nonexistent")
-
-
-def test_list_directory_uses_shared_lock(mirror_cache, temp_paths):
-    """Test that list_directory acquires a shared lock."""
-    temp_paths["mirror"].mkdir(parents=True)
-
-    with (
-        patch("subprocess.run") as mock_run,
-        patch("fcntl.flock") as mock_flock,
-    ):
-
-        def run_side_effect(cmd, **kwargs):
-            if "symbolic-ref" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout="refs/heads/main\n", stderr=""
-                )
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        mock_run.side_effect = run_side_effect
-
-        mirror_cache.list_directory(".airut/container")
-
-        # Should acquire shared lock
-        mock_flock.assert_called_once()
-        assert mock_flock.call_args[0][1] == 1  # fcntl.LOCK_SH
-
-
-def test_list_directory_empty(mirror_cache, temp_paths):
-    """Test list_directory returns empty list for empty directory."""
-    temp_paths["mirror"].mkdir(parents=True)
-
-    with (
-        patch("subprocess.run") as mock_run,
-        patch("fcntl.flock"),
-    ):
-
-        def run_side_effect(cmd, **kwargs):
-            if "symbolic-ref" in cmd:
-                return subprocess.CompletedProcess(
-                    cmd, 0, stdout="refs/heads/main\n", stderr=""
-                )
-            # Empty output
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        mock_run.side_effect = run_side_effect
-
-        result = mirror_cache.list_directory(".airut/container")
-
-        assert result == []
+    with pytest.raises(MirrorError, match="Failed to resolve"):
+        with cache.default_branch_tree():
+            pass

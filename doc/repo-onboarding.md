@@ -141,9 +141,15 @@ repos:
 ```
 
 This works with any directory that contains a `Dockerfile` and optional context
-files. Note that Airut reads only the `Dockerfile` and sibling files — it does
-not parse `devcontainer.json` features, lifecycle scripts, or pre-built image
-references.
+files. Note that Airut reads only the `Dockerfile` and the rest of that
+directory — it does not parse `devcontainer.json` features, lifecycle scripts,
+or pre-built image references.
+
+The container directory may contain subdirectories and symlinks to files or
+directories elsewhere in the repository, which Airut replaces by their targets.
+For example, `ln -s ../../flake.nix .airut/container/flake.nix` lets the
+Dockerfile `COPY flake.nix` from the repository root. See
+[spec/image.md](../spec/image.md#file-locations) for the rules.
 
 **Key requirements:**
 

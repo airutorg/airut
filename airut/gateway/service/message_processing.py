@@ -58,9 +58,14 @@ from airut.sandbox import (
     NETWORK_LOG_FILENAME,
     ClaudeBinaryError,
     ContainerEnv,
+    ImageBuildError,
     Mount,
     NetworkSandboxConfig,
     Outcome,
+)
+from airut.sandbox.build_context import (
+    collect_context_files,
+    repo_image_spec,
 )
 from airut.sandbox.types import ExecutionResult
 
@@ -272,43 +277,22 @@ def build_image(
     Returns:
         Image tag for container execution.
     """
-    # Read all files from the container directory
+    # Collect the build context (with subdirectories and symlinks) from
+    # the mirror's default branch.
     try:
-        filenames = mirror.list_directory(container_dir)
+        with mirror.default_branch_tree() as tree:
+            context = collect_context_files(tree, container_dir)
     except Exception as e:
-        from airut.sandbox import ImageBuildError
-
         raise ImageBuildError(
-            f"Failed to list {container_dir} from mirror: {e}"
-        )
+            f"Failed to read {container_dir} from mirror: {e}"
+        ) from e
 
-    dockerfile_content: bytes | None = None
-    context_files: dict[str, bytes] = {}
-
-    for filename in filenames:
-        file_path = f"{container_dir}/{filename}"
-        try:
-            content = mirror.read_file(file_path)
-        except Exception as e:
-            from airut.sandbox import ImageBuildError
-
-            raise ImageBuildError(
-                f"Failed to read {file_path} from mirror: {e}"
-            )
-
-        if filename == "Dockerfile":
-            dockerfile_content = content
-        else:
-            context_files[filename] = content
-
-    if dockerfile_content is None:
-        from airut.sandbox import ImageBuildError
-
+    dockerfile = context.files.get("Dockerfile")
+    if dockerfile is None:
         raise ImageBuildError(f"No Dockerfile found in {container_dir}")
 
     return service.sandbox.ensure_image(
-        dockerfile_content,
-        context_files,
+        repo_image_spec(dockerfile, context),
         passthrough_entrypoint=passthrough_entrypoint,
     )
 
