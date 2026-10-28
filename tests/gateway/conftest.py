@@ -5,6 +5,7 @@
 
 """Shared pytest fixtures for email gateway tests."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +14,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _mock_sandbox(tmp_path: Path):
-    """Mock Sandbox, ClaudeBinaryCache, and redirect XDG state.
+    """Mock Sandbox, ClaudeBinaryCache, and redirect the state dir.
 
     The sandbox calls podman which isn't available in test
     environments. Provide a mock that returns sensible defaults.
@@ -45,10 +46,7 @@ def _mock_sandbox(tmp_path: Path):
             "airut.gateway.service.gateway.ClaudeBinaryCache",
             mock_binary_cache_class,
         ),
-        patch(
-            "airut.gateway.config.user_state_path",
-            return_value=storage_root,
-        ),
+        patch.dict(os.environ, {"AIRUT_STATE_DIR": str(storage_root)}),
     ):
         yield
 

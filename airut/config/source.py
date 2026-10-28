@@ -171,7 +171,7 @@ class YamlConfigSource:
         Raises:
             FileNotFoundError: If the YAML file does not exist.
         """
-        load_dotenv_once()
+        load_dotenv_once(self.path)
 
         if not self.path.exists():
             raise FileNotFoundError(f"Config file not found: {self.path}")

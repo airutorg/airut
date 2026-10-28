@@ -401,8 +401,9 @@ See [slack-setup.md](slack-setup.md) for configuration and
 
 ### Storage Structure
 
-Each conversation maps to a directory under the XDG state dir
-(`~/.local/state/airut/<repo_id>/`):
+Each conversation maps to a directory under the state dir (default
+`~/.local/state/airut/<repo_id>/`; see
+[Custom Paths](deployment.md#custom-paths)):
 
 ```
 {state_dir}/

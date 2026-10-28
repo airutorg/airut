@@ -42,15 +42,16 @@ def _mock_proxy_infra(tmp_path: Path):
     Creates fake mitmproxy config directory and CA cert so that
     proxy and network modules work without real infrastructure.
 
-    Also patches XDG state directory so that ``get_storage_dir()``
-    returns paths under ``tmp_path`` for test isolation.
+    Also points ``AIRUT_STATE_DIR`` at ``tmp_path`` so that
+    ``get_storage_dir()`` returns paths under ``tmp_path`` for test
+    isolation.
     """
     confdir = tmp_path / "mitmproxy-confdir"
     confdir.mkdir(exist_ok=True)
     (confdir / "mitmproxy-ca-cert.pem").write_text("FAKE CA CERT")
     state_dir = tmp_path / "mock_podman_state"
     state_dir.mkdir(exist_ok=True)
-    # Redirect XDG state to tmp_path so get_storage_dir("repo_id")
+    # Redirect the state dir to tmp_path so get_storage_dir("repo_id")
     # returns tmp_path/storage/repo_id instead of ~/.local/state/airut/repo_id
     storage_root = tmp_path / "storage"
     storage_root.mkdir(exist_ok=True)
@@ -63,10 +64,12 @@ def _mock_proxy_infra(tmp_path: Path):
     with (
         patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", confdir),
         patch("airut.sandbox._network.MITMPROXY_CONFDIR", confdir),
-        patch.dict(os.environ, {"MOCK_PODMAN_STATE_DIR": str(state_dir)}),
-        patch(
-            "airut.gateway.config.user_state_path",
-            return_value=storage_root,
+        patch.dict(
+            os.environ,
+            {
+                "MOCK_PODMAN_STATE_DIR": str(state_dir),
+                "AIRUT_STATE_DIR": str(storage_root),
+            },
         ),
         patch(
             "airut.gateway.service.gateway.ClaudeBinaryCache",

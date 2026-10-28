@@ -60,6 +60,7 @@ from airut.gateway.config import (
     RepoServerConfig,
     ServerConfig,
     get_config_path,
+    get_state_dir,
 )
 from airut.gateway.dotenv_loader import reset_dotenv_state
 from airut.gateway.scheduler.service import Scheduler
@@ -71,7 +72,6 @@ from airut.gateway.service.repo_handler import RepoHandler
 from airut.logging import configure_logging
 from airut.sandbox import AgentTask, ClaudeBinaryCache, Sandbox, SandboxConfig
 from airut.version import GitVersionInfo, get_git_version_info
-from airut.xdg import user_state_path
 
 
 logger = logging.getLogger(__name__)
@@ -265,7 +265,7 @@ class GatewayService:
 
         # Claude binary cache (host-managed binary download/verification).
         # Typed as Optional for testability (tests replace with Mock/None).
-        binary_cache_dir = user_state_path("airut") / "claude-binaries"
+        binary_cache_dir = get_state_dir() / "claude-binaries"
         self.claude_binary_cache: ClaudeBinaryCache | None = ClaudeBinaryCache(
             binary_cache_dir,
         )
@@ -1842,7 +1842,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help=(
             "Path to airut.yaml config file"
-            " (default: ~/.config/airut/airut.yaml)"
+            " (default: $AIRUT_CONFIG, else ~/.config/airut/airut.yaml)"
         ),
     )
     args = parser.parse_args(argv)

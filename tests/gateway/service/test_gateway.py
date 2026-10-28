@@ -2013,6 +2013,25 @@ class TestGarbageCollectorThread:
 
 
 class TestMain:
+    def test_config_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without --config, the gateway loads $AIRUT_CONFIG."""
+        config_file = tmp_path / "etc" / "airut.yaml"
+        monkeypatch.setenv("AIRUT_CONFIG", str(config_file))
+        with (
+            patch("airut.gateway.service.gateway.configure_logging"),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ) as mock_source,
+            patch(
+                "airut.gateway.service.gateway.GatewayService",
+                side_effect=RuntimeError("stop here"),
+            ),
+        ):
+            assert main([]) == 2
+        mock_source.assert_called_once_with(config_file)
+
     def test_config_error(self, tmp_path: Path) -> None:
         # Create a config file so main() takes the from_source path
         config_file = tmp_path / "airut.yaml"

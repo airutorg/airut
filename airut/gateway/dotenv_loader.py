@@ -10,7 +10,8 @@ lib/config.py, making the email gateway suitable for independent deployment.
 
 The loader reads environment variables from two locations (in order):
 
-1. ``~/.config/airut/.env`` (XDG config directory) — primary location
+1. ``.env`` next to the server config file (typically
+   ``~/.config/airut/.env``) — primary location
 2. ``.env`` in the current working directory — allows per-invocation
    overrides when running ``airut`` interactively
 
@@ -29,16 +30,19 @@ logger = logging.getLogger(__name__)
 _dotenv_loaded = False
 
 
-def load_dotenv_once() -> None:
+def load_dotenv_once(config_path: Path) -> None:
     """Load .env files once, if not already loaded.
 
     This function is idempotent — calling it multiple times has no effect
     after the first successful load.
 
-    Loads from ``~/.config/airut/.env`` (XDG) first, then from the
-    current working directory's ``.env``.  Variables defined in the XDG
-    file take precedence because ``load_dotenv`` does not overwrite
-    existing environment variables by default.
+    Loads the ``.env`` next to *config_path* first, then the current
+    working directory's ``.env``.  Variables defined in the first file
+    take precedence because ``load_dotenv`` does not overwrite existing
+    environment variables by default.
+
+    Args:
+        config_path: Path to the server config file.
     """
     global _dotenv_loaded
     if _dotenv_loaded:
@@ -46,11 +50,11 @@ def load_dotenv_once() -> None:
 
     from airut.gateway.config import get_dotenv_path
 
-    # 1. XDG config directory (.env next to airut.yaml)
-    xdg_env = get_dotenv_path()
-    if xdg_env.exists():
-        load_dotenv(xdg_env)
-        logger.debug("Loaded .env from %s", xdg_env)
+    # 1. Next to the config file
+    config_env = get_dotenv_path(config_path)
+    if config_env.exists():
+        load_dotenv(config_env)
+        logger.debug("Loaded .env from %s", config_env)
 
     # 2. Current working directory (override / development use)
     cwd_env = Path.cwd() / ".env"

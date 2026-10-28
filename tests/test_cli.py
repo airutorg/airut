@@ -26,9 +26,11 @@ from airut.cli import (
     _is_service_installed,
     _is_service_running,
     _local_dashboard_url,
+    _parse_args,
     _parse_version,
     _print_info,
     _Style,
+    _UsageError,
     _use_color,
     cli,
     cmd_check,
@@ -179,7 +181,75 @@ class TestCheckDependency:
 # ── cmd_init ────────────────────────────────────────────────────────
 
 
+class TestParseArgs:
+    """Subcommand argument parsing, including ``--config PATH``."""
+
+    def test_default_config(self, tmp_path: Path) -> None:
+        """Without --config, falls back to get_config_path()."""
+        default = tmp_path / "default.yaml"
+        with patch("airut.cli.get_config_path", return_value=default):
+            args = _parse_args([])
+        assert args.config_path == default
+        assert args.config_from_flag is False
+
+    def test_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRUT_CONFIG is honoured through get_config_path()."""
+        monkeypatch.setenv("AIRUT_CONFIG", str(tmp_path / "env.yaml"))
+        assert _parse_args([]).config_path == tmp_path / "env.yaml"
+
+    def test_flag_overrides_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AIRUT_CONFIG", str(tmp_path / "env.yaml"))
+        args = _parse_args(
+            ["--wait", "--config", "/etc/airut/airut.yaml"],
+            flags=frozenset({"--wait"}),
+        )
+        assert args.config_path == Path("/etc/airut/airut.yaml")
+        assert args.config_from_flag is True
+        assert args.flags == {"--wait"}
+
+    def test_equals_form(self) -> None:
+        args = _parse_args(["--config=/etc/airut/airut.yaml"])
+        assert args.config_path == Path("/etc/airut/airut.yaml")
+
+    def test_last_config_wins(self) -> None:
+        """As with argparse, a repeated --config uses the last value."""
+        args = _parse_args(["--config", "/a.yaml", "--config=/b.yaml"])
+        assert args.config_path == Path("/b.yaml")
+
+    @pytest.mark.parametrize(
+        "argv",
+        [["--config"], ["--config="], ["--config", "--force"]],
+    )
+    def test_missing_value(self, argv: list[str]) -> None:
+        with pytest.raises(_UsageError, match="--config requires a path"):
+            _parse_args(argv, flags=frozenset({"--force"}))
+
+    @pytest.mark.parametrize("argv", [["--conifg", "/a.yaml"], ["extra"]])
+    def test_unrecognized_argument(self, argv: list[str]) -> None:
+        with pytest.raises(_UsageError, match="unrecognized argument"):
+            _parse_args(argv)
+
+    def test_relative_config_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        args = _parse_args(["--config", "airut.yaml"])
+        assert args.config_path == tmp_path / "airut.yaml"
+
+
 class TestCmdInit:
+    def test_config_flag(self, tmp_path: Path) -> None:
+        """--config selects the file to create."""
+        config_path = tmp_path / "etc" / "airut.yaml"
+        result = cmd_init(["--config", str(config_path)])
+
+        assert result == 0
+        assert config_path.exists()
+
     def test_creates_config(self, tmp_path: Path) -> None:
         """Creates stub config when file does not exist."""
         config_path = tmp_path / "airut" / "airut.yaml"
@@ -491,10 +561,6 @@ class TestHasVersionMismatch:
         }
         with (
             patch(
-                "airut.cli.get_config_path",
-                return_value=cfg,
-            ),
-            patch(
                 "airut.cli.ServerConfig.from_yaml",
                 return_value=self._mock_config(),
             ),
@@ -507,7 +573,7 @@ class TestHasVersionMismatch:
                 return_value=self._mock_vi(),
             ),
         ):
-            assert _has_version_mismatch() is True
+            assert _has_version_mismatch(cfg) is True
 
     def test_no_mismatch(self, tmp_path: Path) -> None:
         """Returns False when SHAs match."""
@@ -519,10 +585,6 @@ class TestHasVersionMismatch:
         }
         with (
             patch(
-                "airut.cli.get_config_path",
-                return_value=cfg,
-            ),
-            patch(
                 "airut.cli.ServerConfig.from_yaml",
                 return_value=self._mock_config(),
             ),
@@ -535,32 +597,24 @@ class TestHasVersionMismatch:
                 return_value=self._mock_vi(),
             ),
         ):
-            assert _has_version_mismatch() is False
+            assert _has_version_mismatch(cfg) is False
 
     def test_no_config_file(self, tmp_path: Path) -> None:
         """Returns False when config missing (uses defaults)."""
         cfg = tmp_path / "nonexistent.yaml"
         with (
             patch(
-                "airut.cli.get_config_path",
-                return_value=cfg,
-            ),
-            patch(
                 "airut.cli._fetch_running_version",
                 return_value=None,
             ),
         ):
-            assert _has_version_mismatch() is False
+            assert _has_version_mismatch(cfg) is False
 
     def test_fetch_fails(self, tmp_path: Path) -> None:
         """Returns False when fetch fails."""
         cfg = tmp_path / "airut.yaml"
         cfg.write_text("x: 1")
         with (
-            patch(
-                "airut.cli.get_config_path",
-                return_value=cfg,
-            ),
             patch(
                 "airut.cli.ServerConfig.from_yaml",
                 return_value=self._mock_config(),
@@ -570,7 +624,7 @@ class TestHasVersionMismatch:
                 return_value=None,
             ),
         ):
-            assert _has_version_mismatch() is False
+            assert _has_version_mismatch(cfg) is False
 
     def test_config_parse_error(self, tmp_path: Path) -> None:
         """Returns False when config cannot be parsed."""
@@ -578,15 +632,11 @@ class TestHasVersionMismatch:
         cfg.write_text("x: 1")
         with (
             patch(
-                "airut.cli.get_config_path",
-                return_value=cfg,
-            ),
-            patch(
                 "airut.cli.ServerConfig.from_yaml",
                 side_effect=ValueError("bad"),
             ),
         ):
-            assert _has_version_mismatch() is False
+            assert _has_version_mismatch(cfg) is False
 
 
 # ── _fetch_health ──────────────────────────────────────────────────
@@ -655,10 +705,8 @@ class TestFetchHealth:
 class TestGetActiveTaskCounts:
     @patch("airut.cli._fetch_health")
     @patch("airut.cli.ServerConfig.from_yaml")
-    @patch("airut.cli.get_config_path")
     def test_returns_counts(
         self,
-        mock_config_path: MagicMock,
         mock_from_yaml: MagicMock,
         mock_health: MagicMock,
         tmp_path: Path,
@@ -666,7 +714,6 @@ class TestGetActiveTaskCounts:
         """Returns (running, waiting) tuple from health data."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("dummy")
-        mock_config_path.return_value = config_path
 
         @dataclass
         class FakeGlobal:
@@ -682,15 +729,13 @@ class TestGetActiveTaskCounts:
             "tasks": {"queued": 1, "executing": 2, "completed": 5},
         }
 
-        result = _get_active_task_counts()
+        result = _get_active_task_counts(config_path)
         assert result == (2, 1)
 
     @patch("airut.cli._fetch_health")
     @patch("airut.cli.ServerConfig.from_yaml")
-    @patch("airut.cli.get_config_path")
     def test_includes_authenticating_and_pending(
         self,
-        mock_config_path: MagicMock,
         mock_from_yaml: MagicMock,
         mock_health: MagicMock,
         tmp_path: Path,
@@ -698,7 +743,6 @@ class TestGetActiveTaskCounts:
         """Sums authenticating+executing and queued+pending."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("dummy")
-        mock_config_path.return_value = config_path
 
         @dataclass
         class FakeGlobal:
@@ -720,43 +764,36 @@ class TestGetActiveTaskCounts:
             },
         }
 
-        result = _get_active_task_counts()
+        result = _get_active_task_counts(config_path)
         # running = executing(4) + authenticating(2) = 6
         # waiting = queued(1) + pending(3) = 4
         assert result == (6, 4)
 
     @patch("airut.cli._fetch_health", return_value=None)
-    @patch("airut.cli.get_config_path")
     def test_no_config_file(
         self,
-        mock_config_path: MagicMock,
         _mock_health: MagicMock,
         tmp_path: Path,
     ) -> None:
         """Returns None when config file missing and service not running."""
-        mock_config_path.return_value = tmp_path / "nonexistent.yaml"
-        assert _get_active_task_counts() is None
+        config_path = tmp_path / "nonexistent.yaml"
+        assert _get_active_task_counts(config_path) is None
 
     @patch("airut.cli.ServerConfig.from_yaml", side_effect=ValueError("bad"))
-    @patch("airut.cli.get_config_path")
     def test_bad_config(
         self,
-        mock_config_path: MagicMock,
         _from_yaml: MagicMock,
         tmp_path: Path,
     ) -> None:
         """Returns None when config is invalid."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("bad")
-        mock_config_path.return_value = config_path
-        assert _get_active_task_counts() is None
+        assert _get_active_task_counts(config_path) is None
 
     @patch("airut.cli._fetch_health", return_value=None)
     @patch("airut.cli.ServerConfig.from_yaml")
-    @patch("airut.cli.get_config_path")
     def test_health_unreachable(
         self,
-        mock_config_path: MagicMock,
         mock_from_yaml: MagicMock,
         _health: MagicMock,
         tmp_path: Path,
@@ -764,7 +801,6 @@ class TestGetActiveTaskCounts:
         """Returns None when health endpoint is unreachable."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("dummy")
-        mock_config_path.return_value = config_path
 
         @dataclass
         class FakeGlobal:
@@ -776,14 +812,12 @@ class TestGetActiveTaskCounts:
         config.global_config = FakeGlobal()
         mock_from_yaml.return_value = MagicMock(value=config)
 
-        assert _get_active_task_counts() is None
+        assert _get_active_task_counts(config_path) is None
 
     @patch("airut.cli._fetch_health")
     @patch("airut.cli.ServerConfig.from_yaml")
-    @patch("airut.cli.get_config_path")
     def test_missing_tasks_key(
         self,
-        mock_config_path: MagicMock,
         mock_from_yaml: MagicMock,
         mock_health: MagicMock,
         tmp_path: Path,
@@ -791,7 +825,6 @@ class TestGetActiveTaskCounts:
         """Returns None when health response has no tasks key."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("dummy")
-        mock_config_path.return_value = config_path
 
         @dataclass
         class FakeGlobal:
@@ -804,14 +837,12 @@ class TestGetActiveTaskCounts:
         mock_from_yaml.return_value = MagicMock(value=config)
         mock_health.return_value = {"status": "ok"}
 
-        assert _get_active_task_counts() is None
+        assert _get_active_task_counts(config_path) is None
 
     @patch("airut.cli._fetch_health")
     @patch("airut.cli.ServerConfig.from_yaml")
-    @patch("airut.cli.get_config_path")
     def test_non_int_counts(
         self,
-        mock_config_path: MagicMock,
         mock_from_yaml: MagicMock,
         mock_health: MagicMock,
         tmp_path: Path,
@@ -819,7 +850,6 @@ class TestGetActiveTaskCounts:
         """Returns None when task counts are not integers."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("dummy")
-        mock_config_path.return_value = config_path
 
         @dataclass
         class FakeGlobal:
@@ -835,7 +865,7 @@ class TestGetActiveTaskCounts:
             "tasks": {"queued": "one", "executing": 0, "completed": 0},
         }
 
-        assert _get_active_task_counts() is None
+        assert _get_active_task_counts(config_path) is None
 
 
 # ── cmd_check ───────────────────────────────────────────────────────
@@ -898,9 +928,6 @@ def _check_patches(
     stack = ExitStack()
     stack.enter_context(
         patch("airut.cli.get_config_path", return_value=config_path)
-    )
-    stack.enter_context(
-        patch("airut.cli.get_dotenv_path", return_value=dotenv_path)
     )
     stack.enter_context(
         patch(
@@ -1164,6 +1191,36 @@ repos:
         out = capsys.readouterr().out
         assert str(config_path) in out
 
+    def test_config_flag(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--config checks that file and the .env next to it."""
+        _path, ctx = _check_patches(tmp_path)
+        custom_dir = tmp_path / "etc"
+        custom_dir.mkdir()
+        custom = custom_dir / "airut.yaml"
+        custom.write_text("not: [valid")
+        (custom_dir / ".env").write_text("SOME_VAR=1\n")
+        with ctx:
+            result = cmd_check(["--config", str(custom)])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert str(custom) in out
+        assert str(custom_dir / ".env") in out
+
+    def test_shows_state_dir(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Prints the state directory."""
+        monkeypatch.setenv("AIRUT_STATE_DIR", "/srv/airut-state")
+        _path, ctx = _check_patches(tmp_path)
+        with ctx:
+            cmd_check([])
+        assert "State dir:   /srv/airut-state" in capsys.readouterr().out
+
     def test_shows_dotenv_when_exists(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -1336,16 +1393,11 @@ repos:
         )
         config_path = tmp_path / "airut.yaml"
         config_path.write_text(config_with_base_url)
-        dotenv_path = tmp_path / ".env"
-
         from contextlib import ExitStack
 
         stack = ExitStack()
         stack.enter_context(
             patch("airut.cli.get_config_path", return_value=config_path)
-        )
-        stack.enter_context(
-            patch("airut.cli.get_dotenv_path", return_value=dotenv_path)
         )
         stack.enter_context(
             patch(
@@ -1497,6 +1549,33 @@ class TestCmdUpdate:
         assert "Update complete." in out
         assert "Stopping" not in out
         assert "Reinstalling" not in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
+    @patch("airut.cli._is_service_installed", return_value=False)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_config_flag_forwarded_to_check(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        """The readiness check runs against the selected config."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+        result = cmd_update(["--config", "/etc/airut/airut.yaml"])
+        assert result == 0
+        assert mock_run.call_args_list[1].args[0] == [
+            "/usr/bin/airut",
+            "check",
+            "--config",
+            "/etc/airut/airut.yaml",
+        ]
 
     @patch("airut.cli.subprocess.run")
     @patch(
@@ -1811,6 +1890,34 @@ class TestCmdUpdate:
         assert "Already up to date." in out
         assert "Stopping" not in out
         assert "Reinstalling" not in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch("airut.cli._get_active_task_counts", return_value=None)
+    @patch("airut.cli._has_version_mismatch", return_value=False)
+    @patch("airut.cli._is_service_running", return_value=True)
+    @patch("airut.cli._is_service_installed", return_value=True)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_config_flag_used_for_dashboard_queries(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        mock_mismatch: MagicMock,
+        mock_counts: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        """The selected config locates the dashboard for status queries."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="Nothing to upgrade", stderr=""
+        )
+        config_path = Path("/etc/airut/airut.yaml")
+        assert cmd_update(["--config", str(config_path)]) == 0
+        mock_counts.assert_called_once_with(config_path)
+        mock_mismatch.assert_called_once_with(config_path)
+
+    def test_unrecognized_argument(self) -> None:
+        with pytest.raises(_UsageError, match="unrecognized argument"):
+            cmd_update(["--forse"])
 
     @patch("airut.cli._get_active_task_counts", return_value=(2, 1))
     @patch("airut.cli._is_service_running", return_value=True)
@@ -2284,6 +2391,20 @@ class TestPrintInfo:
 
 
 class TestCli:
+    def test_usage_error_exits_2(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A subcommand usage error prints to stderr and exits 2."""
+        with (
+            patch("airut.cli.sys.argv", ["airut", "check", "--config"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli()
+        assert exc_info.value.code == 2
+        assert "airut check: --config requires a path" in (
+            capsys.readouterr().err
+        )
+
     def test_no_args_prints_info(self) -> None:
         """Bare ``airut`` prints version and usage, exits 0."""
         with (
@@ -2405,6 +2526,18 @@ class TestCli:
         assert "--wait" in out
         assert "--force" in out
 
+    def test_subcommand_short_help(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``-h`` works like ``--help`` for subcommands."""
+        with (
+            patch("airut.cli.sys.argv", ["airut", "check", "-h"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli()
+        assert exc_info.value.code == 0
+        assert "usage: airut check" in capsys.readouterr().out
+
     def test_all_subcommands_have_help(self) -> None:
         """Every dispatched subcommand has an entry in _SUBCOMMAND_HELP."""
         from airut.cli import _DISPATCH
@@ -2433,6 +2566,13 @@ class TestCmdInstallService:
         result = cmd_install_service([])
         assert result == 1
 
+    @patch("airut.install_services.install_services")
+    def test_config_flag_rejected(self, mock_install: MagicMock) -> None:
+        """--config is not silently ignored (the unit would not use it)."""
+        with pytest.raises(_UsageError, match="unrecognized argument"):
+            cmd_install_service(["--config", "/etc/airut/airut.yaml"])
+        mock_install.assert_not_called()
+
 
 # ── cmd_uninstall_service ──────────────────────────────────────────
 
@@ -2453,6 +2593,10 @@ class TestCmdUninstallService:
         """Returns 1 on RuntimeError."""
         result = cmd_uninstall_service([])
         assert result == 1
+
+    def test_unrecognized_argument(self) -> None:
+        with pytest.raises(_UsageError, match="unrecognized argument"):
+            cmd_uninstall_service(["--force"])
 
 
 # ── cmd_check config schema version ───────────────────────────────
@@ -2492,6 +2636,19 @@ class TestCmdCheckSchema:
         assert "v3" in out
         assert f"v{CURRENT_CONFIG_VERSION}" in out
         assert "airut migrate" in out
+        assert "airut migrate --config" not in out
+
+    def test_schema_migration_hint_keeps_config_flag(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The migrate hint repeats a --config that selected the file."""
+        config_path, ctx = _check_patches(
+            tmp_path, config_text="config_version: 3\n" + _VALID_CONFIG
+        )
+        with ctx:
+            cmd_check(["--config", str(config_path)])
+        out = capsys.readouterr().out
+        assert f"airut migrate --config {config_path}" in out
 
     def test_schema_no_version_defaults_to_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -2548,6 +2705,23 @@ class TestCmdCheckSchema:
 
 
 class TestCmdMigrate:
+    def test_config_flag(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--config selects the file to migrate."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+
+        config_path = tmp_path / "custom.yaml"
+        config_path.write_text("config_version: 3\n" + _VALID_CONFIG)
+
+        with patch("airut.cli._use_color", return_value=False):
+            result = cmd_migrate([f"--config={config_path}"])
+
+        assert result == 0
+        assert f"config_version: {CURRENT_CONFIG_VERSION}" in (
+            config_path.read_text()
+        )
+
     def test_migrate_up_to_date(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
