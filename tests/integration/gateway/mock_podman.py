@@ -157,87 +157,99 @@ def _handle_detached_run(args: list[str]) -> int:
     return 0
 
 
+# ``podman run`` options that take a separate value.
+_RUN_VALUE_OPTIONS = frozenset(
+    {
+        "-v",
+        "-e",
+        "--network",
+        "--name",
+        "--dns",
+        "--memory",
+        "--memory-swap",
+        "--cpus",
+        "--pids-limit",
+        "--entrypoint",
+    }
+)
+
+# Claude options (as passed by AgentTask) that take a separate value.
+_CLAUDE_VALUE_OPTIONS = frozenset(
+    {"--resume", "--model", "--effort", "--output-format"}
+)
+
+
+def _check_claude_args(args: list[str]) -> str | None:
+    """Return the session ID from Claude's *args*; reject positionals.
+
+    The real Claude prepends any positional argument to the prompt it
+    reads from stdin, so AgentTask must pass options only.
+
+    Raises:
+        SystemExit: On a positional argument.
+    """
+    session_id = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-" or not arg.startswith("-"):
+            print(
+                f"mock_podman: positional Claude argument {arg!r} would be "
+                "prepended to the prompt (if it is an option's value, add "
+                "the option to _CLAUDE_VALUE_OPTIONS)",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        if arg in _CLAUDE_VALUE_OPTIONS and i + 1 < len(args):
+            if arg == "--resume":
+                session_id = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    return session_id
+
+
 def _handle_interactive_run(args: list[str]) -> int:
     """Handle interactive run for Claude containers.
 
-    Parses the podman run command to find volume mounts (-v),
-    environment variables (-e), and other flags, then delegates
-    to mock_claude.main().
+    Parses the podman run command for volume mounts (-v), environment
+    variables (-e) and the image; everything after the image is the
+    container command.  For agent containers (with the Claude binary
+    mounted) the command is Claude's arguments, which must be options
+    only.  Then delegates to mock_claude.main().
     """
-    workspace = None
-    inbox = None
-    outbox = None
-
+    mounts: dict[str, str] = {}
     i = 0
-
-    while i < len(args):
+    while i < len(args) and args[i].startswith("-"):
         arg = args[i]
-
-        if arg == "-v" and i + 1 < len(args):
-            mount = args[i + 1]
-            parts = mount.split(":")
-            if len(parts) >= 2:
-                if parts[1] == "/workspace":
-                    workspace = parts[0]
-                elif parts[1] == "/inbox":
-                    inbox = parts[0]
-                elif parts[1] == "/outbox":
-                    outbox = parts[0]
-
+        if arg in _RUN_VALUE_OPTIONS and i + 1 < len(args):
+            value = args[i + 1]
+            if arg == "-v":
+                parts = value.split(":")
+                if len(parts) >= 2:
+                    mounts[parts[1]] = parts[0]
+            elif arg == "-e" and "=" in value:
+                name, env_value = value.split("=", 1)
+                os.environ[name] = env_value
             i += 2
-
-        elif arg == "-e" and i + 1 < len(args):
-            env_spec = args[i + 1]
-            if "=" in env_spec:
-                name, value = env_spec.split("=", 1)
-                os.environ[name] = value
-            i += 2
-
-        elif arg in ("--rm", "-i"):
-            i += 1
-
-        elif arg.startswith("--log-driver="):
-            i += 1
-
-        elif arg.startswith("--cap-drop="):
-            i += 1
-
-        elif arg.startswith("--cap-add="):
-            i += 1
-
-        elif arg.startswith("--security-opt="):
-            i += 1
-
-        elif arg == "--network" and i + 1 < len(args):
-            i += 2
-
-        elif arg == "--name" and i + 1 < len(args):
-            i += 2
-
         else:
-            remaining = args[i:]
-            if remaining and not remaining[0].startswith("-"):
-                remaining = remaining[1:]
+            i += 1  # flag or --option=value
+    command = args[i + 1 :]  # args[i] is the image
 
-            session_id = None
-            j = 0
-            while j < len(remaining):
-                if remaining[j] == "--resume" and j + 1 < len(remaining):
-                    session_id = remaining[j + 1]
-                    j += 2
-                else:
-                    j += 1
+    # CLAUDE_BINARY_CONTAINER_PATH, spelled out: importing airut.sandbox
+    # would slow down every one of the thousands of mock invocations.
+    if "/opt/claude/claude" in mounts:
+        session_id = _check_claude_args(command)
+        if session_id:
+            os.environ["MOCK_CLAUDE_SESSION_ID"] = session_id
 
-            if session_id:
-                os.environ["MOCK_CLAUDE_SESSION_ID"] = session_id
-            break
-
-    if workspace:
-        os.environ["MOCK_CLAUDE_WORKSPACE"] = workspace
-    if inbox:
-        os.environ["MOCK_CLAUDE_INBOX"] = inbox
-    if outbox:
-        os.environ["MOCK_CLAUDE_OUTBOX"] = outbox
+    for container_path, env_name in (
+        ("/workspace", "MOCK_CLAUDE_WORKSPACE"),
+        ("/inbox", "MOCK_CLAUDE_INBOX"),
+        ("/outbox", "MOCK_CLAUDE_OUTBOX"),
+    ):
+        if container_path in mounts:
+            os.environ[env_name] = mounts[container_path]
 
     return mock_claude.main()
 

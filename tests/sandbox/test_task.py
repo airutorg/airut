@@ -24,6 +24,7 @@ from airut.sandbox.task import (
 )
 from airut.sandbox.types import ContainerEnv, Mount, Outcome, ResourceLimits
 from tests.sandbox.conftest import create_mock_run_container
+from tests.sandbox.entrypoint_harness import BASH, FakeContainer
 
 
 def _make_task(
@@ -169,6 +170,50 @@ class TestAgentTaskExecute:
 
         cmd = calls[0]["command"]
         assert "--resume" not in cmd
+
+    async def test_execute_command_through_agent_entrypoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        container: FakeContainer,
+    ) -> None:
+        """Claude receives only options, no positional arguments.
+
+        The agent entrypoint runs ``exec /opt/claude/claude "$@"`` and the
+        prompt goes on stdin.  Claude prepends any positional argument
+        (the binary path, a "-") to the prompt it reads.
+        """
+        task = _make_task(tmp_path)
+
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+        await task.execute("Test prompt", session_id="abc")
+        command = calls[0]["command"]
+        (container.root / "claude").write_text(
+            f'#!{BASH}\nprintf "%s\\n" "$@"\n'
+        )
+
+        result = container.run("agent", *command)
+
+        assert result.returncode == 0
+        assert result.stdout.splitlines() == [
+            "--resume",
+            "abc",
+            "--model",
+            "sonnet",
+            "-p",
+            "--dangerously-skip-permissions",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ]
 
     async def test_execute_with_session_id(
         self,
