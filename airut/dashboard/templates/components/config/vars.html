@@ -44,6 +44,15 @@
                     hx-swap="outerHTML">
               Environment
             </button>
+            <button data-source="file"
+                    class="{{ 'active' if current_source == 'file' else '' }}"
+                    hx-patch="/api/config/field"
+                    hx-vals='{"path":"vars.{{ name }}","source":"file","value":{{ (display_value if display_value is not none and current_source == 'file' else '') | tojson }}}'
+                    hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                    hx-target="#vars-section"
+                    hx-swap="outerHTML">
+              File
+            </button>
           </div>
 
           {% if current_source == 'literal' %}
@@ -60,10 +69,10 @@
           {% else %}
           <input class="cfg-input" type="text"
                  value="{{ display_value if display_value is not none else '' }}"
-                 placeholder="ENV_VAR_NAME"
+                 placeholder="{{ '/run/secrets/NAME' if current_source == 'file' else 'ENV_VAR_NAME' }}"
                  hx-patch="/api/config/field"
                  hx-trigger="change"
-                 hx-vals='{"path":"vars.{{ name }}","source":"env"}'
+                 hx-vals='{"path":"vars.{{ name }}","source":"{{ current_source }}"}'
                  hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
                  hx-target="#vars-section"
                  hx-swap="outerHTML"

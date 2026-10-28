@@ -716,7 +716,7 @@ class ConfigEditorHandlers:
         index_str = form.get("index")
         key = form.get("key")
 
-        # Vars values: only literal and env are allowed (no var-to-var)
+        # Vars values: no var-to-var references
         if path.startswith("vars.") and source == "var":
             return Response(
                 "!var references inside vars: are not allowed", status=400

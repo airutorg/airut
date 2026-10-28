@@ -35,7 +35,13 @@ from airut.gateway.channel import ChannelConfig
 from airut.logging import SecretFilter
 from airut.sandbox.types import ResourceLimits
 from airut.xdg import user_config_path, user_state_path
-from airut.yaml_env import EnvVar, YamlValue, raw_resolve
+from airut.yaml_env import (
+    EnvVar,
+    FileRef,
+    FileRefError,
+    YamlValue,
+    raw_resolve,
+)
 
 
 if TYPE_CHECKING:
@@ -616,15 +622,16 @@ def _resolve(
     default: object = _MISSING,
     required: str = "",
 ):
-    """Resolve a YAML value, handling ``!env`` tags and type coercion.
+    """Resolve a YAML value, handling ``!env``/``!file`` and type coercion.
 
     This is the single entry point for reading any config value.  It
-    resolves ``EnvVar`` placeholders, applies a default when the value
-    is missing, and coerces to the target type.
+    resolves ``EnvVar`` and ``FileRef`` placeholders, applies a default
+    when the value is missing (unset env var, nonexistent file), and
+    coerces to the target type.
 
     Args:
-        value: Raw value from YAML (may be ``EnvVar``, None, or a
-            literal already parsed by PyYAML).
+        value: Raw value from YAML (may be ``EnvVar``, ``FileRef``,
+            None, or a literal already parsed by PyYAML).
         coerce: Target type (``str``, ``int``, ``bool``, ``Path``).
         default: Default when value is absent.  Not allowed together
             with *required*.
@@ -634,9 +641,9 @@ def _resolve(
     Returns:
         The resolved, coerced value, or None when optional and absent.
     """
-    # For non-EnvVar values that PyYAML already parsed to the right
-    # type (e.g. bool, int), skip string round-tripping when possible.
-    if not isinstance(value, EnvVar) and value is not None:
+    # For literals that PyYAML already parsed to the right type (e.g.
+    # bool, int), skip string round-tripping when possible.
+    if not isinstance(value, (EnvVar, FileRef)) and value is not None:
         if coerce is bool:
             return _coerce_bool(value)
         if isinstance(value, coerce):
@@ -652,21 +659,40 @@ def _resolve(
                     f"Required config '{required}': environment variable "
                     f"'{value.var_name}' is not set"
                 )
+            if isinstance(value, FileRef):
+                raise ConfigError(
+                    f"Required config '{required}': file "
+                    f"'{value.path}' does not exist"
+                )
             raise ConfigError(f"Required config '{required}' is missing")
         if default is not _MISSING:
             return default
         return None
 
     # Coerce
-    if coerce is bool:
-        return _coerce_bool(resolved)
-    if coerce is Path:
-        return Path(resolved).expanduser()
-    return coerce(resolved)
+    try:
+        if coerce is bool:
+            return _coerce_bool(resolved)
+        if coerce is Path:
+            return Path(resolved).expanduser()
+        return coerce(resolved)
+    except (ConfigError, ValueError):
+        if isinstance(value, EnvVar):
+            ref = f"!env {value.var_name}"
+        elif isinstance(value, FileRef):
+            ref = f"!file {value.path}"
+        else:
+            raise
+        # Do not echo the value: it may be a secret (e.g. a key file
+        # referenced from the wrong field).
+        field = f"{required}: " if required else ""
+        raise ConfigError(
+            f"{field}{ref}: not a valid {coerce.__name__} value"
+        ) from None
 
 
 def _resolve_secrets(raw_secrets: dict) -> dict[str, str]:
-    """Resolve a secrets mapping (``!env`` values from server config).
+    """Resolve a secrets mapping (``!env``/``!file`` values allowed).
 
     Args:
         raw_secrets: Raw mapping from YAML (values may be ``EnvVar``).
@@ -1586,7 +1612,8 @@ class ServerConfig:
         Loads the raw dict, applies schema migrations, resolves ``!var``
         references, then runs the existing resolution/validation pipeline.
         Returns a ``ConfigSnapshot`` holding both the resolved config and
-        the raw YAML document (with ``VarRef``/``EnvVar`` preserved).
+        the raw YAML document (with ``VarRef``/``EnvVar``/``FileRef``
+        preserved).
 
         Args:
             source: Config source to load from.
@@ -1609,11 +1636,14 @@ class ServerConfig:
         # Preserve raw document before var resolution (for round-trip)
         doc_raw = copy.deepcopy(raw)
 
-        # Resolve vars: section and !var references
-        vars_table = resolve_vars_section(raw)
-        raw = resolve_var_refs(raw, vars_table)
+        try:
+            # Resolve vars: section and !var references
+            vars_table = resolve_vars_section(raw)
+            raw = resolve_var_refs(raw, vars_table)
 
-        instance = cls._from_raw(raw)
+            instance = cls._from_raw(raw)
+        except FileRefError as e:
+            raise ConfigError(str(e)) from e
         provided = frozenset({"global_config", "repos"})
         return ConfigSnapshot(instance, provided, raw=doc_raw)
 

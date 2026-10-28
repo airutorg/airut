@@ -198,8 +198,8 @@ they take effect on reload without restart.
 
 ### Variable and Environment Resolution
 
-`vars:` and `!env` are resolved during `ServerConfig.from_source()` — before the
-config reaches the reload logic. This means:
+`vars:`, `!env` and `!file` are resolved during `ServerConfig.from_source()` —
+before the config reaches the reload logic. This means:
 
 - **`!var` changes propagate automatically.** If `vars.mail_server` changes, all
   fields referencing `!var mail_server` get the new resolved value. The diff
@@ -210,6 +210,9 @@ config reaches the reload logic. This means:
   already in `os.environ` — only new variables are picked up. Direct
   `os.environ` changes are always picked up since `!env` reads `os.environ` at
   parse time.
+- **`!file` contents are re-read on every reload.** A rotated secret file takes
+  effect on the next reload (`SIGHUP`, or any config file change); the watcher
+  does not watch referenced files.
 - **`vars:` has no scope of its own.** Changes propagate as changes to the
   fields that reference them, with their correct scopes.
 - **No-op detection works on resolved values.** Renaming a var without changing

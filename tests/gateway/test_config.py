@@ -50,7 +50,13 @@ from airut.gateway.config import (
     get_storage_dir,
 )
 from airut.logging import SecretFilter
-from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
+from airut.yaml_env import (
+    EnvVar,
+    FileRef,
+    YamlValue,
+    make_env_loader,
+    raw_resolve,
+)
 
 
 class TestRawResolve:
@@ -123,6 +129,35 @@ class TestResolve:
     def test_int_literal(self) -> None:
         """Int literal from YAML passes through."""
         assert _resolve(42, int) == 42
+
+    def test_bad_reference_value_not_echoed(self, tmp_path: Path) -> None:
+        """A referenced value that fails conversion may be a secret."""
+        key_file = tmp_path / "key.pem"
+        key_file.write_text("-----BEGIN PRIVATE KEY-----\nabc\n")
+        with pytest.raises(ConfigError) as exc_info:
+            _resolve(FileRef(str(key_file)), int)
+        assert str(exc_info.value) == (
+            f"!file {key_file}: not a valid int value"
+        )
+        assert exc_info.value.__suppress_context__
+
+        with (
+            patch.dict("os.environ", {"FLAG": "s3cret"}),
+            pytest.raises(ConfigError, match="!env FLAG: not a valid bool"),
+        ):
+            _resolve(EnvVar("FLAG"), bool)
+
+        with (
+            patch.dict("os.environ", {"PORT": "s3cret"}),
+            pytest.raises(
+                ConfigError, match="^imap.port: !env PORT: not a valid int"
+            ),
+        ):
+            _resolve(EnvVar("PORT"), int, required="imap.port")
+
+    def test_bad_literal_reported_as_before(self) -> None:
+        with pytest.raises(ValueError, match="invalid literal"):
+            _resolve("abc", int)
 
     def test_int_envvar(self) -> None:
         """Int !env resolves and coerces."""
@@ -2218,6 +2253,126 @@ class TestRepoServerConfigFromYaml:
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
         config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].model == "opus"
+
+
+class TestFromYamlFileAndMappings:
+    """``!file`` and the tag-free mapping spellings through from_yaml."""
+
+    def _yaml(self, master_repo: Path, password: str, extra: str = "") -> str:
+        return f"""\
+{extra}repos:
+  test:
+    email:
+      account:
+        username: user@test.com
+        password: {password}
+        from: "Test <test@example.com>"
+      imap:
+        server: imap.test.com
+      smtp:
+        server: smtp.test.com
+      auth:
+        authorized_senders:
+          - auth@test.com
+        trusted_authserv_id: mx.test.com
+    repo_url: {master_repo}
+"""
+
+    def _password(self, yaml_path: Path) -> str | None:
+        config = ServerConfig.from_yaml(yaml_path).value
+        email_ch = config.repos["test"].channels["email"]
+        assert isinstance(email_ch, EmailChannelConfig)
+        return email_ch.account.password
+
+    def test_file_tag(self, master_repo: Path, tmp_path: Path) -> None:
+        secret = tmp_path / "email-password"
+        secret.write_text("from-file\n")
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(self._yaml(master_repo, f"!file {secret}"))
+        assert self._password(yaml_path) == "from-file"
+
+    def test_file_in_vars(self, master_repo: Path, tmp_path: Path) -> None:
+        secret = tmp_path / "email-password"
+        secret.write_text("via-var")
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            self._yaml(
+                master_repo, "!var pw", extra=f"vars:\n  pw: !file {secret}\n"
+            )
+        )
+        assert self._password(yaml_path) == "via-var"
+
+    def test_mapping_forms(
+        self,
+        master_repo: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``{"!env": NAME}`` etc. resolve like the tags."""
+        monkeypatch.setenv("TEST_EMAIL_PW", "from-env")
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(self._yaml(master_repo, '{"!env": TEST_EMAIL_PW}'))
+        assert self._password(yaml_path) == "from-env"
+
+        secret = tmp_path / "pw"
+        secret.write_text("from-file")
+        yaml_path.write_text(
+            self._yaml(
+                master_repo,
+                '{"!var": pw}',
+                extra=f'vars:\n  pw: {{"!file": {secret}}}\n',
+            )
+        )
+        assert self._password(yaml_path) == "from-file"
+
+    def test_required_file_missing(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        missing = tmp_path / "missing"
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            self._yaml(master_repo, "plain").replace(
+                "imap.test.com", f"!file {missing}"
+            )
+        )
+        with pytest.raises(ConfigError, match=f"file '{missing}' does not"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_unreadable_file_is_config_error(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(self._yaml(master_repo, "!file relative/pw"))
+        with pytest.raises(ConfigError, match="must be absolute"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_optional_file_missing_uses_default(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """A missing file for an optional field is unset, like !env."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            self._yaml(
+                master_repo,
+                "plain",
+                extra=f"dashboard:\n  base_url: !file {tmp_path}/missing\n",
+            )
+        )
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert config.global_config.dashboard_base_url is None
+
+    def test_raw_keeps_placeholders(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """The snapshot's raw document keeps the reference (round-trip)."""
+        secret = tmp_path / "pw"
+        secret.write_text("x")
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(self._yaml(master_repo, f'{{"!file": {secret}}}'))
+        raw = ServerConfig.from_yaml(yaml_path).raw
+        assert raw is not None
+        password = raw["repos"]["test"]["email"]["account"]["password"]
+        assert password == FileRef(str(secret))
 
 
 class TestFromYamlVars:

@@ -21,7 +21,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from airut.config.editor_schema import EditorFieldSchema, schema_for_editor
-from airut.yaml_env import EnvVar, VarRef
+from airut.yaml_env import EnvVar, FileRef, VarRef
 
 
 if TYPE_CHECKING:
@@ -59,12 +59,14 @@ def value_source(value: object) -> tuple[str, object]:
     """Determine the source type and underlying value for a raw dict value.
 
     Returns (source_type, display_value) where source_type is one of:
-    ``"literal"``, ``"env"``, ``"var"``, ``"unset"``.
+    ``"literal"``, ``"env"``, ``"var"``, ``"file"``, ``"unset"``.
     """
     if isinstance(value, EnvVar):
         return "env", value.var_name
     if isinstance(value, VarRef):
         return "var", value.var_name
+    if isinstance(value, FileRef):
+        return "file", value.path
     if value is MISSING:
         return "unset", None
     return "literal", value
@@ -88,11 +90,13 @@ def get_raw_value(raw: dict[str, Any] | None, path: str) -> object:
 
 
 def raw_values_equal(a: object, b: object) -> bool:
-    """Compare two raw config values, handling ``EnvVar``/``VarRef``."""
+    """Compare raw config values, handling ``EnvVar``/``VarRef``/``FileRef``."""
     if isinstance(a, EnvVar) and isinstance(b, EnvVar):
         return a.var_name == b.var_name
     if isinstance(a, VarRef) and isinstance(b, VarRef):
         return a.var_name == b.var_name
+    if isinstance(a, FileRef) and isinstance(b, FileRef):
+        return a.path == b.path
     if type(a) is not type(b):
         return False
     return a == b
@@ -106,6 +110,8 @@ def format_raw_value(value: object) -> str:
         return f"!env {value.var_name}"
     if isinstance(value, VarRef):
         return f"!var {value.var_name}"
+    if isinstance(value, FileRef):
+        return f"!file {value.path}"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, dict):
@@ -549,8 +555,9 @@ class EditBuffer:
 
         Args:
             path: Dot-delimited YAML path.
-            source: One of ``"literal"``, ``"env"``, ``"var"``, ``"unset"``.
-            value: The value (for literal/env/var sources).
+            source: One of ``"literal"``, ``"env"``, ``"var"``, ``"file"``,
+                ``"unset"``.
+            value: The value (for literal/env/var/file sources).
         """
         parts = path.split(".")
 
@@ -568,6 +575,8 @@ class EditBuffer:
                 parent[key] = EnvVar(str(value))
             elif source == "var":
                 parent[key] = VarRef(str(value))
+            elif source == "file":
+                parent[key] = FileRef(str(value))
             else:
                 # Literal — coerce type
                 parent[key] = value

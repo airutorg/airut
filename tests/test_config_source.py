@@ -19,9 +19,11 @@ from airut.config.source import (
     flat_to_nested_email,
     flat_to_nested_global,
     flat_to_nested_repo,
+    make_config_loader,
     make_tag_dumper,
+    resolve_tag_mappings,
 )
-from airut.yaml_env import EnvVar, VarRef
+from airut.yaml_env import EnvVar, FileRef, VarRef, YamlValue
 
 
 class TestSetNested:
@@ -337,3 +339,87 @@ class TestTagDumper:
         assert reloaded["repos"]["test"]["server"].var_name == "mail"
         assert isinstance(reloaded["repos"]["test"]["password"], EnvVar)
         assert reloaded["repos"]["test"]["model"] == "opus"
+
+
+class TestFileTag:
+    def test_loader_constructs_file_ref(self) -> None:
+        raw = yaml.load(
+            "token: !file /run/secrets/t\n", Loader=make_config_loader()
+        )
+        assert raw == {"token": FileRef("/run/secrets/t")}
+
+    def test_round_trip(self, tmp_path: Path) -> None:
+        """The editor's save keeps !file tags."""
+        config_file = tmp_path / "config.yaml"
+        source = YamlConfigSource(config_file)
+        source.save({"token": FileRef("$CREDENTIALS_DIRECTORY/t")})
+
+        assert "token: !file " in config_file.read_text()
+        with patch("airut.config.source.load_dotenv_once"):
+            assert source.load() == {
+                "token": FileRef("$CREDENTIALS_DIRECTORY/t")
+            }
+
+
+class TestTagMappings:
+    """Tag-free spellings for generators that cannot emit YAML tags."""
+
+    def test_each_tag(self) -> None:
+        raw: YamlValue = {
+            "a": {"!env": "NAME"},
+            "b": {"!var": "shared"},
+            "c": {"!file": "/run/secrets/c"},
+        }
+        assert resolve_tag_mappings(raw, "root") == {
+            "a": EnvVar("NAME"),
+            "b": VarRef("shared"),
+            "c": FileRef("/run/secrets/c"),
+        }
+
+    def test_nested_in_mappings_and_lists(self) -> None:
+        raw: YamlValue = {
+            "container_env": {"GH_TOKEN": {"!env": "GH_TOKEN"}},
+            "senders": ["a@example.com", {"!var": "admin"}],
+        }
+        assert resolve_tag_mappings(raw, "repos.r") == {
+            "container_env": {"GH_TOKEN": EnvVar("GH_TOKEN")},
+            "senders": ["a@example.com", VarRef("admin")],
+        }
+
+    def test_other_mappings_untouched(self) -> None:
+        """Only a mapping whose single key is a tag name is a tag."""
+        raw: YamlValue = {
+            "two_keys": {"!env": "A", "other": 1},
+            "plain": {"env": "A"},
+        }
+        assert resolve_tag_mappings(raw, "root") == {
+            "two_keys": {"!env": "A", "other": 1},
+            "plain": {"env": "A"},
+        }
+
+    def test_non_string_argument_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"repos\.r\.port: .*'!env'"):
+            resolve_tag_mappings({"r": {"port": {"!env": 5}}}, "repos")
+        with pytest.raises(ValueError, match=r"list\[0\]: .*'!file'"):
+            resolve_tag_mappings([{"!file": ["/a"]}], "list")
+
+    def test_root_is_never_a_tag(self, tmp_path: Path) -> None:
+        """A document that is a single tag mapping stays a mapping."""
+        config_file = tmp_path / "airut.yaml"
+        config_file.write_text('"!env": NAME\n')
+        with patch("airut.config.source.load_dotenv_once"):
+            assert YamlConfigSource(config_file).load() == {"!env": "NAME"}
+
+    def test_json_config_file(self, tmp_path: Path) -> None:
+        """A JSON config (YAML is a superset) can use the mapping forms."""
+        config_file = tmp_path / "airut.json"
+        config_file.write_text(
+            '{"dashboard": {"base_url": {"!env": "DASH_URL"}},'
+            ' "vars": {"pw": {"!file": "/run/secrets/pw"}}}'
+        )
+        with patch("airut.config.source.load_dotenv_once"):
+            raw = YamlConfigSource(config_file).load()
+        assert raw == {
+            "dashboard": {"base_url": EnvVar("DASH_URL")},
+            "vars": {"pw": FileRef("/run/secrets/pw")},
+        }

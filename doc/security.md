@@ -234,7 +234,11 @@ repos:
     # over plain secrets — see sections below.
 ```
 
-Actual values come from environment variables or `~/.config/airut/.env`.
+Actual values come from environment variables or `~/.config/airut/.env`, or from
+files with `!file` (agenix, sops-nix, systemd `LoadCredential=`), which keeps
+them out of the gateway's environment and so out of every `git` and `podman`
+process it starts. `!file` is only available in the server config, not in the
+repository-provided `.airut/sandbox.yaml` the sandbox CLI reads.
 
 ### Container Secrets
 

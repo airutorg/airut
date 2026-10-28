@@ -67,6 +67,7 @@ class EditorFieldSchema:
         tagged_union_rules: Rule descriptors for tagged union lists.
         env_eligible: Whether ``!env`` source is available.
         var_eligible: Whether ``!var`` source is available.
+        file_eligible: Whether ``!file`` source is available.
     """
 
     name: str
@@ -85,6 +86,7 @@ class EditorFieldSchema:
     tagged_union_rules: list[tuple[str, str, str]] | None = None
     env_eligible: bool = True
     var_eligible: bool = True
+    file_eligible: bool = True
 
 
 def _strip_optional(annotation: object) -> tuple[object, bool]:
@@ -223,10 +225,11 @@ def _walk_fields(
         else:
             default_val = MISSING
 
-        # Bool fields: no env/var
+        # Bool fields: no env/var/file
         python_type = _python_type_str(inner_type)
         env_eligible = python_type != "bool"
         var_eligible = python_type != "bool"
+        file_eligible = python_type != "bool"
 
         # Multiline
         multiline = False
@@ -272,6 +275,7 @@ def _walk_fields(
                 tagged_union_rules=tagged_union_rules,
                 env_eligible=env_eligible,
                 var_eligible=var_eligible,
+                file_eligible=file_eligible,
             )
         )
 
