@@ -99,6 +99,13 @@ would let a task exfiltrate host state it was never given (for example a link to
 the server config), so links are skipped at listing time and unlinked with the
 rest of the outbox — the link only, never its target.
 
+**Attachments are never written through a link.** The inbox is writable from the
+container too, so a task can leave a link there, dangling or not, under a name a
+later attachment may use. Writing through it would create or overwrite a host
+file wherever it points. Attachments are therefore created exclusively: anything
+already at the path, link or not, counts as a taken name and the attachment gets
+a `-N` suffix instead.
+
 ### Components
 
 **Protocol-agnostic core** (`gateway/service/`):
@@ -462,9 +469,11 @@ replied to. Trailing quote blocks with no reply after them are replaced with
 **Attachment handling**:
 
 - Decode all attachments from MIME multipart
-- Save to `{REPO_DIR}/inbox/` preserving original filenames
-- Prepend to prompt:
-  `"I have placed new files in the inbox/ folder: {filenames}. {user_prompt}"`
+- Save to `conversations/{ID}/inbox/` preserving original filenames (with a `-N`
+  suffix when the name is taken, see
+  [Attachments are never written through a link](#channel-abstraction))
+- Append to the channel context in the prompt:
+  `"The user has attached files to their message, which I have saved to /inbox/: {filenames}."`
 
 ### Response Construction
 

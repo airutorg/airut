@@ -251,6 +251,48 @@ class TestSaveAttachments:
         req = mock_urlopen.call_args[0][0]
         assert req.get_header("Authorization") == f"Bearer {client.token}"
 
+    def test_does_not_follow_planted_link(self, tmp_path: Path) -> None:
+        """A link the task left in the inbox is not written through.
+
+        It could name any host path; the attachment is saved beside it.
+        """
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        target = tmp_path / "host" / "planted.txt"
+        target.parent.mkdir()
+        (inbox / "report.txt").symlink_to(target)
+
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="see attached",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            slack_file_urls=[
+                (
+                    "report.txt",
+                    "https://files.slack.com/files-pri/T1-F1/report.txt",
+                )
+            ],
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"file data"
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch(
+            "airut.gateway.slack.adapter.urllib.request.urlopen",
+            return_value=mock_resp,
+        ):
+            result = adapter.save_attachments(parsed, inbox)
+
+        assert result == ["report-1.txt"]
+        assert (inbox / "report-1.txt").read_bytes() == b"file data"
+        assert not target.exists()
+
     def test_handles_download_error(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
         inbox = tmp_path / "inbox"

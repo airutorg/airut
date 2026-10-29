@@ -476,6 +476,33 @@ def test_extract_attachments_with_files(tmp_path: Path) -> None:
     assert saved_file.read_text() == "Attachment content"
 
 
+def test_extract_attachments_does_not_follow_planted_link(
+    tmp_path: Path,
+) -> None:
+    """A link the task left in the inbox is not written through.
+
+    It could name any host path; the attachment is saved beside it.
+    """
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+    target = tmp_path / "host" / "planted.txt"
+    target.parent.mkdir()
+    (inbox_dir / "test.txt").symlink_to(target)
+
+    msg = MIMEMultipart()
+    attachment = MIMEText("Attachment content")
+    attachment.add_header(
+        "Content-Disposition", "attachment", filename="test.txt"
+    )
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+
+    assert filenames == ["test-1.txt"]
+    assert (inbox_dir / "test-1.txt").read_text() == "Attachment content"
+    assert not target.exists()
+
+
 def test_extract_attachments_multiple(tmp_path: Path) -> None:
     """Test extracting multiple attachments."""
     inbox_dir = tmp_path / "inbox"

@@ -19,7 +19,7 @@ from airut.conversation.conversation_layout import (
     get_container_mounts,
     list_outbox_files,
     prepare_conversation,
-    unique_inbox_path,
+    write_inbox_file,
 )
 from airut.conversation.conversation_store import (
     CONVERSATION_FILE_NAME,
@@ -36,7 +36,7 @@ __all__ = [
     "get_container_mounts",
     "list_outbox_files",
     "prepare_conversation",
-    "unique_inbox_path",
+    "write_inbox_file",
     "CONVERSATION_FILE_NAME",
     "ConversationMetadata",
     "ConversationStore",

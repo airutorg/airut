@@ -585,9 +585,9 @@ collects files from prior messages as well — attachments posted both before an
 after the bot joined a thread reach `inbox/`. When several attachments share a
 filename (within one message, across a coalesced burst, across replayed history,
 or across turns), later files are written under a `-N`-suffixed name rather than
-overwriting earlier ones (shared with the email adapter via
-`unique_inbox_path`). On the DM surface the Agents & AI Apps middleware already
-admits `file_share`, so no extra carve-out is needed there.
+overwriting earlier ones (shared with the email adapter via `write_inbox_file`).
+On the DM surface the Agents & AI Apps middleware already admits `file_share`,
+so no extra carve-out is needed there.
 
 **Outbound** (bot → user): Files from `outbox/` are uploaded to the thread via
 Slack's `files_upload_v2` method. The gateway clears `outbox/` once the reply
