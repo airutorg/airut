@@ -17,6 +17,7 @@ simultaneously for the same repository.
   - [Verifying DMARC](#verifying-dmarc)
 - [Authorization](#authorization)
 - [IMAP Configuration](#imap-configuration)
+- [Attachment Size Limit](#attachment-size-limit)
 - [Model Selection](#model-selection)
 - [Troubleshooting](#troubleshooting)
   - [IMAP Connection Issues](#imap-connection-issues)
@@ -232,6 +233,34 @@ imap:
 IMAP IDLE is recommended — it provides near-instant message detection. If your
 provider doesn't support IDLE, set `use_idle: false` and configure
 `poll_interval`.
+
+## Attachment Size Limit
+
+Files the agent places in `/outbox` are sent as attachments. Mail servers refuse
+messages over a size limit, so Airut keeps each reply under one:
+
+```yaml
+smtp:
+  server: mail.example.com
+  # Largest reply in MB, attachments included (default 25)
+  max_message_size_mb: 25
+```
+
+If the SMTP server advertises a lower limit (the `SIZE` extension), that one is
+used instead. Attachments that would push a reply over the limit are left out —
+the largest first — and the reply names them, so the text and the remaining
+files still arrive. If the server refuses a reply as too large anyway, it is
+sent again without attachments, noting that the mail server rejected the email
+as too large. The agent is told how much fits (about 18 MB of files for the
+default, since attachments grow by about 37% when encoded for email) so it can
+split or compress files ahead of time.
+
+Set `max_message_size_mb` to the smallest limit along the way: if your server
+accepts 50 MB but your recipients' servers stop at 25 MB, a 40 MB reply leaves
+your server and bounces back to the Airut mailbox, which the user never sees.
+The limit counts the message as sent, with attachments encoded: Gmail's 25 MB
+attachment limit, for example, corresponds to the roughly 34 MB its SMTP server
+advertises, which Airut picks up on its own.
 
 ## Model Selection
 

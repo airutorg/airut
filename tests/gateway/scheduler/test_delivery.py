@@ -114,6 +114,7 @@ class TestDeliverViaEmail:
         assert kwargs["to"] == "user@example.com"
         assert "[ID:abc12345] daily" == kwargs["subject"]
         assert "Task done" in kwargs["body"]
+        assert kwargs["footer"] == ""
 
     def test_subject_override(self) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
@@ -139,7 +140,9 @@ class TestDeliverViaEmail:
         _deliver_via_email(adapter, "daily", config, result)
 
         kwargs = adapter.send_new_message.call_args.kwargs
-        assert "$0.05" in kwargs["body"]
+        assert kwargs["body"] == "Result text"
+        assert kwargs["footer"] == stats.format_summary()
+        assert "$0.05" in kwargs["footer"]
 
     def test_delivery_with_outbox_files(self, tmp_path: Path) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)

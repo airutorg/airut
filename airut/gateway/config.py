@@ -998,6 +998,10 @@ class SmtpConfig:
         server: SMTP server hostname.
         port: SMTP port.
         require_auth: Whether SMTP requires authentication.
+        max_message_size_mb: Largest outgoing message, attachments
+            included, in MB (1MB = 1024 * 1024 bytes).  Attachments that
+            would push a reply over this (or over a lower ``SIZE`` the
+            server advertises) are left out and named in the body.
     """
 
     server: str = field(
@@ -1011,11 +1015,23 @@ class SmtpConfig:
         default=True,
         metadata=meta("Whether SMTP requires authentication", Scope.REPO),
     )
+    max_message_size_mb: int = field(
+        default=25,
+        metadata=meta(
+            "Max outgoing email size in MB, attachments included"
+            " (the server's advertised limit applies if lower)",
+            Scope.REPO,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate SMTP configuration."""
         if not (1 <= self.port <= 65535):
             raise ValueError(f"Invalid SMTP port: {self.port}")
+        if self.max_message_size_mb < 1:
+            raise ValueError(
+                f"max_message_size_mb must be >= 1: {self.max_message_size_mb}"
+            )
 
 
 @dataclass(frozen=True)
@@ -1952,6 +1968,9 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
     smtp_require_auth = _resolve(raw_smtp.get("require_auth"), bool)
     if smtp_require_auth is not None:
         smtp_overrides["require_auth"] = smtp_require_auth
+    max_message_size = _resolve(raw_smtp.get("max_message_size_mb"), int)
+    if max_message_size is not None:
+        smtp_overrides["max_message_size_mb"] = max_message_size
     smtp = SmtpConfig(
         server=_resolve(
             raw_smtp.get("server"),

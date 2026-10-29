@@ -88,9 +88,11 @@ continue it.
 A delivery that fails entirely raises `ChannelSendError`, which skips the
 cleanup and leaves the files for the next attempt. An adapter that gives up on
 an individual file without raising (Slack treats a single failed upload as
-non-fatal) must tell the user, because that file is cleared either way. The
-`TIMEOUT` outcome takes the `send_error()` path and deliberately leaves the
-outbox untouched, so partial output ships with the next reply.
+non-fatal; email leaves out files too large to send, see
+[Response Construction](#response-construction)) must tell the user, because
+that file is cleared either way. The `TIMEOUT` outcome takes the `send_error()`
+path and deliberately leaves the outbox untouched, so partial output ships with
+the next reply.
 
 **Symlinks are never delivered.** The gateway reads the outbox on the host,
 where a link written inside the container resolves against a different
@@ -495,6 +497,19 @@ execution statistics when available:
 - Web fetches: Number of web fetch tool invocations
 
 Example footer: `Cost: $0.0423 · Web searches: 2 · Web fetches: 1`
+
+**Attachments and the size limit**: Outbox files are attached to the reply, but
+mail servers refuse messages over a size limit. A refused reply would deliver
+nothing — not even the text — and, since a failed send keeps the outbox, every
+later reply in the conversation would be refused too. The limit is
+`smtp.max_message_size_mb`, or the `SIZE` the SMTP server advertises (RFC 1870)
+when that is lower. Attachments that would push the encoded message over it are
+left out, largest first so as many files as possible still go through, and a
+note between the body and the usage footer names them. If the server still
+refuses the message as too large (status 5.3.4 or 5.2.3, or a bare 552), it is
+sent once more without attachments, naming all of them. The channel context
+tells the agent how many bytes of files fit in the configured limit so it can
+stay within it. Scheduled-task delivery takes the same path.
 
 **Dashboard link**: When `DASHBOARD_BASE_URL` is configured, acknowledgment
 emails (sent when a task is queued) include a link to track progress:

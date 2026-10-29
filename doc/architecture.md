@@ -292,7 +292,7 @@ EmailResponder
     │
     ├──▶ Format response with Claude output
     │
-    ├──▶ Attach files from /outbox
+    ├──▶ Attach files from /outbox (leaving out any over the size limit)
     │
     ├──▶ Set In-Reply-To, References for threading
     │

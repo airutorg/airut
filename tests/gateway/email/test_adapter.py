@@ -5,6 +5,7 @@
 
 """Tests for EmailChannelAdapter."""
 
+from dataclasses import replace
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.parser import BytesParser
@@ -458,8 +459,10 @@ class TestSendAcknowledgment:
             "https://dash.example.com",
         )
         call_kw = responder.send_reply.call_args[1]
-        assert "dash.example.com/conversation/conv1" in call_kw["body"]
-        assert "dash.example.com/conversation/conv1" in call_kw["html_body"]
+        # A markdown autolink, which the responder renders as a link.
+        assert call_kw["body"].endswith(
+            "See progress at <https://dash.example.com/conversation/conv1>"
+        )
 
     def test_smtp_failure_non_fatal(self) -> None:
         adapter, _, _, responder = _make_adapter()
@@ -525,7 +528,24 @@ class TestSendReply:
 
         adapter.send_reply(parsed, "conv1", "Done", "Cost: $0.01", [])
         call_kw = responder.send_reply.call_args[1]
-        assert "Cost: $0.01" in call_kw["body"]
+        # Passed apart from the body so the responder can put a note
+        # about attachments too large to send above it.
+        assert call_kw["body"] == "Done"
+        assert call_kw["footer"] == "Cost: $0.01"
+
+    def test_no_usage_footer(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        adapter.send_reply(parsed, "conv1", "Done", "", [])
+        assert responder.send_reply.call_args[1]["footer"] == ""
 
     def test_sends_attachments_from_outbox(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
@@ -587,11 +607,11 @@ class TestSendReply:
 
         call_kw = responder.send_reply.call_args[1]
         assert call_kw["attachments"] == [("report.txt", b"report content")]
-        assert "Could not attach 1 file(s): locked.bin" in call_kw["body"]
-        # The note precedes the usage footer.
-        assert call_kw["body"].index("locked.bin") < call_kw["body"].index(
-            "Cost: $1"
+        # The note is part of the body, so it precedes the usage footer.
+        assert (
+            call_kw["body"] == "Done\n\nCould not attach 1 file(s): locked.bin"
         )
+        assert call_kw["footer"] == "Cost: $1"
 
     def test_retry_resends_attachments(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
@@ -906,6 +926,27 @@ class TestChannelContext:
         assert "/outbox" in ctx
         assert "/storage" in ctx
 
+    def test_states_attachment_limit(self) -> None:
+        """The prompt gives the file budget for the configured size.
+
+        Base64 grows files by about 37%, so 25MB of email fits about 18MB
+        of files.
+        """
+        adapter, _, _, _ = _make_adapter()
+        ctx = adapter.channel_context()
+        assert (
+            "Files in /outbox must total under 18.1MB to fit the 25.0MB "
+            "email size limit once encoded"
+        ) in ctx
+
+    def test_attachment_limit_follows_config(self) -> None:
+        config = _make_config()
+        config = replace(
+            config, smtp=replace(config.smtp, max_message_size_mb=35)
+        )
+        adapter, _, _, _ = _make_adapter(config)
+        assert "under 25.4MB to fit the 35.0MB" in adapter.channel_context()
+
     def test_consistent_with_authenticate_and_parse(
         self,
     ) -> None:
@@ -967,6 +1008,7 @@ class TestSendNewMessage:
             body="Task results",
             conversation_id="conv1",
             attachments=[],
+            footer="Cost: $0.05",
         )
 
         responder.send_reply.assert_called_once()
@@ -981,6 +1023,7 @@ class TestSendNewMessage:
         assert call_kw["message_id"].startswith("<airut.")
         # Empty attachments → None
         assert call_kw["attachments"] is None
+        assert call_kw["footer"] == "Cost: $0.05"
 
     def test_send_with_attachments(self) -> None:
         adapter, _, _, responder = _make_adapter()
@@ -992,6 +1035,7 @@ class TestSendNewMessage:
             body="body",
             conversation_id="conv2",
             attachments=attachments,
+            footer="",
         )
 
         call_kw = responder.send_reply.call_args[1]

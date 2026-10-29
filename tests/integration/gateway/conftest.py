@@ -544,6 +544,27 @@ def get_message_text(msg: Message) -> str:
         return str(payload) if payload else ""
 
 
+def get_message_attachments(msg: Message) -> list[tuple[str, bytes]]:
+    """Extract attachments from email message.
+
+    Args:
+        msg: Email message (MIMEMultipart or similar).
+
+    Returns:
+        List of (filename, content) tuples for attachments.
+    """
+    attachments: list[tuple[str, bytes]] = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_disposition() == "attachment":
+                filename = part.get_filename()
+                if filename:
+                    payload = part.get_payload(decode=True)
+                    if isinstance(payload, bytes) and payload:
+                        attachments.append((filename, payload))
+    return attachments
+
+
 # ------------------------------------------------------------------ #
 # Gate mock helpers (deterministic task timing control)
 # ------------------------------------------------------------------ #

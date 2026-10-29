@@ -10,23 +10,27 @@ via SMTP with proper threading headers.
 """
 
 import logging
-import mimetypes
 import re
 import secrets
 import smtplib
 import time
-from email import encoders
-from email.mime.base import MIMEBase
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from collections.abc import Generator
+from contextlib import contextmanager
 from email.utils import parseaddr
 
 from airut.gateway.config import EmailChannelConfig
+from airut.gateway.email.composer import (
+    Attachment,
+    Draft,
+    fit_attachments,
+    is_size_rejection,
+    omitted_note,
+)
 from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
 )
-from airut.markdown import markdown_to_html
+from airut.units import MB
 
 
 logger = logging.getLogger(__name__)
@@ -118,15 +122,21 @@ class EmailResponder:
         body: str,
         in_reply_to: str | None = None,
         references: list[str] | None = None,
-        html_body: str | None = None,
         attachments: list[tuple[str, bytes]] | None = None,
         message_id: str | None = None,
+        footer: str = "",
     ) -> None:
         """Send email reply with threading headers.
 
-        Sends a multipart email with both plain text and HTML alternatives.
-        If html_body is not provided, the body is converted from markdown
-        to HTML automatically.
+        Sends a multipart email with both plain text and HTML
+        alternatives, the HTML rendered from the markdown body.
+
+        The message is kept under the size limit — the configured
+        ``max_message_size_mb`` or the ``SIZE`` the server advertises,
+        whichever is lower — by leaving out the largest attachments.  If
+        the server still refuses the message as too large, it is sent
+        once more without attachments.  Either way the body names the
+        files that were left out.
 
         Args:
             to: Recipient email address.
@@ -134,122 +144,34 @@ class EmailResponder:
             body: Email body text (plain text or markdown).
             in_reply_to: Message-ID of message being replied to.
             references: List of Message-IDs in thread.
-            html_body: Optional pre-rendered HTML body. If not provided,
-                body is converted from markdown to HTML.
             attachments: Optional list of (filename, content) tuples to attach.
             message_id: Explicit Message-ID for this outgoing message.
                 When set, encodes the conversation ID for header-based
                 thread resolution on future replies.
+            footer: Usage summary, set in italics after the body and
+                after any note about attachments that were left out.
 
         Raises:
             SMTPSendError: If sending fails.
         """
+        draft = Draft(
+            sender=self.config.account.from_address,
+            to=to,
+            subject=subject,
+            body=body,
+            footer=footer,
+            in_reply_to=in_reply_to,
+            references=references,
+            message_id=message_id,
+        )
+        files = [
+            Attachment(filename, content)
+            for filename, content in attachments or []
+        ]
         try:
-            # Create multipart message with text and HTML alternatives
-            # If we have attachments, use "mixed" as the top level
-            if attachments:
-                msg = MIMEMultipart("mixed")
-            else:
-                msg = MIMEMultipart("alternative")
-
-            msg["From"] = self.config.account.from_address
-            msg["To"] = to
-            msg["Subject"] = subject
-
-            # Set explicit Message-ID if provided
-            if message_id:
-                msg["Message-ID"] = message_id
-
-            # Threading headers
-            if in_reply_to:
-                msg["In-Reply-To"] = in_reply_to
-
-            if references:
-                msg["References"] = " ".join(references)
-
-            # Create the alternative part (text + HTML) for the body
-            if attachments:
-                # With attachments, nest alternative inside mixed
-                alt_part = MIMEMultipart("alternative")
-                alt_part.attach(MIMEText(body, "plain"))
-                html_content = (
-                    html_body if html_body else markdown_to_html(body)
-                )
-                alt_part.attach(MIMEText(html_content, "html"))
-                msg.attach(alt_part)
-            else:
-                # Without attachments, attach directly to message
-                msg.attach(MIMEText(body, "plain"))
-                html_content = (
-                    html_body if html_body else markdown_to_html(body)
-                )
-                msg.attach(MIMEText(html_content, "html"))
-
-            # Attach files if provided
-            if attachments:
-                for filename, content in attachments:
-                    # Guess MIME type based on filename
-                    mime_type, _ = mimetypes.guess_type(filename)
-                    if mime_type is None:
-                        mime_type = "application/octet-stream"
-
-                    maintype, subtype = mime_type.split("/", 1)
-
-                    attachment = MIMEBase(maintype, subtype)
-                    attachment.set_payload(content)
-                    encoders.encode_base64(attachment)
-                    attachment.add_header(
-                        "Content-Disposition", "attachment", filename=filename
-                    )
-                    msg.attach(attachment)
-                    logger.debug(
-                        "Attached file: %s (%d bytes, %s)",
-                        filename,
-                        len(content),
-                        mime_type,
-                    )
-
             logger.debug("Sending email to %s: %s", to, subject)
-
-            with smtplib.SMTP(
-                self.config.smtp.server, self.config.smtp.port
-            ) as server:
-                server.ehlo()
-                # Only use STARTTLS if the server supports it
-                if server.has_extn("STARTTLS"):
-                    server.starttls()
-                    server.ehlo()  # Re-identify after TLS for AUTH capabilities
-                # Only authenticate if required (allows testing without auth)
-                if self.config.smtp.require_auth:
-                    if self._token_provider:
-                        # Microsoft OAuth2: XOAUTH2 SASL mechanism
-                        auth_string = (
-                            self._token_provider.generate_xoauth2_string(
-                                self.config.account.username
-                            )
-                        )
-
-                        def _xoauth2_authobject(
-                            _challenge: bytes | None = None,
-                        ) -> str:
-                            if _challenge is not None:
-                                # Server sent an error challenge (334);
-                                # respond with empty string to acknowledge
-                                # per the XOAUTH2 spec.
-                                return ""
-                            return auth_string
-
-                        server.auth("XOAUTH2", _xoauth2_authobject)
-                    else:
-                        assert self.config.account.password is not None
-                        server.login(
-                            self.config.account.username,
-                            self.config.account.password,
-                        )
-                server.send_message(msg)
-
+            self._deliver(draft, files)
             logger.info("Sent email to %s: %s", to, subject)
-
         except (
             smtplib.SMTPException,
             OSError,
@@ -257,3 +179,94 @@ class EmailResponder:
         ) as e:
             logger.error("Failed to send email: %s", e)
             raise SMTPSendError(f"Failed to send email: {e}")
+
+    def _deliver(self, draft: Draft, attachments: list[Attachment]) -> None:
+        """Send *draft*, keeping it under the size limit.
+
+        Raises:
+            smtplib.SMTPException: If the server refuses the message.
+            OSError: On connection failures.
+            MicrosoftOAuth2TokenError: If no OAuth2 token is available.
+        """
+        with self._connect() as server:
+            msg, omitted = fit_attachments(
+                draft, attachments, self._size_limit(server)
+            )
+            try:
+                server.send_message(msg)
+                return
+            except smtplib.SMTPException as e:
+                if len(omitted) == len(attachments) or not is_size_rejection(e):
+                    raise
+                # The server's limit is lower than it advertised (or it
+                # advertised none).  The text matters more than the
+                # files, so it goes out without them.
+                logger.warning(
+                    "SMTP server rejected message as too large (%s); "
+                    "resending without attachments",
+                    e,
+                )
+        # Some servers hang up after refusing a message, so the resend
+        # opens a new session.
+        note = omitted_note(
+            attachments,
+            "because the mail server rejected the email as too large",
+        )
+        with self._connect() as server:
+            server.send_message(draft.build([], note))
+
+    def _size_limit(self, server: smtplib.SMTP) -> int:
+        """Return the largest message size to send over *server*.
+
+        That is the configured limit, or the ``SIZE`` the server
+        advertised in its EHLO response if that is lower.
+        """
+        limit = self.config.smtp.max_message_size_mb * MB
+        try:
+            advertised = int(server.esmtp_features.get("size", ""))
+        except ValueError:
+            return limit
+        # RFC 1870: SIZE 0 means the server sets no fixed limit.
+        return min(limit, advertised) if advertised > 0 else limit
+
+    @contextmanager
+    def _connect(self) -> Generator[smtplib.SMTP]:
+        """Open an SMTP session, upgraded to TLS and authenticated."""
+        with smtplib.SMTP(
+            self.config.smtp.server, self.config.smtp.port
+        ) as server:
+            server.ehlo()
+            # Only use STARTTLS if the server supports it
+            if server.has_extn("STARTTLS"):
+                server.starttls()
+                server.ehlo()  # Re-identify after TLS for AUTH capabilities
+            # Only authenticate if required (allows testing without auth)
+            if self.config.smtp.require_auth:
+                self._authenticate(server)
+            yield server
+
+    def _authenticate(self, server: smtplib.SMTP) -> None:
+        """Log in with OAuth2 (Microsoft 365) or the account password."""
+        if self._token_provider:
+            # Microsoft OAuth2: XOAUTH2 SASL mechanism
+            auth_string = self._token_provider.generate_xoauth2_string(
+                self.config.account.username
+            )
+
+            def _xoauth2_authobject(
+                _challenge: bytes | None = None,
+            ) -> str:
+                if _challenge is not None:
+                    # Server sent an error challenge (334);
+                    # respond with empty string to acknowledge
+                    # per the XOAUTH2 spec.
+                    return ""
+                return auth_string
+
+            server.auth("XOAUTH2", _xoauth2_authobject)
+        else:
+            assert self.config.account.password is not None
+            server.login(
+                self.config.account.username,
+                self.config.account.password,
+            )

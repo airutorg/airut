@@ -19,29 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from .conftest import get_message_text
+from .conftest import get_message_attachments, get_message_text
 from .environment import IntegrationEnvironment
-
-
-def get_message_attachments(msg) -> list[tuple[str, bytes]]:
-    """Extract attachments from email message.
-
-    Args:
-        msg: Email message (MIMEMultipart or similar).
-
-    Returns:
-        List of (filename, content) tuples for attachments.
-    """
-    attachments = []
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_disposition() == "attachment":
-                filename = part.get_filename()
-                if filename:
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        attachments.append((filename, payload))
-    return attachments
 
 
 class TestOutboxHandling:

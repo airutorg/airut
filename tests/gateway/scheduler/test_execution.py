@@ -22,7 +22,6 @@ from airut.gateway.config import (
 from airut.gateway.scheduler.execution import (
     _build_prompt,
     _build_script_error_prompt,
-    _format_size,
     _truncate_output,
     execute_scheduled_task,
 )
@@ -275,19 +274,6 @@ class TestTruncateOutput:
         output = "x" * 200000
         result = _truncate_output(output, 1024)
         assert "KB" in result or "MB" in result
-
-
-class TestFormatSize:
-    """Test size formatting."""
-
-    def test_bytes(self) -> None:
-        assert _format_size(500) == "500B"
-
-    def test_kb(self) -> None:
-        assert _format_size(2048) == "2KB"
-
-    def test_mb(self) -> None:
-        assert _format_size(2 * 1024 * 1024) == "2.0MB"
 
 
 class TestBuildScriptErrorPrompt:
