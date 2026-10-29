@@ -9,6 +9,7 @@ import json
 import subprocess
 import urllib.error
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from airut.version import (
@@ -318,6 +319,58 @@ def _mock_dist(direct_url_json: str | None) -> MagicMock:
 class TestGetInstallSource:
     """Tests for get_install_source function."""
 
+    @patch("airut.version.NIX_STORE", Path("/nix/store"))
+    @patch("airut.version.distribution")
+    def test_nix_store_install(self, mock_distribution: MagicMock) -> None:
+        """A package in the Nix store is a 'nix' install.
+
+        Nix-built packages have no direct_url.json, which would
+        otherwise read as a PyPI install.
+        """
+        mock_distribution.return_value = _mock_dist(None)
+        nix_file = (
+            "/nix/store/abc123-python3.13-airut-0.9.0/lib/python3.13/"
+            "site-packages/airut/version.py"
+        )
+        with patch("airut.version.__file__", nix_file):
+            assert get_install_source().kind == "nix"
+
+    @patch("airut.version.distribution")
+    def test_nix_store_via_symlink(
+        self, mock_distribution: MagicMock, tmp_path: Path
+    ) -> None:
+        """A profile path that links into the store is a 'nix' install."""
+        mock_distribution.return_value = _mock_dist(None)
+        store = tmp_path / "store"
+        package = store / "abc-airut" / "airut"
+        package.mkdir(parents=True)
+        (package / "version.py").touch()
+        profile = tmp_path / "profile"
+        profile.symlink_to(store / "abc-airut")
+        with (
+            patch("airut.version.NIX_STORE", store),
+            patch("airut.version.__file__", str(profile / "airut/version.py")),
+        ):
+            assert get_install_source().kind == "nix"
+
+    @patch("airut.version.NIX_STORE", Path("/nix/store"))
+    @patch("airut.version.distribution")
+    def test_uv_tool_on_nix_python_is_not_nix(
+        self, mock_distribution: MagicMock
+    ) -> None:
+        """Only the package's location counts, not the interpreter's."""
+        mock_distribution.return_value = _mock_dist(None)
+        uv_file = (
+            "/home/user/.local/share/uv/tools/airut/lib/python3.13/"
+            "site-packages/airut/version.py"
+        )
+        with (
+            patch("airut.version.__file__", uv_file),
+            patch("sys.prefix", "/nix/store/xyz-python3-3.13.0"),
+            patch("sys.executable", "/nix/store/xyz-python3-3.13.0/bin/python"),
+        ):
+            assert get_install_source().kind == "pypi"
+
     @patch("airut.version.distribution")
     def test_pypi_install(self, mock_distribution: MagicMock) -> None:
         """Returns 'pypi' when no direct_url.json exists."""
@@ -602,6 +655,20 @@ class TestCheckGitHub:
 
 class TestCheckUpstreamVersion:
     """Tests for check_upstream_version routing."""
+
+    @patch("airut.version._check_github")
+    @patch("airut.version._check_pypi")
+    @patch(
+        "airut.version.get_install_source",
+        return_value=InstallSource(kind="nix"),
+    )
+    def test_nix_not_checked(
+        self, _src: MagicMock, mock_pypi: MagicMock, mock_github: MagicMock
+    ) -> None:
+        """A Nix install is updated through its Nix configuration."""
+        assert check_upstream_version(_make_vi()) is None
+        mock_pypi.assert_not_called()
+        mock_github.assert_not_called()
 
     @patch("airut.version._check_pypi")
     @patch(

@@ -117,6 +117,18 @@ def _isolate_airut_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _not_a_nix_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep install-source detection independent of where airut lives.
+
+    Run against a Nix-store build, every test would otherwise see a
+    Nix install.  Tests of Nix behaviour patch ``NIX_STORE`` back.
+    """
+    monkeypatch.setattr(
+        "airut.version.NIX_STORE", Path("/nonexistent/nix/store")
+    )
+
+
+@pytest.fixture(autouse=True)
 def _restore_root_logger() -> Iterator[None]:
     """Undo root logger changes made by a test.
 

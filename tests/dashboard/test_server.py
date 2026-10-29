@@ -30,6 +30,7 @@ from airut.dashboard.tracker import (
     TaskTracker,
 )
 from airut.dashboard.versioned import VersionClock, VersionedStore
+from airut.version import InstallSource
 
 
 class TestDashboardServer:
@@ -1912,6 +1913,35 @@ class TestUpdateEndpoint:
         assert "<a " in html  # Should be a link
         assert "v0.9.0" in html  # release URL contains version
         assert "v0.8.0" in html  # title contains current version
+
+    @patch(
+        "airut.dashboard.handlers.get_install_source",
+        return_value=InstallSource(kind="nix"),
+    )
+    @patch("airut.dashboard.handlers.check_upstream_version", return_value=None)
+    def test_nix_install_badge(
+        self, _check: MagicMock, _source: MagicMock
+    ) -> None:
+        """A Nix install gets a neutral badge, not "up to date"."""
+        from airut.version import GitVersionInfo
+
+        git_info = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        server = DashboardServer(TaskTracker(), git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        data = json.loads(client.get("/api/update").get_data(as_text=True))
+        assert data["install_source"] == "nix"
+        assert data["update_available"] is False
+
+        html = client.get("/api/update?format=html").get_data(as_text=True)
+        assert "version-status managed" in html
+        assert ">Nix</span>" in html
+        assert "up to date" not in html
 
     def test_render_update_html_update_without_release_url(self) -> None:
         """Test _render_update_html returns span when update has no URL."""

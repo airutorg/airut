@@ -429,6 +429,38 @@ def cmd_migrate(argv: list[str]) -> int:
 # ── Service status helpers ──────────────────────────────────────────
 
 
+def _is_nix_install() -> bool:
+    """Whether Airut runs from the Nix store.
+
+    A Nix configuration then provides both updates and the service, so
+    ``update``, ``install-service`` and ``uninstall-service`` do not
+    apply.
+    """
+    from airut.version import get_install_source
+
+    return get_install_source().kind == "nix"
+
+
+#: Shown when a command does not apply to a Nix-managed installation.
+_NIX_MANAGED = "Airut is installed in the Nix store"
+
+
+def _refuse_nix_service_management(hint: str = "") -> bool:
+    """Log an error and return True if a Nix configuration owns the service.
+
+    Args:
+        hint: Extra advice appended to the error.
+    """
+    if not _is_nix_install():
+        return False
+    logger.error(
+        "%s: the service comes from your Nix configuration.%s",
+        _NIX_MANAGED,
+        hint,
+    )
+    return True
+
+
 def _is_service_installed() -> bool:
     """Return True if the airut systemd user unit file exists."""
     from airut.install_services import get_systemd_user_dir
@@ -559,6 +591,9 @@ def cmd_check(argv: list[str]) -> int:
     vi = get_git_version_info()
     version_label = vi.version or vi.sha_short
     print(s.bold(f"Airut {version_label}"))
+    nix = _is_nix_install()
+    if nix:
+        print(f"  {_NIX_MANAGED}; update it through your Nix configuration.")
 
     upstream = check_upstream_version(vi)
     if upstream and upstream.update_available:
@@ -677,7 +712,9 @@ def cmd_check(argv: list[str]) -> int:
 
     # ── Service status (informational) ──────────────────────────
     print(s.bold("Service"))
-    if _is_service_installed():
+    if nix:
+        print(f"  {s.dim('Managed by your Nix configuration.')}")
+    elif _is_service_installed():
         if _is_service_running():
             label = s.green("running")
             if config:
@@ -845,6 +882,10 @@ def cmd_update(argv: list[str]) -> int:
     """
     s = _Style(_use_color())
     args = _parse_args(argv, flags=frozenset({"--force", "--wait"}))
+    if _is_nix_install():
+        print(f"  {s.red('Cannot update:')} {_NIX_MANAGED}.")
+        print("  Update it through your Nix configuration.")
+        return 1
     config_path = args.config_path
     force = "--force" in args.flags
     wait = "--wait" in args.flags
@@ -1074,6 +1115,9 @@ def cmd_install_service(argv: list[str]) -> int:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    if _refuse_nix_service_management():
+        return 1
+
     try:
         install_services()
         return 0
@@ -1102,6 +1146,13 @@ def cmd_uninstall_service(argv: list[str]) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    if _refuse_nix_service_management(
+        " To remove a unit left over from a uv install, run: systemctl"
+        " --user disable --now airut.service, then delete"
+        " ~/.config/systemd/user/airut.service."
+    ):
+        return 1
 
     try:
         uninstall_services()

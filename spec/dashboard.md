@@ -381,7 +381,8 @@ Three-column layout showing queued, in-progress, and completed tasks.
 - Git commit SHA or version tag (monospace, links to GitHub release/commit page)
 - Update status badge: green "up to date" or yellow "update available" (fetched
   asynchronously from `/api/update` to avoid blocking page load). Hover shows
-  current and latest version.
+  current and latest version. A Nix install shows a neutral "Nix" badge instead
+  and is not checked ([cli.md](cli.md#nix-installs)).
 - Config reload status badge: blue "reload pending" when a server-scope config
   change is queued and will be applied once the service becomes idle (fetched
   from `/api/config-status`, polled every 30s)

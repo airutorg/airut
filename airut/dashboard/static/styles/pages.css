@@ -58,6 +58,7 @@ h2 {
 .version-status.update-available { background: var(--status-warning-bg); color: var(--status-warning); }
 .version-status.checking { background: var(--bg-code); color: var(--text-tertiary); }
 .version-status.check-failed { background: var(--bg-code); color: var(--text-tertiary); }
+.version-status.managed { background: var(--bg-code); color: var(--text-secondary); }
 .config-status.reload-pending { background: var(--status-info-bg); color: var(--status-info); }
 
 /* ---- Boot state ---- */

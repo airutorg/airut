@@ -55,6 +55,7 @@ from airut.sandbox import NETWORK_LOG_FILENAME, EventLog, NetworkLog
 from airut.version import (
     GitVersionInfo,
     check_upstream_version,
+    get_install_source,
     github_commit_url,
     github_release_url,
 )
@@ -256,6 +257,7 @@ class RequestHandlers:
                 self._git_version_info.version
                 or self._git_version_info.sha_short
             ),
+            "install_source": get_install_source().kind,
         }
 
         if upstream is not None:
@@ -297,7 +299,13 @@ class RequestHandlers:
         """
         import html as html_mod
 
-        if data.get("update_available"):
+        if data.get("install_source") == "nix":
+            # Not checked: the Nix configuration decides the version.
+            badge = (
+                '<span class="version-badge version-status managed"'
+                ' title="Updated through your Nix configuration">Nix</span>'
+            )
+        elif data.get("update_available"):
             release_url = data.get("release_url")
             current = html_mod.escape(str(data.get("current", "")))
             latest = html_mod.escape(str(data.get("latest", "")))
