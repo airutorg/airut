@@ -5,8 +5,8 @@
 
 """Configuration for gateway service.
 
-Server configuration is loaded from a YAML file.  The default location
-follows the XDG Base Directory Specification:
+Server configuration is loaded from a YAML file: ``$AIRUT_CONFIG`` when
+set, otherwise the XDG Base Directory location
 
     ``$XDG_CONFIG_HOME/airut/airut.yaml``
     (typically ``~/.config/airut/airut.yaml``)
@@ -23,6 +23,7 @@ gateway can be deployed independently.
 """
 
 import logging
+import os
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,35 +50,80 @@ logger = logging.getLogger(__name__)
 _APP_NAME = "airut"
 
 
+#: Environment variable overriding the server config file path.
+CONFIG_PATH_ENV = "AIRUT_CONFIG"
+
+#: Environment variable overriding the state directory.
+STATE_DIR_ENV = "AIRUT_STATE_DIR"
+
+
+def _env_path(name: str) -> Path | None:
+    """Return the path in environment variable *name*, if set and non-empty.
+
+    ``~`` is expanded and relative paths are made absolute (against the
+    current directory), so the path stays valid as a container mount
+    source and across ``chdir``.
+    """
+    value = os.environ.get(name, "").strip()
+    return Path(value).expanduser().absolute() if value else None
+
+
 def get_config_path() -> Path:
     """Return the default server config file path.
 
-    Uses XDG: ``$XDG_CONFIG_HOME/airut/airut.yaml`` (typically
-    ``~/.config/airut/airut.yaml``).
+    ``$AIRUT_CONFIG`` when set, otherwise XDG:
+    ``$XDG_CONFIG_HOME/airut/airut.yaml`` (typically
+    ``~/.config/airut/airut.yaml``).  A ``--config`` command-line
+    option takes precedence over both.
 
     Returns:
         Path to the config file.
     """
-    return user_config_path(_APP_NAME) / "airut.yaml"
+    return _env_path(CONFIG_PATH_ENV) or (
+        user_config_path(_APP_NAME) / "airut.yaml"
+    )
 
 
-def get_dotenv_path() -> Path:
-    """Return the default ``.env`` file path inside the XDG config directory.
+def get_dotenv_path(config_path: Path) -> Path:
+    """Return the ``.env`` file path for a config file.
 
-    Uses XDG: ``$XDG_CONFIG_HOME/airut/.env`` (typically
-    ``~/.config/airut/.env``).
+    The ``.env`` file lives next to the config file (typically
+    ``~/.config/airut/.env``).  Uses the directory of *config_path* as
+    given, without resolving symlinks.
+
+    Args:
+        config_path: Path to the server config file.
 
     Returns:
         Path to the ``.env`` file.
     """
-    return user_config_path(_APP_NAME) / ".env"
+    return config_path.parent / ".env"
+
+
+def get_state_dir() -> Path:
+    """Return the root directory for runtime state.
+
+    In order of precedence: ``$AIRUT_STATE_DIR``; systemd's
+    ``$STATE_DIRECTORY`` (set for units with ``StateDirectory=``; the
+    first entry if several are configured); XDG
+    ``$XDG_STATE_HOME/airut`` (typically ``~/.local/state/airut``).
+
+    Returns:
+        Path to the state directory.
+    """
+    explicit = _env_path(STATE_DIR_ENV)
+    if explicit is not None:
+        return explicit
+    systemd = os.environ.get("STATE_DIRECTORY", "").split(":")[0].strip()
+    if systemd:
+        return Path(systemd)
+    return user_state_path(_APP_NAME)
 
 
 def get_storage_dir(repo_id: str) -> Path:
     """Return the storage directory for a repository.
 
-    Uses XDG: ``$XDG_STATE_HOME/airut/<repo_id>`` (typically
-    ``~/.local/state/airut/<repo_id>``).
+    ``<state dir>/<repo_id>``; see :func:`get_state_dir`.
 
     Args:
         repo_id: Repository identifier.
@@ -85,7 +131,7 @@ def get_storage_dir(repo_id: str) -> Path:
     Returns:
         Path to the repo's storage directory.
     """
-    return user_state_path(_APP_NAME) / repo_id
+    return get_state_dir() / repo_id
 
 
 #: Signing type identifier for AWS SigV4/SigV4A credential re-signing.
@@ -1192,8 +1238,8 @@ class RepoServerConfig:
     environment.  Loaded from the ``repos.<name>`` section of the server
     config file.
 
-    Storage location is determined by ``get_storage_dir(repo_id)`` using
-    XDG state directory conventions.
+    Storage location is determined by ``get_storage_dir(repo_id)``, under
+    the state directory (see ``get_state_dir()``).
 
     Attributes:
         repo_id: Repository identifier (key from ``repos`` mapping).
@@ -1434,7 +1480,10 @@ class RepoServerConfig:
 
     @property
     def storage_dir(self) -> Path:
-        """Return the XDG state directory for this repo's persistent data."""
+        """Return this repo's directory under the state dir.
+
+        See :func:`get_state_dir`.
+        """
         return get_storage_dir(self.repo_id)
 
     def build_task_env(self) -> tuple[dict[str, str], ReplacementMap]:
@@ -1581,7 +1630,7 @@ class ServerConfig:
 
         Args:
             config_path: Path to YAML config file.  Defaults to
-                ``~/.config/airut/airut.yaml`` (XDG).
+                ``get_config_path()``.
 
         Returns:
             ConfigSnapshot wrapping a ServerConfig instance.

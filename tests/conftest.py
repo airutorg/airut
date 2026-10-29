@@ -10,16 +10,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import warnings
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from airut.gateway.dotenv_loader import reset_dotenv_state
 from tests.memory_tree import use_repo_files
 
 
@@ -94,6 +96,24 @@ def preserve_root_logger() -> Generator[None]:
         for handler in handlers:
             if handler not in root.handlers:
                 root.addHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_airut_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the developer's environment and ``.env`` loads out of tests.
+
+    ``AIRUT_CONFIG``, ``AIRUT_STATE_DIR`` and systemd's
+    ``STATE_DIRECTORY`` redirect config and state paths; tests must not
+    depend on whether the invoking shell sets them.  Variables a test's
+    ``.env`` file loads into ``os.environ`` are rolled back, and the
+    loader's load-once state is reset around each test.
+    """
+    for var in ("AIRUT_CONFIG", "AIRUT_STATE_DIR", "STATE_DIRECTORY"):
+        monkeypatch.delenv(var, raising=False)
+    reset_dotenv_state()
+    with patch.dict(os.environ):
+        yield
+    reset_dotenv_state()
 
 
 @pytest.fixture(autouse=True)

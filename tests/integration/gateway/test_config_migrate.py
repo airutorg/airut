@@ -189,11 +189,8 @@ class TestCmdCheckSchemaIntegration:
 
         config_path = tmp_path / "airut.yaml"
         config_path.write_text(config_text)
-        dotenv_path = tmp_path / ".env"
-
         with (
             patch("airut.cli.get_config_path", return_value=config_path),
-            patch("airut.cli.get_dotenv_path", return_value=dotenv_path),
             patch(
                 "airut.cli._check_dependency",
                 return_value=(True, "git: 2.43.0 (>= 2.25)"),

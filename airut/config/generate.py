@@ -633,7 +633,8 @@ _HEADER = """\
 #
 # Values tagged with !env are resolved from environment variables at load
 # time.  Use !env for secrets; put everything else inline.  Set env vars
-# in ~/.config/airut/.env (auto-loaded by the service).
+# in a .env file next to airut.yaml (typically ~/.config/airut/.env,
+# auto-loaded by the service).
 #
 # Use the vars: section to define shared values.  Reference them anywhere
 # with !var.  This avoids repeating the same server address, API key, or

@@ -317,7 +317,8 @@ RepoHandler.stop()
 ### Directory Structure
 
 Each conversation is an isolated session with git workspace and metadata.
-Storage uses XDG state directory: `~/.local/state/airut/<repo_id>/`.
+Storage lives under the state directory (default `~/.local/state/airut/`; see
+[cli.md](cli.md#configuration-paths)), in `<state dir>/<repo_id>/`.
 
 ```
 {STATE_DIR}/
@@ -608,8 +609,9 @@ All configuration lives in the **server config** (`~/.config/airut/airut.yaml`).
 This includes deployment infrastructure, channel credentials, operator controls,
 per-repo settings (model, effort, resource limits, network sandbox toggle), and
 credential pools. Values use `!env` tags to resolve from environment variables.
-A `.env` file is automatically loaded from `~/.config/airut/.env` (and from the
-working directory, if present) before resolving tags.
+A `.env` file next to the config file (typically `~/.config/airut/.env`) is
+automatically loaded, as is one in the working directory if present, before
+resolving tags.
 
 Repository-side files that remain in `.airut/`:
 

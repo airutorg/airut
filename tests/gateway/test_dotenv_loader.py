@@ -18,71 +18,46 @@ class TestLoadDotenvOnce:
         """Reset state before each test."""
         reset_dotenv_state()
 
+    def _config_path(self, tmp_path: Path, *, with_env: bool) -> Path:
+        """Return a config path in its own directory, optionally with .env."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        if with_env:
+            (config_dir / ".env").touch()
+        return config_dir / "airut.yaml"
+
     def test_idempotent(self, tmp_path: Path) -> None:
         """Second call is a no-op."""
-        mock_ld = MagicMock()
-        xdg_env = tmp_path / ".env"
-        xdg_env.touch()
-        with (
-            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
-            patch(
-                "airut.gateway.config.get_dotenv_path",
-                return_value=xdg_env,
-            ),
-        ):
-            load_dotenv_once()
-            load_dotenv_once()
-        assert mock_ld.call_count == 1
-
-    def test_loads_xdg_env(self, tmp_path: Path) -> None:
-        """Loads from XDG config directory when file exists."""
-        xdg_env = tmp_path / "config" / ".env"
-        xdg_env.parent.mkdir()
-        xdg_env.touch()
+        config_path = self._config_path(tmp_path, with_env=True)
         mock_ld = MagicMock()
         with (
             patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
-            patch(
-                "airut.gateway.config.get_dotenv_path",
-                return_value=xdg_env,
-            ),
-            patch("airut.gateway.dotenv_loader.Path") as mock_path_cls,
-        ):
-            # CWD .env does not exist
-            mock_cwd_env = MagicMock()
-            mock_cwd_env.exists.return_value = False
-            mock_path_cls.cwd.return_value.__truediv__ = lambda self, x: (
-                mock_cwd_env
-            )
-            load_dotenv_once()
-        mock_ld.assert_called_once_with(xdg_env)
-
-    def test_loads_cwd_env(self, tmp_path: Path) -> None:
-        """Loads from CWD when XDG .env doesn't exist."""
-        xdg_env = tmp_path / "config" / ".env"
-        cwd_env = tmp_path / "cwd" / ".env"
-        cwd_env.parent.mkdir(parents=True)
-        cwd_env.touch()
-        mock_ld = MagicMock()
-        with (
-            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
-            patch(
-                "airut.gateway.config.get_dotenv_path",
-                return_value=xdg_env,
-            ),
             patch(
                 "airut.gateway.dotenv_loader.Path.cwd",
-                return_value=cwd_env.parent,
+                return_value=tmp_path / "cwd",
             ),
         ):
-            load_dotenv_once()
-        mock_ld.assert_called_once_with(cwd_env)
+            load_dotenv_once(config_path)
+            load_dotenv_once(config_path)
+        assert mock_ld.call_count == 1
 
-    def test_loads_both(self, tmp_path: Path) -> None:
-        """Loads XDG first, then CWD when both exist."""
-        xdg_env = tmp_path / "config" / ".env"
-        xdg_env.parent.mkdir()
-        xdg_env.touch()
+    def test_loads_env_next_to_config(self, tmp_path: Path) -> None:
+        """Loads the .env in the config file's directory."""
+        config_path = self._config_path(tmp_path, with_env=True)
+        mock_ld = MagicMock()
+        with (
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
+            patch(
+                "airut.gateway.dotenv_loader.Path.cwd",
+                return_value=tmp_path / "cwd",
+            ),
+        ):
+            load_dotenv_once(config_path)
+        mock_ld.assert_called_once_with(config_path.parent / ".env")
+
+    def test_loads_cwd_env(self, tmp_path: Path) -> None:
+        """Loads from CWD when no .env is next to the config."""
+        config_path = self._config_path(tmp_path, with_env=False)
         cwd_env = tmp_path / "cwd" / ".env"
         cwd_env.parent.mkdir()
         cwd_env.touch()
@@ -90,52 +65,60 @@ class TestLoadDotenvOnce:
         with (
             patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
-                "airut.gateway.config.get_dotenv_path",
-                return_value=xdg_env,
+                "airut.gateway.dotenv_loader.Path.cwd",
+                return_value=cwd_env.parent,
             ),
+        ):
+            load_dotenv_once(config_path)
+        mock_ld.assert_called_once_with(cwd_env)
+
+    def test_loads_both(self, tmp_path: Path) -> None:
+        """Loads the config directory's .env first, then CWD's."""
+        config_path = self._config_path(tmp_path, with_env=True)
+        cwd_env = tmp_path / "cwd" / ".env"
+        cwd_env.parent.mkdir()
+        cwd_env.touch()
+        mock_ld = MagicMock()
+        with (
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.dotenv_loader.Path.cwd",
                 return_value=cwd_env.parent,
             ),
         ):
-            load_dotenv_once()
+            load_dotenv_once(config_path)
         assert mock_ld.call_args_list == [
-            call(xdg_env),
+            call(config_path.parent / ".env"),
             call(cwd_env),
         ]
 
     def test_no_env_files(self, tmp_path: Path) -> None:
         """No-op when neither .env file exists."""
+        config_path = self._config_path(tmp_path, with_env=False)
         mock_ld = MagicMock()
-        xdg_env = tmp_path / "nonexistent" / ".env"
         with (
             patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
-            patch(
-                "airut.gateway.config.get_dotenv_path",
-                return_value=xdg_env,
-            ),
             patch(
                 "airut.gateway.dotenv_loader.Path.cwd",
                 return_value=tmp_path / "also_nonexistent",
             ),
         ):
-            load_dotenv_once()
+            load_dotenv_once(config_path)
         mock_ld.assert_not_called()
 
     def test_reset_allows_reload(self, tmp_path: Path) -> None:
         """reset_dotenv_state allows re-loading."""
+        config_path = self._config_path(tmp_path, with_env=True)
         mock_ld = MagicMock()
-        xdg_env = tmp_path / ".env"
-        xdg_env.touch()
         with (
             patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
-                "airut.gateway.config.get_dotenv_path",
-                return_value=xdg_env,
+                "airut.gateway.dotenv_loader.Path.cwd",
+                return_value=tmp_path / "cwd",
             ),
         ):
-            load_dotenv_once()
+            load_dotenv_once(config_path)
             assert mock_ld.call_count == 1
             reset_dotenv_state()
-            load_dotenv_once()
+            load_dotenv_once(config_path)
             assert mock_ld.call_count == 2

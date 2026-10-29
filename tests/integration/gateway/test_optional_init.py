@@ -121,7 +121,6 @@ class TestCheckWithoutConfig:
 
         with (
             patch("airut.cli.get_config_path", return_value=config_path),
-            patch("airut.cli.get_dotenv_path", return_value=tmp_path / ".env"),
             patch("airut.cli._check_dependency", return_value=(True, "ok")),
             patch("airut.cli._check_cgroups_v2", return_value=(True, "ok")),
             patch("airut.cli._is_service_installed", return_value=False),

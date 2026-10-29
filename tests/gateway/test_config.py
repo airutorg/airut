@@ -46,6 +46,7 @@ from airut.gateway.config import (
     generate_surrogate,
     get_config_path,
     get_dotenv_path,
+    get_state_dir,
     get_storage_dir,
 )
 from airut.logging import SecretFilter
@@ -818,29 +819,96 @@ def test_repo_server_config_internal_auth_fallback_enabled(
 # ---------------------------------------------------------------------------
 
 
-def test_get_config_path() -> None:
-    """get_config_path returns XDG config directory."""
-    path = get_config_path()
-    assert path.name == "airut.yaml"
-    assert path.parent.name == "airut"
+class TestPathHelpers:
+    """Config, .env and state paths, and their environment overrides."""
 
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # AIRUT_STATE_DIR: the gateway conftest points it at tmp_path.
+        for var in ("AIRUT_STATE_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"):
+            monkeypatch.delenv(var, raising=False)
 
-def test_get_dotenv_path() -> None:
-    """get_dotenv_path returns .env in XDG config directory."""
-    path = get_dotenv_path()
-    assert path.name == ".env"
-    assert path.parent.name == "airut"
+    def test_config_path_default(self) -> None:
+        """Without overrides, the config lives in the XDG config dir."""
+        assert get_config_path() == Path.home() / ".config/airut/airut.yaml"
 
+    def test_config_path_xdg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/config")
+        assert get_config_path() == Path("/xdg/config/airut/airut.yaml")
 
-def test_get_storage_dir() -> None:
-    """get_storage_dir returns directory keyed by repo_id."""
-    path = get_storage_dir("my-repo")
-    assert path.name == "my-repo"
+    def test_config_path_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRUT_CONFIG wins over XDG."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/config")
+        monkeypatch.setenv("AIRUT_CONFIG", "/etc/airut/airut.yaml")
+        assert get_config_path() == Path("/etc/airut/airut.yaml")
 
+    def test_config_path_blank_env_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AIRUT_CONFIG", "  ")
+        assert get_config_path() == Path.home() / ".config/airut/airut.yaml"
 
-def test_get_storage_dir_unique_per_repo() -> None:
-    """Different repo_ids produce different storage dirs."""
-    assert get_storage_dir("repo-a") != get_storage_dir("repo-b")
+    def test_dotenv_next_to_config(self) -> None:
+        """The .env file sits in the config file's directory."""
+        assert get_dotenv_path(Path("/etc/airut/airut.yaml")) == Path(
+            "/etc/airut/.env"
+        )
+
+    def test_state_dir_default(self) -> None:
+        assert get_state_dir() == Path.home() / ".local/state/airut"
+
+    def test_state_dir_xdg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("XDG_STATE_HOME", "/xdg/state")
+        assert get_state_dir() == Path("/xdg/state/airut")
+
+    def test_state_dir_systemd(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Systemd's STATE_DIRECTORY wins over XDG."""
+        monkeypatch.setenv("XDG_STATE_HOME", "/xdg/state")
+        monkeypatch.setenv("STATE_DIRECTORY", "/var/lib/airut")
+        assert get_state_dir() == Path("/var/lib/airut")
+
+    def test_state_dir_systemd_first_of_several(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With several StateDirectory= entries, the first is used."""
+        monkeypatch.setenv("STATE_DIRECTORY", "/var/lib/airut:/var/lib/other")
+        assert get_state_dir() == Path("/var/lib/airut")
+
+    def test_state_dir_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AIRUT_STATE_DIR wins over STATE_DIRECTORY and XDG."""
+        monkeypatch.setenv("STATE_DIRECTORY", "/var/lib/airut")
+        monkeypatch.setenv("AIRUT_STATE_DIR", "/srv/airut")
+        assert get_state_dir() == Path("/srv/airut")
+
+    def test_state_dir_env_relative_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative AIRUT_STATE_DIR is anchored at the current directory.
+
+        The state dir is used as a podman mount source, where a relative
+        path would be taken for a named volume.
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("AIRUT_STATE_DIR", "state")
+        assert get_state_dir() == tmp_path / "state"
+
+    def test_env_paths_expand_user(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AIRUT_STATE_DIR", "~/airut-state")
+        monkeypatch.setenv("AIRUT_CONFIG", "~/airut.yaml")
+        assert get_state_dir() == Path.home() / "airut-state"
+        assert get_config_path() == Path.home() / "airut.yaml"
+
+    def test_storage_dir_under_state_dir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AIRUT_STATE_DIR", "/srv/airut")
+        assert get_storage_dir("my-repo") == Path("/srv/airut/my-repo")
 
 
 # ---------------------------------------------------------------------------
@@ -1470,7 +1538,7 @@ class TestFromYaml:
         with patch("airut.config.source.load_dotenv_once") as mock_dotenv:
             ServerConfig.from_yaml(yaml_path)
 
-        mock_dotenv.assert_called_once()
+        mock_dotenv.assert_called_once_with(yaml_path)
 
     def test_microsoft_oauth2_config(
         self, master_repo: Path, tmp_path: Path

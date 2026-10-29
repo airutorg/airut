@@ -19,6 +19,7 @@ regular user (not root) using systemd user services and rootless Podman.
   - [8. Install Services](#8-install-services)
   - [9. Verify and Configure](#9-verify-and-configure)
 - [Configuration](#configuration)
+  - [Custom Paths](#custom-paths)
   - [Server Config (`~/.config/airut/airut.yaml`)](#server-config-configairutairutyaml)
   - [Secrets](#secrets)
   - [Masked Secrets](#masked-secrets)
@@ -257,8 +258,8 @@ chmod 600 ~/.config/airut/.env
 ```
 
 When running `airut` interactively, a `.env` file in the current working
-directory is also loaded (after the XDG file). Variables already set by the XDG
-`.env` are not overwritten.
+directory is also loaded (after the one next to `airut.yaml`). Variables already
+set by that `.env` are not overwritten.
 
 See [Configuration](#configuration) for the full YAML schema reference.
 
@@ -323,6 +324,28 @@ All settings described below can be managed via the [config editor](#dashboard)
 in the web dashboard. The YAML field paths shown here (e.g.,
 `repos.<repo>.email.imap.server`) correspond to the field labels in the editor.
 This section serves as a reference for the full schema.
+
+### Custom Paths
+
+The defaults suit a single-user install. To put files elsewhere (for example
+when the config is managed declaratively):
+
+- **Config file** — `--config PATH` on `init`, `check`, `migrate`, `update` and
+  `run-gateway`, or `AIRUT_CONFIG`. The `.env` file is read from the same
+  directory. For the installed service, set `Environment=AIRUT_CONFIG=...` in a
+  drop-in (`systemctl --user edit airut`).
+- **State** (git mirrors, conversations, cached Claude binaries) —
+  `AIRUT_STATE_DIR`, or systemd's `StateDirectory=` (honored via
+  `$STATE_DIRECTORY`). Defaults to `~/.local/state/airut/`.
+
+Set these in the process environment (the service unit or your shell), not in
+`.env`, which is only read once the config file has been found. Export the same
+values in the shell you run `airut check` and `airut update` from: otherwise
+they inspect the default config and state, and `update` runs its readiness check
+against the wrong file. The network sandbox's CA certificate stays in
+`~/.airut-mitmproxy/`, so the service user needs a writable home.
+
+See [cli.md](../spec/cli.md#configuration-paths) for the precedence rules.
 
 ### Server Config (`~/.config/airut/airut.yaml`)
 

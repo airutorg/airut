@@ -26,12 +26,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 from airut._json_types import JsonDict
@@ -40,6 +42,7 @@ from airut.gateway.config import (
     ServerConfig,
     get_config_path,
     get_dotenv_path,
+    get_state_dir,
 )
 
 
@@ -80,6 +83,82 @@ commands:
 
 Run 'airut <command> --help' for command-specific help.\
 """
+
+
+class _UsageError(Exception):
+    """Invalid command-line arguments (exit code 2)."""
+
+
+@dataclass(frozen=True)
+class _Args:
+    """Parsed subcommand arguments.
+
+    Attributes:
+        flags: Boolean flags given (e.g. ``--force``).
+        config_path: Selected config file: ``--config`` if given, else
+            :func:`get_config_path` (``$AIRUT_CONFIG`` or the XDG
+            default).
+        config_from_flag: Whether ``--config`` selected the file.
+    """
+
+    flags: frozenset[str]
+    config_path: Path
+    config_from_flag: bool
+
+
+def _parse_args(
+    argv: list[str], *, flags: frozenset[str] = frozenset()
+) -> _Args:
+    """Parse subcommand arguments.
+
+    Accepts the given boolean *flags* and ``--config PATH`` /
+    ``--config=PATH`` (the last one wins).  The path expands ``~`` and
+    is made absolute, like ``$AIRUT_CONFIG``.
+
+    Args:
+        argv: Subcommand arguments.
+        flags: Boolean flags the subcommand accepts.
+
+    Returns:
+        Parsed arguments.
+
+    Raises:
+        _UsageError: On an unrecognized argument or a ``--config``
+            without a value.
+    """
+    seen: set[str] = set()
+    config_value: str | None = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        i += 1
+        if arg == "--config":
+            config_value = argv[i] if i < len(argv) else ""
+            i += 1
+        elif arg.startswith("--config="):
+            config_value = arg.removeprefix("--config=")
+        elif arg in flags:
+            seen.add(arg)
+            continue
+        else:
+            raise _UsageError(f"unrecognized argument: {arg}")
+        if not config_value or config_value.startswith("-"):
+            raise _UsageError("--config requires a path")
+
+    if config_value is None:
+        return _Args(frozenset(seen), get_config_path(), False)
+    config_path = Path(config_value).expanduser().absolute()
+    return _Args(frozenset(seen), config_path, True)
+
+
+def _reject_args(argv: list[str]) -> None:
+    """Reject any arguments, for subcommands that take none.
+
+    Raises:
+        _UsageError: If *argv* is not empty.
+    """
+    if argv:
+        raise _UsageError(f"unrecognized argument: {argv[0]}")
 
 
 def _parse_version(output: str) -> tuple[int, ...]:
@@ -273,18 +352,19 @@ _DOCS_BASE = "https://github.com/airutorg/airut/blob/main"
 def cmd_init(argv: list[str]) -> int:
     """Create a stub server configuration file.
 
-    Creates ``~/.config/airut/airut.yaml`` with a minimal commented
-    template if the file does not already exist.  When a new file is
-    created, prints links to the deployment and repo-onboarding guides
-    to help the user complete configuration.
+    Creates the config file (``~/.config/airut/airut.yaml`` unless
+    ``--config`` or ``$AIRUT_CONFIG`` selects another) with a minimal
+    commented template if the file does not already exist.  When a new
+    file is created, prints links to the deployment and repo-onboarding
+    guides to help the user complete configuration.
 
     Args:
-        argv: Extra arguments (currently unused).
+        argv: Arguments (``--config PATH``).
 
     Returns:
         Exit code (always 0).
     """
-    config_path = get_config_path()
+    config_path = _parse_args(argv).config_path
 
     if config_path.exists():
         print(f"Config already exists: {config_path}")
@@ -313,13 +393,13 @@ def cmd_migrate(argv: list[str]) -> int:
     Preserves ``!env`` and ``!var`` tags during round-trip.
 
     Args:
-        argv: Extra arguments (currently unused).
+        argv: Arguments (``--config PATH``).
 
     Returns:
         Exit code (0 on success, 1 on error).
     """
     s = _Style(_use_color())
-    config_path = get_config_path()
+    config_path = _parse_args(argv).config_path
 
     if not config_path.exists():
         print(f"  {s.red('Error:')} Config file not found: {config_path}")
@@ -463,13 +543,15 @@ def cmd_check(argv: list[str]) -> int:
     failures affect the exit code; service status is informational only.
 
     Args:
-        argv: Extra arguments (currently unused).
+        argv: Arguments (``--config PATH``).
 
     Returns:
         0 if all checks pass, 1 if any check fails.
     """
     s = _Style(_use_color())
     all_ok = True
+    args = _parse_args(argv)
+    config_path = args.config_path
 
     # ── Version ─────────────────────────────────────────────────
     from airut.version import check_upstream_version, get_git_version_info
@@ -498,7 +580,6 @@ def cmd_check(argv: list[str]) -> int:
 
     # ── Configuration ───────────────────────────────────────────
     print(s.bold("Configuration"))
-    config_path = get_config_path()
     print(f"  Config file: {s.dim(str(config_path))}")
 
     config: ServerConfig | None = None
@@ -543,8 +624,11 @@ def cmd_check(argv: list[str]) -> int:
                     f"{s.yellow('migration pending')} "
                     f"(v{file_version} → v{CURRENT_CONFIG_VERSION})"
                 )
+                migrate_cmd = "airut migrate"
+                if args.config_from_flag:
+                    migrate_cmd += f" --config {shlex.quote(str(config_path))}"
                 print(
-                    f"               Run {s.cyan('airut migrate')} "
+                    f"               Run {s.cyan(migrate_cmd)} "
                     f"to update, or save from dashboard."
                 )
         except ConfigError:
@@ -552,9 +636,10 @@ def cmd_check(argv: list[str]) -> int:
             # already reported above.
             pass
 
-    dotenv_path = get_dotenv_path()
+    dotenv_path = get_dotenv_path(config_path)
     if dotenv_path.exists():
         print(f"  Env file:    {s.dim(str(dotenv_path))}")
+    print(f"  State dir:   {s.dim(str(get_state_dir()))}")
 
     print()
 
@@ -624,13 +709,15 @@ def cmd_check(argv: list[str]) -> int:
 # ── update subcommand ───────────────────────────────────────────────
 
 
-def _load_config_for_status() -> ServerConfig | None:
-    """Load server config for status queries (update, check).
+def _load_config_for_status(config_path: Path) -> ServerConfig | None:
+    """Load server config for status queries (update).
 
     Returns the config from the YAML file if it exists, or the built-in
     defaults if no file is found.  Returns None on parse/load errors.
+
+    Args:
+        config_path: Path to the config file.
     """
-    config_path = get_config_path()
     if not config_path.exists():
         return ServerConfig.default().value
 
@@ -641,18 +728,21 @@ def _load_config_for_status() -> ServerConfig | None:
         return None
 
 
-def _get_active_task_counts() -> tuple[int, int] | None:
+def _get_active_task_counts(config_path: Path) -> tuple[int, int] | None:
     """Query the running gateway for active task counts.
 
     Loads the server config to determine the local dashboard address,
     then fetches ``/api/health`` to get task counts.
+
+    Args:
+        config_path: Path to the config file.
 
     Returns:
         ``(running, waiting)`` tuple, or None if the service is not
         reachable or not configured.  ``running`` counts executing +
         authenticating tasks; ``waiting`` counts queued + pending.
     """
-    config = _load_config_for_status()
+    config = _load_config_for_status(config_path)
     if config is None:
         return None
 
@@ -686,11 +776,14 @@ def _get_active_task_counts() -> tuple[int, int] | None:
     return running, waiting
 
 
-def _has_version_mismatch() -> bool:
+def _has_version_mismatch(config_path: Path) -> bool:
     """Check if the running service version differs from the installed one.
 
     Loads the server config, fetches the running version from the
     dashboard ``/api/version`` endpoint, and compares SHA hashes.
+
+    Args:
+        config_path: Path to the config file.
 
     Returns:
         True if the running service has a different SHA than the
@@ -699,7 +792,7 @@ def _has_version_mismatch() -> bool:
     """
     from airut.version import get_git_version_info
 
-    config = _load_config_for_status()
+    config = _load_config_for_status(config_path)
     if config is None:
         return False
 
@@ -736,19 +829,21 @@ def cmd_update(argv: list[str]) -> int:
     gateway is idle.
 
     Args:
-        argv: Extra arguments (``--force``, ``--wait``).
+        argv: Arguments (``--force``, ``--wait``, ``--config PATH``).
 
     Returns:
         Exit code (0 on success, 1 on error).
     """
     s = _Style(_use_color())
-    force = "--force" in argv
-    wait = "--wait" in argv
+    args = _parse_args(argv, flags=frozenset({"--force", "--wait"}))
+    config_path = args.config_path
+    force = "--force" in args.flags
+    wait = "--wait" in args.flags
     service_was_installed = _is_service_installed()
 
     # ── Pre-flight: check for tasks in flight ──────────────────
     if service_was_installed and _is_service_running() and not force:
-        counts = _get_active_task_counts()
+        counts = _get_active_task_counts(config_path)
         if counts is not None:
             running, waiting = counts
             active = running + waiting
@@ -762,7 +857,7 @@ def cmd_update(argv: list[str]) -> int:
 
                 while active > 0:
                     time.sleep(_WAIT_POLL_SECONDS)
-                    counts = _get_active_task_counts()
+                    counts = _get_active_task_counts(config_path)
                     if counts is None:
                         # Service went away — safe to proceed.
                         break
@@ -826,7 +921,7 @@ def cmd_update(argv: list[str]) -> int:
     if nothing_changed:
         # Binary is current, but the running service may still be stale.
         if service_was_installed and _is_service_running():
-            if _has_version_mismatch():
+            if _has_version_mismatch(config_path):
                 print(
                     f"  {
                         s.dim(
@@ -866,7 +961,7 @@ def cmd_update(argv: list[str]) -> int:
     print(f"  {s.dim('Running readiness check...')}")
     try:
         check_result = subprocess.run(
-            [airut_path, "check"],
+            [airut_path, "check", "--config", str(config_path)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -956,11 +1051,12 @@ def cmd_install_service(argv: list[str]) -> int:
     Installs ``airut.service`` (email gateway).
 
     Args:
-        argv: Extra arguments (currently unused).
+        argv: Arguments (none accepted).
 
     Returns:
         Exit code (0 on success, 1 on error).
     """
+    _reject_args(argv)
     from airut.install_services import install_services
 
     logging.basicConfig(
@@ -984,11 +1080,12 @@ def cmd_uninstall_service(argv: list[str]) -> int:
     """Uninstall systemd user services for Airut.
 
     Args:
-        argv: Extra arguments (currently unused).
+        argv: Arguments (none accepted).
 
     Returns:
         Exit code (0 on success, 1 on error).
     """
+    _reject_args(argv)
     from airut.install_services import uninstall_services
 
     logging.basicConfig(
@@ -1018,34 +1115,50 @@ _DISPATCH: dict[str, str] = {
     "uninstall-service": "cmd_uninstall_service",
 }
 
+_CONFIG_OPTION_HELP = (
+    "  --config PATH  Path to airut.yaml config file\n"
+    "                 (default: $AIRUT_CONFIG, else\n"
+    "                 ~/.config/airut/airut.yaml)"
+)
+
 _SUBCOMMAND_HELP: dict[str, str] = {
     "init": (
-        "usage: airut init\n\n"
-        "Create a stub server config at ~/.config/airut/airut.yaml.\n"
-        "Does nothing if the config already exists."
+        "usage: airut init [--config PATH]\n\n"
+        "Create a stub server config file.\n"
+        "Does nothing if the config already exists.\n\n"
+        "options:\n"
+        f"{_CONFIG_OPTION_HELP}"
     ),
     "check": (
-        "usage: airut check\n\n"
+        "usage: airut check [--config PATH]\n\n"
         "Verify config, system dependencies, and service status.\n"
         "Shows pending config schema migrations if any.\n"
-        "Exit code 0 if all checks pass, 1 otherwise."
+        "Exit code 0 if all checks pass, 1 otherwise.\n\n"
+        "options:\n"
+        f"{_CONFIG_OPTION_HELP}"
     ),
     "migrate": (
-        "usage: airut migrate\n\n"
+        "usage: airut migrate [--config PATH]\n\n"
         "Apply pending config schema migrations to the config file.\n"
-        "Does nothing if the config is already up to date."
+        "Does nothing if the config is already up to date.\n\n"
+        "options:\n"
+        f"{_CONFIG_OPTION_HELP}"
     ),
     "update": (
-        "usage: airut update [--wait] [--force]\n\n"
+        "usage: airut update [--wait] [--force] [--config PATH]\n\n"
         "Update airut to the latest version via uv tool upgrade.\n"
         "If already up to date, exits without restarting the service.\n\n"
         "options:\n"
-        "  --wait   Wait for running tasks to complete before updating\n"
-        "  --force  Update even if tasks are in flight"
+        "  --wait         Wait for running tasks to complete before updating\n"
+        "  --force        Update even if tasks are in flight\n"
+        f"{_CONFIG_OPTION_HELP}"
     ),
     "install-service": (
         "usage: airut install-service\n\n"
-        "Install and start the airut systemd user service."
+        "Install and start the airut systemd user service.\n"
+        "For a config file outside ~/.config/airut, set\n"
+        "Environment=AIRUT_CONFIG=PATH in a drop-in\n"
+        "(systemctl --user edit airut)."
     ),
     "uninstall-service": (
         "usage: airut uninstall-service\n\n"
@@ -1057,8 +1170,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "Start the email gateway service"
         " (normally managed by systemd).\n\n"
         "options:\n"
-        "  --config PATH  Path to airut.yaml config file\n"
-        "                 (default: ~/.config/airut/airut.yaml)\n"
+        f"{_CONFIG_OPTION_HELP}\n"
         "  --resilient    Stay alive on boot failure"
         " (error on dashboard)\n"
         "  --debug        Enable debug logging"
@@ -1098,7 +1210,7 @@ def cli() -> None:
     command = argv[0]
     rest = argv[1:]
 
-    if "--help" in rest and command in _SUBCOMMAND_HELP:
+    if ("--help" in rest or "-h" in rest) and command in _SUBCOMMAND_HELP:
         print(_SUBCOMMAND_HELP[command])
         sys.exit(0)
 
@@ -1106,4 +1218,9 @@ def cli() -> None:
     import airut.cli as _self
 
     handler = getattr(_self, _DISPATCH[command])
-    sys.exit(handler(rest))
+    try:
+        code = handler(rest)
+    except _UsageError as e:
+        print(f"airut {command}: {e}", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(code)

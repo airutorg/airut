@@ -30,15 +30,32 @@ Unknown commands exit with code 2.
 Per-subcommand help is available via `airut <command> --help`, which prints
 usage and options without executing the command.
 
+### Config File Selection
+
+Every subcommand that uses the server config (`init`, `check`, `migrate`,
+`update`, `run-gateway`) selects the file the same way, in order of precedence:
+
+1. `--config PATH` (or `--config=PATH`)
+2. `$AIRUT_CONFIG`
+3. `~/.config/airut/airut.yaml` (`$XDG_CONFIG_HOME/airut/airut.yaml`)
+
+A `--config` without a value, or any unrecognized argument, is a usage error
+(exit code 2); `install-service` and `uninstall-service` take no arguments. The
+`.env` file is read from the selected config file's directory. Declarative
+setups (e.g. a Nix module) set `AIRUT_CONFIG` in the service environment and in
+a wrapper for interactive use, so `airut check` in an admin shell checks the
+same file the gateway runs with.
+
 ## Subcommands
 
 ### init
 
 ```
-airut init
+airut init [--config PATH]
 ```
 
-Create a stub server config at `~/.config/airut/airut.yaml`.
+Create a stub server config at the selected path (see
+[Config File Selection](#config-file-selection)).
 
 This step is **optional**. If no config file exists, `airut run-gateway` starts
 with built-in defaults (dashboard enabled, no repos). Users can configure repos
@@ -47,12 +64,9 @@ later via the dashboard config editor.
 **Behavior:**
 
 - If the config already exists, prints its path and returns 0 (idempotent)
-- Creates parent directories (`~/.config/airut/`) if needed
+- Creates parent directories (e.g. `~/.config/airut/`) if needed
 - Writes a commented YAML template with placeholder values
 - Prints links to deployment and repo-onboarding guides on GitHub
-
-**Config path:** Determined by `get_config_path()` in `airut/gateway/config.py`,
-which returns `~/.config/airut/airut.yaml`.
 
 **Stub template:** Contains commented-out `execution`, `dashboard`, and
 `network` sections, plus a minimal `repos:` block with placeholder email, git,
@@ -63,7 +77,7 @@ for all available options.
 ### check
 
 ```
-airut check
+airut check [--config PATH]
 ```
 
 Verify configuration, system dependencies, and service status. Exit code 0 if
@@ -112,7 +126,7 @@ version commands with a 10-second timeout. Version strings are parsed tolerantly
 ### migrate
 
 ```
-airut migrate
+airut migrate [--config PATH]
 ```
 
 Apply pending config schema migrations to the config file.
@@ -138,7 +152,7 @@ with tag preservation.
 ### update
 
 ```
-airut update [--wait] [--force]
+airut update [--wait] [--force] [--config PATH]
 ```
 
 Update airut to the latest version via `uv tool upgrade airut`.
@@ -156,21 +170,22 @@ Update airut to the latest version via `uv tool upgrade airut`.
    prevents a stale process from running old code while the readiness check and
    reinstall proceed. From this point on, the service is down regardless of
    whether subsequent steps succeed or fail.
-4. **Readiness check** — Run `airut check` via subprocess (30-second timeout)
-   using the updated binary. If the check fails (non-zero exit), print the check
-   output and instruct the user to fix the issues and run
-   `airut install-service` to start the service. The service is already stopped
-   at this point, so there is no stale process running old code.
+4. **Readiness check** — Run `airut check --config <selected path>` via
+   subprocess (30-second timeout) using the updated binary. If the check fails
+   (non-zero exit), print the check output and instruct the user to fix the
+   issues and run `airut install-service` to start the service. The service is
+   already stopped at this point, so there is no stale process running old code.
 5. **Reinstall service** — Only when the readiness check passes and the service
    was previously installed, reinstall using the new binary
    (`airut install-service` via subprocess, 30-second timeout).
 
 **Options:**
 
-| Flag      | Behavior                                       |
-| --------- | ---------------------------------------------- |
-| `--wait`  | Poll every 10 seconds until all tasks complete |
-| `--force` | Skip the in-flight task check entirely         |
+| Flag            | Behavior                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `--wait`        | Poll every 10 seconds until all tasks complete                                                                      |
+| `--force`       | Skip the in-flight task check entirely                                                                              |
+| `--config PATH` | Config used to find the dashboard and for the readiness check (see [Config File Selection](#config-file-selection)) |
 
 **Task blocking** prevents data loss during updates. The health endpoint returns
 task counts by status (e.g.,
@@ -191,6 +206,12 @@ Install and start the airut systemd user service.
 - loginctl linger must be enabled for the current user (checked via
   `/var/lib/systemd/linger/{username}` file existence). Without linger, user
   services stop when the user logs out.
+
+The generated unit runs the gateway with the default config selection. For a
+config file elsewhere, add a drop-in (`systemctl --user edit airut`) with
+`Environment=AIRUT_CONFIG=/path/to/airut.yaml`; drop-ins survive the unit
+reinstall that `airut update` performs. The shell running `airut update` needs
+the same `AIRUT_CONFIG`, or its readiness check inspects the default file.
 
 **Workflow:**
 
@@ -263,11 +284,11 @@ Start the email gateway service. Normally invoked by systemd, not run directly.
 
 **Options:**
 
-| Flag            | Behavior                                                         |
-| --------------- | ---------------------------------------------------------------- |
-| `--config PATH` | Use a custom config file instead of `~/.config/airut/airut.yaml` |
-| `--resilient`   | Stay alive on boot failure, show error on dashboard              |
-| `--debug`       | Enable debug logging                                             |
+| Flag            | Behavior                                                          |
+| --------------- | ----------------------------------------------------------------- |
+| `--config PATH` | Config file (see [Config File Selection](#config-file-selection)) |
+| `--resilient`   | Stay alive on boot failure, show error on dashboard               |
+| `--debug`       | Enable debug logging                                              |
 
 Delegates immediately to `airut.gateway.service:main()` with the remaining
 arguments. See [gateway-architecture.md](gateway-architecture.md) for the
@@ -312,17 +333,26 @@ Color is enabled when:
 | ---- | -------------------------------------------------------------- |
 | 0    | Success (or `check` with all checks passing)                   |
 | 1    | Error (check failure, update failure, service install failure) |
-| 2    | Unknown command                                                |
+| 2    | Unknown command or invalid arguments                           |
 
 ## Configuration Paths
 
-| Path                              | Purpose                            |
-| --------------------------------- | ---------------------------------- |
-| `~/.config/airut/airut.yaml`      | Server config (created by `init`)  |
-| `~/.config/airut/.env`            | Environment variables for secrets  |
-| `~/.config/systemd/user/`         | Systemd user unit files            |
-| `~/.local/bin/airut`              | Default binary location (uv tool)  |
-| `~/.local/state/airut/<repo_id>/` | Per-repo runtime state (XDG state) |
+| Path                                    | Purpose                           |
+| --------------------------------------- | --------------------------------- |
+| `~/.config/airut/airut.yaml`            | Server config (created by `init`) |
+| `~/.config/airut/.env`                  | Environment variables for secrets |
+| `~/.config/systemd/user/`               | Systemd user unit files           |
+| `~/.local/bin/airut`                    | Default binary location (uv tool) |
+| `~/.local/state/airut/`                 | State directory (XDG state)       |
+| `~/.local/state/airut/<repo_id>/`       | Per-repo runtime state            |
+| `~/.local/state/airut/claude-binaries/` | Cached Claude Code binaries       |
+
+The config file and its `.env` follow
+[Config File Selection](#config-file-selection). The state directory is, in
+order of precedence: `$AIRUT_STATE_DIR`; systemd's `$STATE_DIRECTORY` (set for
+units with `StateDirectory=`, first entry if several); the XDG default above.
+Path variables expand `~` and are made absolute. The network sandbox CA stays in
+`~/.airut-mitmproxy/` regardless.
 
 See [repo-config.md](repo-config.md) for the per-repo schema in server config.
 
