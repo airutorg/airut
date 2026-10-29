@@ -301,6 +301,9 @@ def test_generate_unit_email_gateway() -> None:
         in result
     )
     assert "Restart=always" in result
+    # Only the gateway gets SIGTERM, so it can drain running tasks.
+    assert "KillMode=mixed" in result
+    assert "TimeoutStopSec=300" in result
     assert "WorkingDirectory" not in result
     assert "EnvironmentFile" not in result
 

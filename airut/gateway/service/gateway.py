@@ -218,8 +218,13 @@ class GatewayService:
         #
         # ``_reload_lock`` is non-blocking in ``_on_config_changed``
         # (concurrent watcher triggers are dropped) but blocking in
-        # ``_check_pending_repo_reload`` (worker threads wait briefly
-        # for any in-progress reload to finish).
+        # ``_check_pending_repo_reload`` and
+        # ``_check_pending_server_reload`` (worker threads wait briefly
+        # for any in-progress reload to finish) and in ``stop()``.
+        # ``stop()`` runs in the main thread's signal handler and takes
+        # it alone, never nested; the main thread must not hold
+        # ``_reload_lock`` anywhere else, as the lock is not re-entrant
+        # and a signal arriving while it is held would deadlock.
         self._pending_messages: dict[str, PendingMessage] = {}
         self._pending_messages_lock = threading.Lock()
 
@@ -591,9 +596,15 @@ class GatewayService:
 
     def stop(self) -> None:
         """Stop the service gracefully."""
-        if self._stopped:
-            return
-        self._stopped = True
+        # Reloads return early once ``_stopped`` is set, so a deferred
+        # reload applied by a task finishing during the drain cannot
+        # restart listeners, the pool or the dashboard.  Setting it
+        # under the reload lock makes stop() wait for a reload that has
+        # already passed that check.
+        with self._reload_lock:
+            if self._stopped:
+                return
+            self._stopped = True
 
         logger.info("Stopping gateway service...")
         self._running = False
@@ -607,47 +618,73 @@ class GatewayService:
         if self._scheduler:
             self._scheduler.stop()
 
-        # Shutdown sandbox
-        self.sandbox.shutdown()
-
         # Interrupt all listeners
         for repo_handler in self.repo_handlers.values():
             repo_handler.stop()
 
         # Shutdown thread pool with timeout
         if self._executor_pool:
-            with self._futures_lock:
-                pending_count = len(self._pending_futures)
-                futures_copy = set(self._pending_futures)
-
-            if pending_count > 0:
-                logger.info(
-                    "Waiting for %d pending executions (timeout: %ds)...",
-                    pending_count,
-                    self.global_config.shutdown_timeout_seconds,
-                )
-
-                done, not_done = concurrent.futures.wait(
-                    futures_copy,
-                    timeout=self.global_config.shutdown_timeout_seconds,
-                )
-
-                if not_done:
-                    logger.warning(
-                        "%d executions did not complete within timeout",
-                        len(not_done),
-                    )
-                    for future in not_done:
-                        future.cancel()
-
-            self._executor_pool.shutdown(wait=False)
+            self._wait_for_pending_executions()
+            # cancel_futures: a task finishing after the drain's last
+            # snapshot may still have queued a follow-up.
+            self._executor_pool.shutdown(wait=False, cancel_futures=True)
             logger.info("Execution pool shut down")
+
+        # Shutdown sandbox only after the grace period.  Tearing it down
+        # removes every task's network and, with it, its container, so
+        # this is also what terminates tasks still running at the
+        # deadline.
+        self.sandbox.shutdown()
 
         # Stop dashboard server
         if self.dashboard:
             self.dashboard.stop()
 
         logger.info("Service stopped")
+
+    def _wait_for_pending_executions(self) -> None:
+        """Wait for pending executions until none remain or time runs out.
+
+        Waits against a single ``shutdown_timeout_seconds`` deadline,
+        re-reading ``_pending_futures`` each round: a task finishing
+        during the wait may drain a queued follow-up message into the
+        pool, and that follow-up gets the rest of the grace period.
+        Futures still pending at the deadline are cancelled (which only
+        affects those not yet started).
+        """
+        timeout = self.global_config.shutdown_timeout_seconds
+        deadline = time.monotonic() + timeout
+        pending = self._undone_futures()
+        if not pending:
+            return
+        logger.info(
+            "Waiting for %d pending executions (timeout: %ds)...",
+            len(pending),
+            timeout,
+        )
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            concurrent.futures.wait(pending, timeout=remaining)
+            pending = self._undone_futures()
+            if not pending:
+                return
+
+        logger.warning(
+            "%d executions did not complete within timeout", len(pending)
+        )
+        for future in pending:
+            future.cancel()
+
+    def _undone_futures(self) -> set[Future[None]]:
+        """Snapshot pending futures that have not completed yet.
+
+        A completed future may still be in ``_pending_futures`` until
+        its done-callback runs.
+        """
+        with self._futures_lock:
+            return {f for f in self._pending_futures if not f.done()}
 
     # ------------------------------------------------------------------ #
     # Config Reload
@@ -691,6 +728,8 @@ class GatewayService:
             return  # another reload is in progress
 
         try:
+            if self._stopped:
+                return
             # 1. Re-read and parse
             reset_dotenv_state()
             new_snapshot = ServerConfig.from_source(self._config_source)
@@ -1042,6 +1081,8 @@ class GatewayService:
         """
         applied = False
         with self._reload_lock:
+            if self._stopped:
+                return
             if repo_id not in self._pending_repo_reload:
                 return
             if self.tracker.has_active_tasks_for_repo(repo_id):
@@ -1071,6 +1112,8 @@ class GatewayService:
         """
         applied = False
         with self._reload_lock:
+            if self._stopped:
+                return
             pending = self._pending_server_config
             if pending is None:
                 return
@@ -1462,9 +1505,22 @@ class GatewayService:
             if pending is None:
                 return
 
-        if not self._executor_pool:
+        future: Future[None] | None = None
+        if self._executor_pool:
+            try:
+                future = self._executor_pool.submit(
+                    self._process_pending_message,
+                    pending,
+                )
+            except RuntimeError:
+                # Pool already shut down: the gateway is stopping and
+                # this task outlived the shutdown grace period.
+                if not self._stopped:
+                    raise
+        if future is None:
             logger.error(
-                "Cannot drain pending message for %s: pool not initialized",
+                "Cannot drain pending message for %s: executor pool "
+                "not running",
                 conv_id,
             )
             self.tracker.complete_task(
@@ -1478,10 +1534,6 @@ class GatewayService:
             "Draining pending message for conversation %s (task %s)",
             conv_id,
             pending.task_id,
-        )
-        future = self._executor_pool.submit(
-            self._process_pending_message,
-            pending,
         )
         with self._futures_lock:
             self._pending_futures.add(future)

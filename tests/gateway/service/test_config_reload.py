@@ -415,6 +415,84 @@ class TestServerScopeReload:
         assert svc._pending_server_config is not None
 
 
+class TestReloadAfterStop:
+    """Reloads are not applied once stop() has begun.
+
+    Tasks finishing during the shutdown drain run the deferred reload
+    checks; applying one would restart listeners, the pool or the
+    dashboard after stop() shut them down.
+    """
+
+    def test_config_change_ignored(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        svc._config_source = MagicMock()
+        svc.stop()
+
+        with patch.object(ServerConfig, "from_source") as mock_from_source:
+            svc._on_config_changed()
+
+        mock_from_source.assert_not_called()
+        assert svc._config_generation == 0
+
+    def test_deferred_repo_reload_not_applied(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        svc._pending_repo_reload["test"] = None
+        svc.stop()
+
+        with (
+            patch.object(
+                TaskTracker,
+                "has_active_tasks_for_repo",
+                return_value=False,
+            ),
+            patch(
+                "airut.gateway.service.gateway.create_adapters"
+            ) as mock_create,
+        ):
+            svc._check_pending_repo_reload("test")
+
+        mock_create.assert_not_called()
+
+    def test_deferred_server_reload_not_applied(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        new_config = dataclasses.replace(
+            svc.config,
+            global_config=dataclasses.replace(
+                svc.config.global_config,
+                max_concurrent_executions=10,
+            ),
+        )
+        svc._pending_server_config = new_config
+        svc.stop()
+
+        with patch.object(
+            TaskTracker,
+            "has_active_tasks_for_repo",
+            return_value=False,
+        ):
+            svc._check_pending_server_reload()
+
+        assert svc._pending_server_config is new_config
+        assert svc._executor_pool is None
+
+    def test_stop_sets_stopped_under_reload_lock(self, tmp_path: Path) -> None:
+        """stop() waits for a reload that already passed its check."""
+        svc = _make_service(tmp_path)
+        stopped_while_locked: list[bool] = []
+
+        class RecordingLock:
+            def __enter__(self) -> None:
+                stopped_while_locked.append(svc._stopped)
+
+            def __exit__(self, *exc: object) -> None:
+                stopped_while_locked.append(svc._stopped)
+
+        with patch.object(svc, "_reload_lock", RecordingLock()):
+            svc.stop()
+
+        assert stopped_while_locked == [False, True]
+
+
 class TestReloadStatus:
     """Tests for _get_reload_status."""
 

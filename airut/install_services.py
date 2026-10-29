@@ -118,6 +118,14 @@ def generate_unit(service_name: str, airut_path: str) -> str:
             f"ExecStart={airut_path} run-gateway --resilient\n"
             "Restart=always\n"
             "RestartSec=10\n"
+            # SIGTERM only the gateway: by default systemd signals every
+            # process in the unit, and the podman clients forward it to
+            # the task containers, killing running tasks before the
+            # gateway can drain them.
+            "KillMode=mixed\n"
+            # Above the default execution.shutdown_timeout (60s) plus
+            # listener and sandbox teardown.
+            "TimeoutStopSec=300\n"
             "StandardOutput=journal\n"
             "StandardError=journal\n"
             "\n"

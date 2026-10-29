@@ -45,6 +45,8 @@ from airut.gateway.email.parsing import (
 from airut.gateway.service import GatewayService
 from airut.gateway.service.repo_handler import RepoHandler
 
+from .service.conftest import expire_shutdown_wait
+
 
 class TestEndToEndFlow:
     """Test complete message processing flow."""
@@ -747,20 +749,15 @@ class TestParallelExecution:
         service = GatewayService(config)
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
-        # Create a mock future that simulates a slow task
-        future = MagicMock()
-        future.cancel = MagicMock()
+        # A slow task that never finishes within the grace period
+        future: concurrent.futures.Future[None] = concurrent.futures.Future()
         service._pending_futures = {future}
 
-        # Mock concurrent.futures.wait to simulate timeout (future not done)
-        with patch(
-            "airut.gateway.service.gateway.concurrent.futures.wait",
-            return_value=(set(), {future}),
-        ):
+        with expire_shutdown_wait():
             service.stop()
 
-        # Future should have been cancelled since it was in not_done
-        future.cancel.assert_called_once()
+        # Still pending at the deadline, so cancelled
+        assert future.cancelled()
 
     def test_process_message_worker_no_lock_for_new_conversation(
         self, email_config: RepoServerConfig, sample_email_message
