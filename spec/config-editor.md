@@ -573,18 +573,19 @@ variants for field tinting:
 
 ## Files
 
-| File                                                           | Purpose                                          |
-| -------------------------------------------------------------- | ------------------------------------------------ |
-| `airut/config/editor.py`                                       | `EditBuffer`, `InMemoryConfigSource`, re-exports |
-| `airut/config/editor_schema.py`                                | `EditorFieldSchema`, `schema_for_editor()`       |
-| `airut/dashboard/handlers_config.py`                           | `ConfigEditorHandlers`: all HTTP handlers        |
-| `airut/dashboard/templates/pages/config.html`                  | Global settings page template                    |
-| `airut/dashboard/templates/pages/config_repo.html`             | Per-repo settings page template                  |
-| `airut/dashboard/templates/components/config/field.html`       | Recursive field dispatch macro                   |
-| `airut/dashboard/templates/components/config/scalar.html`      | Scalar input + source selector                   |
-| `airut/dashboard/templates/components/config/nested.html`      | Nested dataclass fieldset                        |
-| `airut/dashboard/templates/components/config/vars.html`        | Variables widget with cross-ref hints            |
-| `airut/dashboard/templates/components/config/diff_result.html` | Diff result fragment                             |
-| `airut/dashboard/templates/components/config/save_result.html` | Save error fragment                              |
-| `airut/dashboard/static/js/config-editor.js`                   | Dirty counter, dialog helpers, button state      |
-| `airut/dashboard/static/styles/config.css`                     | Config editor styles                             |
+| File                                                           | Purpose                                                           |
+| -------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `airut/config/editor.py`                                       | `EditBuffer`, `InMemoryConfigSource`, re-exports                  |
+| `airut/config/editor_schema.py`                                | `EditorFieldSchema`, `schema_for_editor()`                        |
+| `airut/config/server_schema.py`                                | Schemas of the server config sections (shared with `airut check`) |
+| `airut/dashboard/handlers_config.py`                           | `ConfigEditorHandlers`: all HTTP handlers                         |
+| `airut/dashboard/templates/pages/config.html`                  | Global settings page template                                     |
+| `airut/dashboard/templates/pages/config_repo.html`             | Per-repo settings page template                                   |
+| `airut/dashboard/templates/components/config/field.html`       | Recursive field dispatch macro                                    |
+| `airut/dashboard/templates/components/config/scalar.html`      | Scalar input + source selector                                    |
+| `airut/dashboard/templates/components/config/nested.html`      | Nested dataclass fieldset                                         |
+| `airut/dashboard/templates/components/config/vars.html`        | Variables widget with cross-ref hints                             |
+| `airut/dashboard/templates/components/config/diff_result.html` | Diff result fragment                                              |
+| `airut/dashboard/templates/components/config/save_result.html` | Save error fragment                                               |
+| `airut/dashboard/static/js/config-editor.js`                   | Dirty counter, dialog helpers, button state                       |
+| `airut/dashboard/static/styles/config.css`                     | Config editor styles                                              |

@@ -39,6 +39,7 @@ from airut.yaml_env import (
     EnvVar,
     FileRef,
     FileRefError,
+    Unresolved,
     YamlValue,
     raw_resolve,
 )
@@ -641,6 +642,19 @@ def _resolve(
     Returns:
         The resolved, coerced value, or None when optional and absent.
     """
+    if isinstance(value, Unresolved):
+        # Offline check: the referenced value is unknown but assumed set
+        # (e.g. a password that some other setting makes required).
+        # Strings get the stand-in's text; other types their default,
+        # nothing if optional, or a minimal value if required.
+        if default is not _MISSING:
+            return default
+        if coerce is str or coerce is Path:
+            return coerce(str(value))
+        if not required:
+            return None
+        return False if coerce is bool else coerce(1)
+
     # For literals that PyYAML already parsed to the right type (e.g.
     # bool, int), skip string round-tripping when possible.
     if not isinstance(value, (EnvVar, FileRef)) and value is not None:
@@ -1613,7 +1627,7 @@ class ServerConfig:
         references, then runs the existing resolution/validation pipeline.
         Returns a ``ConfigSnapshot`` holding both the resolved config and
         the raw YAML document (with ``VarRef``/``EnvVar``/``FileRef``
-        preserved).
+        preserved, or ``Unresolved`` stand-ins from an offline source).
 
         Args:
             source: Config source to load from.

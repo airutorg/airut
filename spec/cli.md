@@ -93,11 +93,37 @@ for all available options.
 ### check
 
 ```
-airut check [--config PATH]
+airut check [--config PATH] [--offline]
 ```
 
 Verify configuration, system dependencies, and service status. Exit code 0 if
 all critical checks pass, 1 otherwise.
+
+**Offline** (`--offline`): validate only the config, where its secrets are not
+available — e.g. in a Nix build sandbox, so a bad generated config fails the
+build rather than the gateway at boot:
+
+```nix
+pkgs.runCommand "airut-config-check" { } ''
+  ${airut}/bin/airut check --offline --config ${configFile} && touch $out
+''
+```
+
+- `!env`/`!file` values are not read; each reference is assumed set. String
+  fields get a placeholder (`<!env NAME>`), other fields their default (or a
+  minimal value if required), so structure, required fields, literal values,
+  channels and credentials are all validated. Fields whose string format is
+  validated fail when given by reference, since the placeholder is not a valid
+  value: `claude_version`, `resource_limits.memory`, schedule `cron`, `timezone`
+  and `deliver.channel`, and GitHub App `base_url`. Give those literally.
+- Skips the upstream version check, dependencies, cgroups and service sections.
+- A missing config file is an error (there is nothing to check).
+
+**Secrets in the Nix store**: in both modes, `check` lists secret values (secret
+fields, `secrets:` entries, credential collection items, or the `vars:` they
+reference) that end up in the world-readable Nix store: values written literally
+into a config file that resolves into the store, and `!file` references to files
+in the store. This is a warning; it does not affect the exit code.
 
 **Sections:**
 

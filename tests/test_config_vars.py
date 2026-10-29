@@ -9,7 +9,11 @@ from typing import Any
 
 import pytest
 
-from airut.config.vars import resolve_var_refs, resolve_vars_section
+from airut.config.vars import (
+    VarValue,
+    resolve_var_refs,
+    resolve_vars_section,
+)
 from airut.gateway.config import ConfigError
 from airut.yaml_env import EnvVar, VarRef
 
@@ -80,7 +84,7 @@ class TestResolveVarRefs:
             "vars": {"mail": "mail.example.com"},
             "repos": {"test": {"server": VarRef("mail")}},
         }
-        table: dict[str, str | None] = {"mail": "mail.example.com"}
+        table: dict[str, VarValue] = {"mail": "mail.example.com"}
         result = resolve_var_refs(raw, table)
 
         assert result["repos"]["test"]["server"] == "mail.example.com"
@@ -91,14 +95,14 @@ class TestResolveVarRefs:
         raw: dict[str, Any] = {
             "a": {"b": {"c": VarRef("key")}},
         }
-        table: dict[str, str | None] = {"key": "value"}
+        table: dict[str, VarValue] = {"key": "value"}
         resolve_var_refs(raw, table)
         assert raw["a"]["b"]["c"] == "value"
 
     def test_replaces_in_list(self) -> None:
         """VarRef inside a list is resolved."""
         raw: dict[str, Any] = {"items": [VarRef("x"), "literal", VarRef("y")]}
-        table: dict[str, str | None] = {"x": "X", "y": "Y"}
+        table: dict[str, VarValue] = {"x": "X", "y": "Y"}
         resolve_var_refs(raw, table)
         assert raw["items"] == ["X", "literal", "Y"]
 
@@ -208,7 +212,7 @@ class TestEdgeCases:
         raw: dict[str, Any] = {
             "items": [{"key": VarRef("x")}, {"key": "literal"}]
         }
-        table: dict[str, str | None] = {"x": "resolved"}
+        table: dict[str, VarValue] = {"x": "resolved"}
         resolve_var_refs(raw, table)
         assert raw["items"][0]["key"] == "resolved"
         assert raw["items"][1]["key"] == "literal"

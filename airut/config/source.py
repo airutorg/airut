@@ -31,7 +31,7 @@ class ConfigSource(Protocol):
         """Load raw config dict.
 
         Values may contain ``EnvVar``, ``VarRef`` and ``FileRef``
-        placeholders.
+        placeholders (``Unresolved`` stand-ins in an offline check).
         """
         ...
 

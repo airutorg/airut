@@ -338,6 +338,8 @@ repos:
   rotated secret. Changes to the file alone do not trigger a reload.
 - `!file` is gateway-only: the shared loader the sandbox CLI uses for
   repository-provided `.airut/sandbox.yaml` does not read host files.
+- `airut check --offline` validates a config without reading `!env`/`!file`
+  values at all (see [cli.md](cli.md#check)).
 
 ### Tag-Free Spellings
 

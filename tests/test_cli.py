@@ -1209,6 +1209,17 @@ repos:
         assert str(custom) in out
         assert str(custom_dir / ".env") in out
 
+    def test_literal_secrets_in_nix_store_warned(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Also outside --offline, e.g. /etc/airut linking into the store."""
+        _path, ctx = _check_patches(tmp_path)
+        with ctx, patch("airut.version.NIX_STORE", tmp_path):
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "in the Nix store, which is world-readable" in out
+        assert "repos.test.email.account.password" in out
+
     def test_shows_state_dir(
         self,
         tmp_path: Path,
@@ -2545,6 +2556,173 @@ class TestCli:
 
         for cmd in _DISPATCH:
             assert cmd in _SUBCOMMAND_HELP, f"Missing help for '{cmd}'"
+
+
+# ── check --offline ──────────────────────────────────────────────
+
+
+_OFFLINE_CONFIG = """\
+repos:
+  test:
+    repo_url: https://github.com/example/repo.git
+    email:
+      account:
+        username: user@example.com
+        password: !file $CREDENTIALS_DIRECTORY/email-password
+        from: "Bot <bot@example.com>"
+      imap:
+        server: imap.example.com
+      smtp:
+        server: smtp.example.com
+      auth:
+        authorized_senders:
+          - admin@example.com
+        trusted_authserv_id: mx.example.com
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY_UNSET
+"""
+
+
+class TestCmdCheckOffline:
+    """``check --offline``: validate a config without its secrets."""
+
+    def _run(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> tuple[int, str]:
+        with (
+            patch("airut.cli._use_color", return_value=False),
+            patch("airut.cli._check_dependency") as mock_dep,
+            patch("airut.cli._check_cgroups_v2") as mock_cgroups,
+            patch("airut.cli._is_service_installed") as mock_service,
+            patch("airut.version.check_upstream_version") as mock_upstream,
+        ):
+            code = cmd_check(argv)
+        # Nothing that needs the network, podman or systemd.
+        mock_dep.assert_not_called()
+        mock_cgroups.assert_not_called()
+        mock_service.assert_not_called()
+        mock_upstream.assert_not_called()
+        return code, capsys.readouterr().out
+
+    def test_valid_config_with_unavailable_secrets(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(_OFFLINE_CONFIG)
+
+        code, out = self._run(
+            ["--offline", "--config", str(config_path)], capsys
+        )
+
+        assert code == 0
+        assert "Configuration (offline)" in out
+        assert "ok — 1 repo(s) (test)" in out
+        assert "References:  2 !env/!file value(s) not read" in out
+        assert "State dir" not in out
+        assert "All checks passed." in out
+
+    def test_invalid_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(
+            _OFFLINE_CONFIG.replace(
+                "      imap:\n        server: imap.example.com\n", ""
+            )
+        )
+
+        code, out = self._run(
+            ["--offline", "--config", str(config_path)], capsys
+        )
+
+        assert code == 1
+        assert "error" in out
+        assert "imap.server" in out
+
+    def test_missing_config_is_an_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Offline there is nothing to check without the file."""
+        code, out = self._run(
+            ["--offline", "--config", str(tmp_path / "missing.yaml")],
+            capsys,
+        )
+        assert code == 1
+        assert "not found" in out
+
+    def test_literal_secret_in_nix_store_warned(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        store = tmp_path / "nix" / "store"
+        config_path = store / "abc-airut.yaml"
+        store.mkdir(parents=True)
+        config_path.write_text(
+            _OFFLINE_CONFIG.replace(
+                "!env ANTHROPIC_API_KEY_UNSET", "sk-ant-literal"
+            )
+        )
+        link = tmp_path / "airut.yaml"
+        link.symlink_to(config_path)
+
+        with patch("airut.version.NIX_STORE", store):
+            code, out = self._run(["--offline", "--config", str(link)], capsys)
+
+        assert code == 0  # a warning, not a failure
+        assert "in the Nix store, which is world-readable" in out
+        assert "repos.test.secrets.ANTHROPIC_API_KEY" in out
+        assert "sk-ant-literal" not in out
+
+    def test_store_config_with_references_not_warned(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        config_path = tmp_path / "abc-airut.yaml"
+        config_path.write_text(_OFFLINE_CONFIG)
+        with patch("airut.version.NIX_STORE", tmp_path):
+            code, out = self._run(
+                ["--offline", "--config", str(config_path)], capsys
+            )
+        assert code == 0
+        assert "Secrets:" not in out
+
+    def test_file_reference_into_nix_store_warned(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A secret file in the store leaks, wherever the config is."""
+        store = tmp_path / "store"
+        store.mkdir()
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(
+            _OFFLINE_CONFIG.replace(
+                "!env ANTHROPIC_API_KEY_UNSET", f"!file {store}/abc-key"
+            )
+        )
+        with patch("airut.version.NIX_STORE", store):
+            code, out = self._run(
+                ["--offline", "--config", str(config_path)], capsys
+            )
+        assert code == 0
+        assert "repos.test.secrets.ANTHROPIC_API_KEY" in out
+        # The email password's !file is outside the store.
+        assert "email.account.password" not in out
+
+    def test_literal_secret_outside_nix_store_not_warned(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(
+            _OFFLINE_CONFIG.replace(
+                "!env ANTHROPIC_API_KEY_UNSET", "sk-ant-literal"
+            )
+        )
+        code, out = self._run(
+            ["--offline", "--config", str(config_path)], capsys
+        )
+        assert code == 0
+        assert "Secrets:" not in out
 
 
 # ── Nix installs ─────────────────────────────────────────────────
