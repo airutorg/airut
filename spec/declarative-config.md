@@ -89,8 +89,10 @@ values (`MaskedSecret.value`, `SigningCredentialField.value`,
 ### Config Source Protocol
 
 A `ConfigSource` protocol decouples loading and saving from the serialization
-format. Implementations provide `load() -> dict[str, Any]` and
-`save(data: dict[str, Any]) -> None`.
+format. Implementations provide `load() -> dict[str, Any]`,
+`save(data: dict[str, Any]) -> None`, and `read_only_reason() -> str | None`,
+which tells the config editor whether and why it must not save (see
+[config-editor.md](config-editor.md#read-only-mode)).
 
 `ServerConfig.from_source(source)` calls `source.load()`, applies migrations,
 then runs the existing resolution/validation pipeline.

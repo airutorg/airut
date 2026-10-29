@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from airut.config.source import (
+    ConfigReadOnlyError,
     YamlConfigSource,
     _set_nested,
     flat_to_nested_email,
@@ -201,6 +202,96 @@ class TestYamlConfigSource:
         with patch("airut.config.source.load_dotenv_once"):
             reloaded = source.load()
         assert reloaded == loaded
+
+
+class TestReadOnly:
+    """When the editor must not save to a YAML config file."""
+
+    def test_writable(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("{}\n")
+        assert YamlConfigSource(config_file).read_only_reason() is None
+
+    def test_missing_file_in_writable_dir(self, tmp_path: Path) -> None:
+        """A config not created yet is writable if its directory is."""
+        source = YamlConfigSource(tmp_path / "sub" / "dir" / "config.yaml")
+        assert source.read_only_reason() is None
+
+    def test_forced(self, tmp_path: Path) -> None:
+        source = YamlConfigSource(tmp_path / "config.yaml", read_only=True)
+        assert source.read_only_reason() == (
+            "the gateway runs with --read-only-config"
+        )
+
+    def test_symlink(self, tmp_path: Path) -> None:
+        """A symlinked config (e.g. into the Nix store) is read-only.
+
+        Saving replaces the path with a plain file, which would silently
+        detach it from wherever the link points.
+        """
+        target = tmp_path / "target.yaml"
+        target.write_text("{}\n")
+        link = tmp_path / "config.yaml"
+        link.symlink_to(target)
+
+        reason = YamlConfigSource(link).read_only_reason()
+
+        assert reason == f"{link} is a symlink, managed elsewhere"
+
+    def test_file_not_writable(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("{}\n")
+        with patch(
+            "airut.config.source.os.access",
+            side_effect=lambda path, mode: path != config_file,
+        ):
+            reason = YamlConfigSource(config_file).read_only_reason()
+        assert reason == f"{config_file} is not writable"
+
+    def test_directory_not_writable(self, tmp_path: Path) -> None:
+        """Saving writes a temp file next to the config."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("{}\n")
+        with patch(
+            "airut.config.source.os.access",
+            side_effect=lambda path, mode: path != tmp_path,
+        ):
+            reason = YamlConfigSource(config_file).read_only_reason()
+        assert reason == f"{tmp_path} is not writable"
+
+    def test_nearest_existing_ancestor_checked(self, tmp_path: Path) -> None:
+        checked: list[Path] = []
+
+        def fake_access(path: Path, mode: int) -> bool:
+            checked.append(path)
+            return False
+
+        source = YamlConfigSource(tmp_path / "a" / "b" / "config.yaml")
+        with patch("airut.config.source.os.access", side_effect=fake_access):
+            assert source.read_only_reason() == f"{tmp_path} is not writable"
+        assert checked == [tmp_path]
+
+    def test_save_refused(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("original: true\n")
+        source = YamlConfigSource(config_file, read_only=True)
+
+        with pytest.raises(ConfigReadOnlyError, match="--read-only-config"):
+            source.save({"changed": True})
+
+        assert config_file.read_text() == "original: true\n"
+
+    def test_save_keeps_symlink(self, tmp_path: Path) -> None:
+        target = tmp_path / "target.yaml"
+        target.write_text("original: true\n")
+        link = tmp_path / "config.yaml"
+        link.symlink_to(target)
+
+        with pytest.raises(ConfigReadOnlyError, match="symlink"):
+            YamlConfigSource(link).save({"changed": True})
+
+        assert link.is_symlink()
+        assert target.read_text() == "original: true\n"
 
 
 class TestTagDumper:

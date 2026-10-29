@@ -45,6 +45,14 @@
   border: 1px solid var(--status-info);
 }
 
+/* Wraps the editable content; disabled when the config is read-only */
+.cfg-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
 /* ---- Scope badges ---- */
 .cfg-scope {
   display: inline-block;
@@ -203,6 +211,19 @@ select.cfg-input {
   background: var(--bg-inset);
   color: var(--text-tertiary);
   cursor: default;
+}
+/* Read-only viewer: values stay readable, not greyed out, and the
+   disabled source tabs do not look clickable */
+.cfg-fieldset:disabled .cfg-input {
+  color: var(--text-primary);
+  -webkit-text-fill-color: currentColor;
+  opacity: 1;
+}
+.cfg-fieldset:disabled .cfg-source button {
+  cursor: default;
+}
+.cfg-fieldset:disabled .cfg-source button:hover:not(.active) {
+  background: var(--bg-surface);
 }
 textarea.cfg-textarea {
   resize: vertical;

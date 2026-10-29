@@ -11,6 +11,13 @@
   {% endif %}
 
   {% if buffer %}
+  {% if read_only %}
+  {# Read-only: a viewer, edits go wherever the config is managed #}
+  <div class="cfg-banner info" id="read-only-banner">
+    Configuration is read-only: {{ read_only }}. Change it where it is managed;
+    the gateway applies changes on reload.
+  </div>
+  {% else %}
   {# Save bar #}
   <div class="cfg-save-bar">
     <button id="review-save-btn" class="cfg-btn primary" {{ '' if dirty_count else 'disabled' }}
@@ -40,6 +47,9 @@
     <a href="/config/repos/{{ repo_id }}">Reload</a>
   </div>
   {% endif %}
+  {% endif %}
+
+  <fieldset class="cfg-fieldset"{{ ' disabled' if read_only }}>
 
   {# Repo Settings #}
   <h2 class="cfg-section-title">Repository Settings</h2>
@@ -174,6 +184,7 @@
   {% endfor %}
 
   {# Remove repo #}
+  {% if not read_only %}
   <h2 class="cfg-section-title">Danger Zone</h2>
   <div class="card">
     <div class="cfg-card-header">
@@ -192,7 +203,10 @@
       Remove {{ repo_id }}
     </button>
   </div>
+  {% endif %}
+  </fieldset>
 
+  {% if not read_only %}
   {# Diff dialog #}
   <dialog id="diff-modal" class="cfg-dialog">
     <div class="cfg-dialog-header">Review Changes</div>
@@ -209,6 +223,7 @@
       <button type="button" class="cfg-btn" id="diff-cancel-btn">Cancel</button>
     </div>
   </dialog>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

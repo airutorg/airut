@@ -47,13 +47,17 @@ class ConfigEditorHarness:
         self,
         tmp_path: Path,
         raw: dict[str, Any] | None = None,
+        *,
+        read_only: bool = False,
     ) -> None:
         self.tmp_path = tmp_path
         self.raw = raw or _make_sample_raw()
         self._snapshot = _make_snapshot(self.raw)
         self._generation = 0
         self._config_path = tmp_path / "airut.yaml"
-        self._config_source = YamlConfigSource(self._config_path)
+        self._config_source = YamlConfigSource(
+            self._config_path, read_only=read_only
+        )
 
         self.tracker = TaskTracker()
         self.server = DashboardServer(
@@ -1015,6 +1019,9 @@ class TestHandlerErrorPaths:
 
             def save(self, data: dict[str, Any]) -> None:
                 raise OSError("disk full")
+
+            def read_only_reason(self) -> None:
+                return None
 
         harness.server._config_handlers._get_config_source = lambda: (
             FailingSource()

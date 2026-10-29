@@ -449,6 +449,9 @@ class TestInMemoryConfigSource:
         with pytest.raises(NotImplementedError):
             source.save({})
 
+    def test_read_only(self) -> None:
+        assert InMemoryConfigSource({}).read_only_reason() == "in-memory source"
+
 
 # ── EditBuffer tests ─────────────────────────────────────────────────
 

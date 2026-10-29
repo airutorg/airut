@@ -236,7 +236,32 @@ class ConfigEditorHandlers:
         self._get_config_source = get_config_source
         self._buffer: EditBuffer | None = None
 
-    def _ensure_buffer(self) -> EditBuffer | None:
+    def _read_only_reason(self) -> str | None:
+        """Why the config cannot be edited, or None if it can."""
+        source = self._get_config_source()
+        return source.read_only_reason() if source is not None else None
+
+    def _deny_if_read_only(self) -> Response | None:
+        """Return a 403 response if the config is read-only.
+
+        ``HX-Refresh`` reloads a page opened while the config was still
+        writable, so it turns into the viewer.
+        """
+        reason = self._read_only_reason()
+        if reason is None:
+            return None
+        return Response(
+            render_template(
+                "components/config/save_result.html",
+                status="error",
+                message=f"Config is read-only: {reason}",
+            ),
+            status=403,
+            headers={"HX-Refresh": "true"},
+            content_type="text/html",
+        )
+
+    def _ensure_buffer(self, *, read_only: bool = False) -> EditBuffer | None:
         """Ensure an edit buffer exists, creating one if needed.
 
         If a buffer exists but is stale and clean (no unsaved edits),
@@ -244,15 +269,19 @@ class ConfigEditorHandlers:
         This handles the post-save case where the file watcher has
         reloaded but the buffer was created from the old snapshot.
 
+        A dirty buffer is dropped when *read_only* (the config is
+        read-only): its edits can no longer be saved, and the viewer
+        must show the live config rather than them.
+
         Returns None if no config snapshot is available.
         """
         if self._buffer is not None:
-            gen = self._get_generation()
-            if self._buffer.is_stale(gen) and not self._buffer.dirty:
-                # Stale clean buffer — replace with current snapshot.
-                self._buffer = None
-            else:
+            if self._buffer.dirty:
+                if not read_only:
+                    return self._buffer
+            elif not self._buffer.is_stale(self._get_generation()):
                 return self._buffer
+            self._buffer = None
 
         snapshot = self._get_snapshot()
         if snapshot is None or snapshot.raw is None:
@@ -543,7 +572,8 @@ class ConfigEditorHandlers:
 
         Creates an edit buffer if none exists.
         """
-        buffer = self._ensure_buffer()
+        read_only = self._read_only_reason()
+        buffer = self._ensure_buffer(read_only=read_only is not None)
         if buffer is None:
             return Response(
                 render_template(
@@ -574,6 +604,7 @@ class ConfigEditorHandlers:
                 dirty_count=self._compute_dirty_count(),
                 error=None,
                 var_refs=var_refs,
+                read_only=read_only,
             ),
             content_type="text/html",
         )
@@ -587,7 +618,8 @@ class ConfigEditorHandlers:
             "slack_schema": [],
         }
 
-        buffer = self._ensure_buffer()
+        read_only = self._read_only_reason()
+        buffer = self._ensure_buffer(read_only=read_only is not None)
         if buffer is None:
             return Response(
                 render_template(
@@ -646,6 +678,7 @@ class ConfigEditorHandlers:
                 stale=stale and buffer.dirty,
                 dirty_count=self._compute_dirty_count(),
                 error=None,
+                read_only=read_only,
                 has_email=has_email,
                 has_slack=has_slack,
                 email_schema=self._get_email_schema(repo_id)
@@ -665,6 +698,9 @@ class ConfigEditorHandlers:
         csrf_err = _require_xhr(request)
         if csrf_err:
             return csrf_err
+        denied = self._deny_if_read_only()
+        if denied:
+            return denied
 
         buffer = self._ensure_buffer()
         if buffer is None:
@@ -776,6 +812,9 @@ class ConfigEditorHandlers:
         csrf_err = _require_xhr(request)
         if csrf_err:
             return csrf_err
+        denied = self._deny_if_read_only()
+        if denied:
+            return denied
 
         buffer = self._ensure_buffer()
         if buffer is None:
@@ -851,6 +890,9 @@ class ConfigEditorHandlers:
         csrf_err = _require_xhr(request)
         if csrf_err:
             return csrf_err
+        denied = self._deny_if_read_only()
+        if denied:
+            return denied
 
         buffer = self._ensure_buffer()
         if buffer is None:
@@ -1220,6 +1262,9 @@ class ConfigEditorHandlers:
         csrf_err = _require_xhr(request)
         if csrf_err:
             return csrf_err
+        denied = self._deny_if_read_only()
+        if denied:
+            return denied
 
         buffer = self._ensure_buffer()
         if buffer is None:
@@ -1296,6 +1341,9 @@ class ConfigEditorHandlers:
         csrf_err = _require_xhr(request)
         if csrf_err:
             return csrf_err
+        denied = self._deny_if_read_only()
+        if denied:
+            return denied
 
         self._buffer = None
 

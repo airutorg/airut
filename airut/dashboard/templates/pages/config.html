@@ -13,6 +13,13 @@
   <h1>Configuration</h1>
 
   {% if buffer %}
+  {% if read_only %}
+  {# Read-only: a viewer, edits go wherever the config is managed #}
+  <div class="cfg-banner info" id="read-only-banner">
+    Configuration is read-only: {{ read_only }}. Change it where it is managed;
+    the gateway applies changes on reload.
+  </div>
+  {% else %}
   {# Save bar #}
   <div class="cfg-save-bar">
     <button id="review-save-btn" class="cfg-btn primary" {{ '' if dirty_count else 'disabled' }}
@@ -42,6 +49,9 @@
     <a href="/config">Reload</a>
   </div>
   {% endif %}
+  {% endif %}
+
+  <fieldset class="cfg-fieldset"{{ ' disabled' if read_only }}>
 
   {# Server Settings #}
   <h2 class="section-title">Server Settings</h2>
@@ -97,12 +107,13 @@
         · model: {{ repo.model }}
       </span>
     </div>
-    <a href="/config/repos/{{ repo.id }}" class="cfg-btn">Edit</a>
+    <a href="/config/repos/{{ repo.id }}" class="cfg-btn">{{ 'View' if read_only else 'Edit' }}</a>
   </div>
   {% endfor %}
   {% else %}
   <div class="empty">No repositories configured.</div>
   {% endif %}
+  {% if not read_only %}
   <form class="cfg-add-repo"
         hx-post="/api/config/add"
         hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
@@ -113,7 +124,10 @@
            required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*">
     <button class="cfg-btn primary" type="submit">Add Repository</button>
   </form>
+  {% endif %}
+  </fieldset>
 
+  {% if not read_only %}
   {# Diff dialog #}
   <dialog id="diff-modal" class="cfg-dialog">
     <div class="cfg-dialog-header">Review Changes</div>
@@ -130,6 +144,7 @@
       <button type="button" class="cfg-btn" id="diff-cancel-btn">Cancel</button>
     </div>
   </dialog>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}
