@@ -30,7 +30,7 @@ from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
 )
-from airut.units import MB
+from airut.units import MB, format_size
 
 
 logger = logging.getLogger(__name__)
@@ -125,7 +125,7 @@ class EmailResponder:
         attachments: list[tuple[str, bytes]] | None = None,
         message_id: str | None = None,
         footer: str = "",
-    ) -> None:
+    ) -> dict[str, str]:
         """Send email reply with threading headers.
 
         Sends a multipart email with both plain text and HTML
@@ -151,6 +151,9 @@ class EmailResponder:
             footer: Usage summary, set in italics after the body and
                 after any note about attachments that were left out.
 
+        Returns:
+            The reason each attachment was left out, by file name.
+
         Raises:
             SMTPSendError: If sending fails.
         """
@@ -170,8 +173,9 @@ class EmailResponder:
         ]
         try:
             logger.debug("Sending email to %s: %s", to, subject)
-            self._deliver(draft, files)
+            left_out = self._deliver(draft, files)
             logger.info("Sent email to %s: %s", to, subject)
+            return left_out
         except (
             smtplib.SMTPException,
             OSError,
@@ -180,8 +184,13 @@ class EmailResponder:
             logger.error("Failed to send email: %s", e)
             raise SMTPSendError(f"Failed to send email: {e}")
 
-    def _deliver(self, draft: Draft, attachments: list[Attachment]) -> None:
+    def _deliver(
+        self, draft: Draft, attachments: list[Attachment]
+    ) -> dict[str, str]:
         """Send *draft*, keeping it under the size limit.
+
+        Returns:
+            The reason each attachment was left out, by file name.
 
         Raises:
             smtplib.SMTPException: If the server refuses the message.
@@ -189,12 +198,14 @@ class EmailResponder:
             MicrosoftOAuth2TokenError: If no OAuth2 token is available.
         """
         with self._connect() as server:
-            msg, omitted = fit_attachments(
-                draft, attachments, self._size_limit(server)
-            )
+            limit = self._size_limit(server)
+            msg, omitted = fit_attachments(draft, attachments, limit)
             try:
                 server.send_message(msg)
-                return
+                reason = (
+                    f"did not fit in the {format_size(limit)} email size limit"
+                )
+                return {a.filename: reason for a in omitted}
             except smtplib.SMTPException as e:
                 if len(omitted) == len(attachments) or not is_size_rejection(e):
                     raise
@@ -214,6 +225,8 @@ class EmailResponder:
         )
         with self._connect() as server:
             server.send_message(draft.build([], note))
+        reason = "the mail server rejected the email as too large"
+        return {a.filename: reason for a in attachments}
 
     def _size_limit(self, server: smtplib.SMTP) -> int:
         """Return the largest message size to send over *server*.

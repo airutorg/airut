@@ -7,9 +7,12 @@
 
 Tests that files placed in outbox/ during execution are uploaded
 to the Slack thread via files_upload_v2, and that the outbox is
-cleared afterwards so later turns do not re-upload them.
+cleared afterwards so later turns do not re-upload them.  A file that
+fails to upload is set aside in storage and named to the agent on the
+next turn.
 """
 
+import json
 import sys
 import threading
 from pathlib import Path
@@ -17,6 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+
+from airut.conversation import CONVERSATION_FILE_NAME
 
 from .conftest import wait_for_conv_completion
 from .environment import IntegrationEnvironment
@@ -300,6 +305,103 @@ events = [
             assert [u.kwargs.get("filename") for u in uploads] == [
                 "report.txt"
             ], "First turn's attachment was re-uploaded on the follow-up"
+
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)
+
+    def test_failed_upload_set_aside_for_agent(
+        self,
+        slack_env: IntegrationEnvironment,
+    ) -> None:
+        """A file that fails to upload waits in storage for the agent.
+
+        The thread is told the upload failed, the file moves to
+        storage/undelivered/, and the next turn's prompt names it.
+        """
+        assert slack_env.slack_server is not None
+        server = slack_env.slack_server
+        server.register_user("U_FRAN", display_name="Fran")
+        server.fail_uploads = True
+
+        thread_root = "1700000000.000060"
+        first_code = """
+(outbox / 'chart.png').write_bytes(b'png data')
+
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Chart drawn"),
+    generate_result_event(session_id, "Chart complete"),
+]
+"""
+        second_code = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Second turn done"),
+    generate_result_event(session_id, "Second complete"),
+]
+"""
+
+        service = slack_env.create_service()
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+        server.wait_for_ready()
+
+        try:
+            server.inject_channel_message(
+                user_id="U_FRAN",
+                text=first_code,
+                channel_id="C_TEST",
+                ts=thread_root,
+            )
+            report = server.wait_for_sent(
+                predicate=lambda m: (
+                    m.method == "chat_postMessage"
+                    and m.contains("could not upload")
+                ),
+                timeout=30.0,
+            )
+            assert report is not None, "Failed upload was not reported"
+            assert report.contains("chart.png")
+
+            tasks = service.tracker.get_all_tasks()
+            assert tasks
+            conv_id = tasks[0].conversation_id
+            assert conv_id is not None
+            turn1 = wait_for_conv_completion(service.tracker, conv_id)
+            assert turn1 is not None
+            assert turn1.status.value == "completed"
+
+            conv_dir = slack_env.storage_dir / "conversations" / conv_id
+            set_aside = conv_dir / "storage" / "undelivered" / "chart.png"
+            assert set_aside.read_bytes() == b"png data"
+            assert list((conv_dir / "outbox").iterdir()) == []
+
+            server.inject_channel_message(
+                user_id="U_FRAN",
+                text=second_code,
+                channel_id="C_TEST",
+                ts="1700000000.000061",
+                thread_ts=thread_root,
+            )
+            reply2 = server.wait_for_sent(
+                predicate=lambda m: (
+                    m.method == "chat_postMessage" and m.contains("second turn")
+                ),
+                timeout=30.0,
+            )
+            assert reply2 is not None, "Did not receive second reply"
+
+            metadata = json.loads(
+                (conv_dir / CONVERSATION_FILE_NAME).read_text()
+            )
+            prompt = metadata["replies"][-1]["request_text"]
+            assert (
+                "I have moved them to /storage/undelivered/: chart.png "
+                "(upload to Slack failed)."
+            ) in prompt
+            # Told once: the record is gone now the agent has run with it.
+            assert "undelivered" not in metadata
 
         finally:
             service.stop()

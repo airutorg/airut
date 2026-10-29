@@ -322,9 +322,10 @@ class OutboxContent:
 
     Attributes:
         attachments: ``(filename, content)`` pairs ready to send.
-        unreadable: Names of files that could not be read.  The outbox
-            is cleared once the reply goes out, so the caller has to
-            tell the user about these rather than dropping them.
+        unreadable: Names of files that could not be read.  The caller
+            has to tell the user about these, and report them as
+            undelivered so they are set aside rather than cleared with
+            the outbox.
     """
 
     attachments: list[tuple[str, bytes]]

@@ -7,15 +7,18 @@
 
 Files that would push a reply over the size limit — configured,
 advertised by the SMTP server, or found when the server refuses the
-message — are left out and named in the reply, and the outbox is still
+message — are left out and named in the reply.  They are set aside in
+storage and named to the agent on the next turn, and the outbox is still
 cleared so later replies are not refused too.
 """
 
+import json
 import threading
 from dataclasses import replace
 
 import pytest
 
+from airut.conversation import CONVERSATION_FILE_NAME
 from airut.gateway.config import EmailChannelConfig
 
 from .conftest import get_message_attachments, get_message_text
@@ -49,13 +52,22 @@ events = [
 """
 
 
-def _assert_follow_up_clean(
-    env: IntegrationEnvironment, create_email, conv_id: str
+def _assert_agent_told_on_follow_up(
+    env: IntegrationEnvironment,
+    create_email,
+    conv_id: str,
+    undelivered: dict[str, str],
 ) -> None:
-    """Check the next reply carries neither the files nor the note.
+    """Check the files left out wait in storage and the next turn says so.
 
-    The outbox must have been cleared: had the oversized file stayed,
-    every later reply would be refused as well.
+    The follow-up reply itself carries neither the files nor the note:
+    the outbox was cleared, so later replies are not refused as well.
+
+    Args:
+        env: Integration environment.
+        create_email: Email factory fixture.
+        conv_id: Conversation of the reply that left files out.
+        undelivered: Reason each file was left out, by name.
     """
     follow_up = """
 events = [
@@ -74,6 +86,18 @@ events = [
     assert reply is not None
     assert get_message_attachments(reply) == []
     assert "Could not attach" not in get_message_text(reply)
+
+    # Messages in a conversation run one at a time, so the follow-up's
+    # reply also means the first delivery had finished setting aside.
+    conv_dir = env.storage_dir / "conversations" / conv_id
+    set_aside = conv_dir / "storage" / "undelivered"
+    assert sorted(p.name for p in set_aside.iterdir()) == sorted(undelivered)
+    metadata = json.loads((conv_dir / CONVERSATION_FILE_NAME).read_text())
+    prompt = metadata["replies"][-1]["request_text"]
+    listed = ", ".join(f"{name} ({why})" for name, why in undelivered.items())
+    assert f"I have moved them to /storage/undelivered/: {listed}." in prompt
+    # Told once: the record is gone now the agent has run with it.
+    assert "undelivered" not in metadata
 
 
 class TestOutboxSizeLimit:
@@ -136,7 +160,12 @@ events = [
                 "email size limit: dump.bin (2.0MB)"
             ) in get_message_text(response)
 
-            _assert_follow_up_clean(integration_env, create_email, conv_id)
+            _assert_agent_told_on_follow_up(
+                integration_env,
+                create_email,
+                conv_id,
+                {"dump.bin": "did not fit in the 1.0MB email size limit"},
+            )
 
         finally:
             service.stop()
@@ -228,7 +257,13 @@ events = [
                 "the email as too large: dump.bin (1.0MB), summary.txt (13B)"
             ) in get_message_text(response)
 
-            _assert_follow_up_clean(integration_env, create_email, conv_id)
+            reason = "the mail server rejected the email as too large"
+            _assert_agent_told_on_follow_up(
+                integration_env,
+                create_email,
+                conv_id,
+                {"dump.bin": reason, "summary.txt": reason},
+            )
 
         finally:
             service.stop()

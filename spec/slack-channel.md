@@ -595,8 +595,10 @@ has been delivered (see
 [Outbox ownership](gateway-architecture.md#channel-abstraction)), so a file is
 uploaded to the thread exactly once and not repeated on later turns. A single
 failed upload does not fail the reply — the message text is already posted — but
-the failed filenames are named in a follow-up thread message, since the file is
-cleared from the outbox regardless.
+the failed filenames are named in a follow-up thread message, and the files are
+returned to the core, which sets them aside in `storage/undelivered/` and names
+them to the agent on the next turn (see
+[Outbox ownership](gateway-architecture.md#channel-abstraction)).
 
 ## Authorization Model
 

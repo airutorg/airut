@@ -86,20 +86,34 @@ same rule — its conversation outlives the run, since recipients can reply to
 continue it.
 
 A delivery that fails entirely raises `ChannelSendError`, which skips the
-cleanup and leaves the files for the next attempt. An adapter that gives up on
-an individual file without raising (Slack treats a single failed upload as
-non-fatal; email leaves out files too large to send, see
-[Response Construction](#response-construction)) must tell the user, because
-that file is cleared either way. The `TIMEOUT` outcome takes the `send_error()`
-path and deliberately leaves the outbox untouched, so partial output ships with
-the next reply.
+cleanup and leaves the files for the next attempt. The `TIMEOUT` outcome takes
+the `send_error()` path and deliberately leaves the outbox untouched, so partial
+output ships with the next reply.
+
+**Undelivered files are set aside.** An adapter may give up on an individual
+file without failing the reply — Slack treats a single failed upload as
+non-fatal, and email leaves out unreadable files and files too large to send
+(see [Response Construction](#response-construction)). It tells the user, and
+`send_reply()` returns each such file with a reason. Instead of deleting them
+with the rest of the outbox, the core moves them to `storage/undelivered/`
+(adding a `-N` counter if anything, a link included, has the name) and records
+them in `conversation.json`. The next message in the conversation names them in
+the prompt, after the inbox note, so the agent knows the user never got them and
+can still reach them — to split, compress, or summarize — without recreating
+them. The record is cleared once the agent has run with that prompt (the run
+succeeded or timed out), so a run that fails to start or a container that fails
+names the files again on the next attempt. Scheduled-task delivery does the
+same; the recipient's reply is the next message.
 
 **Symlinks are never delivered.** The gateway reads the outbox on the host,
 where a link written inside the container resolves against a different
 filesystem: it either dangles or names an unrelated host file. Delivering one
 would let a task exfiltrate host state it was never given (for example a link to
 the server config), so links are skipped at listing time and unlinked with the
-rest of the outbox — the link only, never its target.
+rest of the outbox — the link only, never its target. Setting files aside guards
+the other direction: if `storage/undelivered` is itself a link (storage is
+writable by the task), nothing is moved, since following it would let a task
+place files of its choosing in any host directory the gateway can write to.
 
 **Attachments are never written through a link.** The inbox is writable from the
 container too, so a task can leave a link there, dangling or not, under a name a
@@ -300,7 +314,7 @@ GatewayService._process_message_worker()  [worker thread]:
       -> Mount conversation directories
       -> Run claude CLI
     -> ChannelAdapter.send_reply() or send_error()
-      -> outbox/ cleared once send_reply() returns
+      -> outbox/ cleared once send_reply() returns (undelivered files set aside)
     -> tracker.complete_task(task_id, reason)             → COMPLETED
     -> _drain_pending(conv_id)
       -> Pop first pending message
@@ -344,6 +358,7 @@ Storage lives under the state directory (default `~/.local/state/airut/`; see
 │   │   ├── inbox/               # Channel attachments (mounted at /inbox)
 │   │   ├── outbox/              # Files to attach to reply (mounted at /outbox)
 │   │   └── storage/             # Conversation-scoped persistent data (mounted at /storage)
+│   │       └── undelivered/     # Outbox files a reply could not deliver
 │   └── def67890/                # Another session
 │       ├── conversation.json
 │       ├── events.jsonl
@@ -505,11 +520,13 @@ later reply in the conversation would be refused too. The limit is
 `smtp.max_message_size_mb`, or the `SIZE` the SMTP server advertises (RFC 1870)
 when that is lower. Attachments that would push the encoded message over it are
 left out, largest first so as many files as possible still go through, and a
-note between the body and the usage footer names them. If the server still
-refuses the message as too large (status 5.3.4 or 5.2.3, or a bare 552), it is
-sent once more without attachments, naming all of them. The channel context
-tells the agent how many bytes of files fit in the configured limit so it can
-stay within it. Scheduled-task delivery takes the same path.
+note between the body and the usage footer names them; they are then set aside
+for the agent like any undelivered file (see
+[Outbox ownership](#channel-abstraction)). If the server still refuses the
+message as too large (status 5.3.4 or 5.2.3, or a bare 552), it is sent once
+more without attachments, naming all of them. The channel context tells the
+agent how many bytes of files fit in the configured limit so it can stay within
+it. Scheduled-task delivery takes the same path.
 
 **Dashboard link**: When `DASHBOARD_BASE_URL` is configured, acknowledgment
 emails (sent when a task is queued) include a link to track progress:

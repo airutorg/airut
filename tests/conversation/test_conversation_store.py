@@ -492,6 +492,76 @@ class TestConversationStore:
         assert loaded is not None
         assert loaded.pending_request_text is None
 
+    def test_record_get_and_clear_undelivered(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.add_reply("abc", _make_reply())
+
+        store.record_undelivered("abc", {"dump.bin": "too big"})
+
+        # Persisted alongside the rest of the metadata, and kept until
+        # cleared: reading does not consume it.
+        assert ConversationStore(tmp_path).get_undelivered() == {
+            "dump.bin": "too big"
+        }
+        assert store.get_undelivered() == {"dump.bin": "too big"}
+
+        store.clear_undelivered(["dump.bin"])
+
+        assert store.get_undelivered() == {}
+        loaded = store.load()
+        assert loaded is not None
+        assert len(loaded.replies) == 1
+        assert "undelivered" not in json.loads(
+            (tmp_path / CONVERSATION_FILE_NAME).read_text()
+        )
+
+    def test_clear_undelivered_keeps_others(self, tmp_path: Path) -> None:
+        """Only the files the agent was told about are forgotten."""
+        store = ConversationStore(tmp_path)
+        store.record_undelivered("abc", {"a.bin": "too big"})
+        store.record_undelivered("abc", {"b.png": "upload failed"})
+
+        store.clear_undelivered(["a.bin"])
+
+        assert store.get_undelivered() == {"b.png": "upload failed"}
+
+    def test_record_undelivered_creates_metadata(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.record_undelivered("abc", {"a.bin": "too big"})
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.conversation_id == "abc"
+
+    def test_undelivered_without_metadata(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        assert store.get_undelivered() == {}
+        store.clear_undelivered(["a.bin"])
+        assert store.load() is None
+
+    def test_load_drops_malformed_undelivered(self, tmp_path: Path) -> None:
+        (tmp_path / CONVERSATION_FILE_NAME).write_text(
+            json.dumps(
+                {
+                    "conversation_id": "abc",
+                    "replies": [],
+                    "undelivered": {"ok.bin": "too big", "bad.bin": 3},
+                }
+            )
+        )
+        loaded = ConversationStore(tmp_path).load()
+        assert loaded is not None
+        assert loaded.undelivered == {"ok.bin": "too big"}
+
+        (tmp_path / CONVERSATION_FILE_NAME).write_text(
+            json.dumps(
+                {"conversation_id": "abc", "replies": [], "undelivered": []}
+            )
+        )
+        loaded = ConversationStore(tmp_path).load()
+        assert loaded is not None
+        assert loaded.undelivered == {}
+
 
 # ── Round-trip integration tests ─────────────────────────────────────
 

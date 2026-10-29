@@ -14,7 +14,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.channel import ChannelSendError, RawMessage, TaskPhase
+from airut.gateway.channel import (
+    ChannelSendError,
+    RawMessage,
+    TaskPhase,
+    UndeliveredFile,
+)
 from airut.gateway.config import (
     EmailAccountConfig,
     EmailAuthConfig,
@@ -116,6 +121,8 @@ def _make_adapter(
     authenticator = MagicMock()
     authorizer = MagicMock()
     responder = MagicMock()
+    # Nothing left out of the email unless a test says otherwise.
+    responder.send_reply.return_value = {}
     adapter = EmailChannelAdapter(
         config=cfg,
         authenticator=authenticator,
@@ -613,6 +620,33 @@ class TestSendReply:
         )
         assert call_kw["footer"] == "Cost: $1"
 
+    def test_returns_files_left_out_of_the_email(self, tmp_path: Path) -> None:
+        """The responder's left-out files map back to the outbox paths."""
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+        notes = tmp_path / "notes.txt"
+        notes.write_text("notes")
+        dump = tmp_path / "dump.bin"
+        dump.write_bytes(b"x" * 100)
+        responder.send_reply.return_value = {
+            "dump.bin": "did not fit in the 25.0MB email size limit"
+        }
+
+        undelivered = adapter.send_reply(
+            parsed, "conv1", "Done", "", [dump, notes]
+        )
+
+        assert undelivered == [
+            UndeliveredFile(dump, "did not fit in the 25.0MB email size limit")
+        ]
+
     def test_retry_resends_attachments(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
         parsed = EmailParsedMessage(
@@ -632,7 +666,7 @@ class TestSendReply:
         # First call fails, second succeeds
         responder.send_reply.side_effect = [
             SMTPSendError("temp"),
-            None,
+            {},
         ]
 
         adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
@@ -656,7 +690,7 @@ class TestSendReply:
         # First call fails, second succeeds
         responder.send_reply.side_effect = [
             SMTPSendError("temp fail"),
-            None,
+            {},
         ]
 
         adapter.send_reply(parsed, "conv1", "Done", "", [])
@@ -788,7 +822,7 @@ class TestStructuredMessageId:
         # First call fails, second succeeds
         responder.send_reply.side_effect = [
             SMTPSendError("fail"),
-            None,
+            {},
         ]
         adapter.send_reply(parsed, "aabb1122", "body", "", [])
         assert responder.send_reply.call_count == 2
@@ -1002,15 +1036,16 @@ class TestSendNewMessage:
 
     def test_basic_send(self) -> None:
         adapter, _, _, responder = _make_adapter()
-        adapter.send_new_message(
+        undelivered = adapter.send_new_message(
             to="user@example.com",
             subject="[ID:conv1] daily-report",
             body="Task results",
             conversation_id="conv1",
-            attachments=[],
+            outbox_files=[],
             footer="Cost: $0.05",
         )
 
+        assert undelivered == []
         responder.send_reply.assert_called_once()
         call_kw = responder.send_reply.call_args[1]
         assert call_kw["to"] == "user@example.com"
@@ -1025,18 +1060,44 @@ class TestSendNewMessage:
         assert call_kw["attachments"] is None
         assert call_kw["footer"] == "Cost: $0.05"
 
-    def test_send_with_attachments(self) -> None:
+    def test_send_with_attachments(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
-        attachments = [("report.txt", b"data")]
+        report = tmp_path / "report.txt"
+        report.write_bytes(b"data")
 
         adapter.send_new_message(
             to="user@example.com",
             subject="test",
             body="body",
             conversation_id="conv2",
-            attachments=attachments,
+            outbox_files=[report],
             footer="",
         )
 
         call_kw = responder.send_reply.call_args[1]
         assert call_kw["attachments"] == [("report.txt", b"data")]
+
+    def test_returns_undelivered_files(self, tmp_path: Path) -> None:
+        """Files too large or unreadable come back for the core."""
+        adapter, _, _, responder = _make_adapter()
+        locked = tmp_path / "locked.bin"
+        locked.mkdir()  # A directory cannot be read as a file.
+        dump = tmp_path / "dump.bin"
+        dump.write_bytes(b"x" * 100)
+        responder.send_reply.return_value = {"dump.bin": "too big"}
+
+        undelivered = adapter.send_new_message(
+            to="user@example.com",
+            subject="test",
+            body="body",
+            conversation_id="conv2",
+            outbox_files=[dump, locked],
+            footer="",
+        )
+
+        assert undelivered == [
+            UndeliveredFile(locked, "could not be read"),
+            UndeliveredFile(dump, "too big"),
+        ]
+        call_kw = responder.send_reply.call_args[1]
+        assert "Could not attach 1 file(s): locked.bin" in call_kw["body"]

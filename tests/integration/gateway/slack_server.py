@@ -131,7 +131,14 @@ class FakeWebClient:
     # -- files_upload_v2 ------------------------------------------------
 
     def files_upload_v2(self, **kwargs: JsonValue | bytes) -> MagicMock:
-        """Record a files_upload_v2 call."""
+        """Record a files_upload_v2 call, or fail if the server says so."""
+        if self._server.fail_uploads:
+            from slack_sdk.errors import SlackApiError
+
+            resp = MagicMock()
+            resp.status_code = 500
+            resp.data = {"ok": False, "error": "internal_error"}
+            raise SlackApiError("internal_error", resp)
         file_path = kwargs.get("file")
         if isinstance(file_path, str) and Path(file_path).exists():
             kwargs["_file_content"] = Path(file_path).read_bytes()
@@ -331,6 +338,8 @@ class TestSlackServer:
         self._file_server = _FileServer()
         self.thread_history: list[JsonDict] = []
         """Canned ``conversations.replies`` messages for mid-thread replay."""
+        self.fail_uploads = False
+        """Make every ``files_upload_v2`` call fail with an API error."""
 
         self._web_client: FakeWebClient | None = None
         self._handler: FakeSocketModeHandler | None = None

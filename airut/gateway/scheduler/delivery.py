@@ -15,11 +15,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from airut.conversation import clear_outbox, list_outbox_files
+from airut.conversation import list_outbox_files
 from airut.gateway.config import ScheduleConfig
 from airut.gateway.email.adapter import EmailChannelAdapter
-from airut.gateway.email.parsing import read_outbox_files
 from airut.gateway.service.message_processing import SandboxTaskResult
+from airut.gateway.service.outbox import finish_delivery
 
 
 if TYPE_CHECKING:
@@ -79,34 +79,23 @@ def _deliver_via_email(
     display_name = config.subject or schedule_name
     subject = f"[ID:{result.conversation_id}] {display_name}"
 
-    # Collect outbox files
-    outbox_dir = result.layout.outbox
-    outbox = read_outbox_files(list_outbox_files(outbox_dir))
-
-    # Build body with usage footer if available
-    body = result.response_text
-    # The outbox is cleared below, so name anything that could not be
-    # read rather than dropping it silently.
-    unreadable_note = outbox.unreadable_note()
-    if unreadable_note:
-        body = f"{body}\n\n{unreadable_note}"
     footer = ""
     if result.usage_stats and result.usage_stats.has_any():
         footer = result.usage_stats.format_summary()
 
     try:
-        adapter.send_new_message(
+        undelivered = adapter.send_new_message(
             to=config.deliver.to,
             subject=subject,
-            body=body,
+            body=result.response_text,
             conversation_id=result.conversation_id,
-            attachments=outbox.attachments,
+            outbox_files=list_outbox_files(result.layout.outbox),
             footer=footer,
         )
         # The conversation outlives the schedule run — recipients can
         # reply to continue it — so delivered files must not stay behind
         # to be attached again to every later reply.
-        clear_outbox(outbox_dir)
+        finish_delivery(result.layout, result.conversation_id, undelivered)
         logger.info(
             "Schedule '%s': delivered result to %s via email",
             schedule_name,

@@ -17,6 +17,7 @@ from airut.gateway.channel import (
     ChannelSendError,
     RawMessage,
     TaskPhase,
+    UndeliveredFile,
 )
 from airut.gateway.slack.adapter import (
     _MAX_SPLIT_MESSAGES,
@@ -670,9 +671,10 @@ class TestSendReply:
         outfile = tmp_path / "report.txt"
         outfile.write_text("report data")
 
-        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
+        undelivered = adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
 
         client.files_upload_v2.assert_called_once()
+        assert undelivered == []
 
     def test_sets_thread_title(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
@@ -885,9 +887,8 @@ class TestSendReplyEdgeCases:
     def test_file_upload_failure_non_fatal(self, tmp_path: Path) -> None:
         """File upload errors don't prevent the reply from sending.
 
-        The core clears the outbox once ``send_reply`` returns, so the
-        undelivered file is named in the thread rather than dropped
-        silently.
+        The undelivered file is named in the thread for the user, and
+        returned so the core sets it aside for the agent.
         """
         adapter, client, _, _ = _make_adapter(tmp_path)
         client.files_upload_v2.side_effect = SlackApiError(
@@ -907,13 +908,16 @@ class TestSendReplyEdgeCases:
         outfile.write_text("data")
 
         # Should not raise
-        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
+        undelivered = adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
 
         texts = [
             c.kwargs["text"] for c in client.chat_postMessage.call_args_list
         ]
         assert texts[0] == "Done"
         assert "report.txt" in texts[1]
+        assert undelivered == [
+            UndeliveredFile(outfile, "upload to Slack failed")
+        ]
 
     def test_upload_failure_report_failure_non_fatal(
         self, tmp_path: Path

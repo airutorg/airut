@@ -8,9 +8,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from airut.conversation import ConversationLayout
+from airut.conversation import (
+    ConversationLayout,
+    ConversationStore,
+    create_conversation_layout,
+    prepare_conversation,
+)
+from airut.gateway.channel import UndeliveredFile
 from airut.gateway.config import ScheduleConfig, ScheduleDelivery
 from airut.gateway.email.adapter import EmailChannelAdapter
 from airut.gateway.scheduler.delivery import (
@@ -20,6 +26,12 @@ from airut.gateway.scheduler.delivery import (
 from airut.gateway.service.message_processing import SandboxTaskResult
 from airut.gateway.service.usage_stats import UsageStats
 from airut.sandbox import Outcome
+
+
+def _make_layout(tmp_path: Path) -> ConversationLayout:
+    layout = create_conversation_layout(tmp_path / "abc12345")
+    prepare_conversation(layout)
+    return layout
 
 
 def _make_schedule_config() -> ScheduleConfig:
@@ -34,15 +46,13 @@ def _make_result(
     conversation_id: str = "abc12345",
     response_text: str = "Result text",
     usage_stats: UsageStats | None = None,
-    outbox: Path | None = None,
+    layout: ConversationLayout | None = None,
 ) -> SandboxTaskResult:
-    layout = MagicMock(spec=ConversationLayout)
-    if outbox is None:
+    if layout is None:
         # No outbox on disk: nothing to attach and nothing to clear.
+        layout = MagicMock(spec=ConversationLayout)
         layout.outbox = MagicMock()
         layout.outbox.exists.return_value = False
-    else:
-        layout.outbox = outbox
     return SandboxTaskResult(
         outcome=Outcome.SUCCESS,
         conversation_id=conversation_id,
@@ -60,6 +70,7 @@ class TestDeliverResult:
         handler = MagicMock()
         handler.config.repo_id = "test-repo"
         adapter = MagicMock(spec=EmailChannelAdapter)
+        adapter.send_new_message.return_value = []
         handler.adapters = {"email": adapter}
 
         config = _make_schedule_config()
@@ -104,6 +115,7 @@ class TestDeliverViaEmail:
 
     def test_basic_delivery(self) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
+        adapter.send_new_message.return_value = []
         config = _make_schedule_config()
         result = _make_result(response_text="Task done")
 
@@ -118,6 +130,7 @@ class TestDeliverViaEmail:
 
     def test_subject_override(self) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
+        adapter.send_new_message.return_value = []
         config = ScheduleConfig(
             cron="0 9 * * *",
             deliver=ScheduleDelivery(channel="email", to="user@example.com"),
@@ -133,6 +146,7 @@ class TestDeliverViaEmail:
 
     def test_delivery_with_usage_stats(self) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
+        adapter.send_new_message.return_value = []
         config = _make_schedule_config()
         stats = UsageStats(total_cost_usd=0.05)
         result = _make_result(usage_stats=stats)
@@ -146,20 +160,44 @@ class TestDeliverViaEmail:
 
     def test_delivery_with_outbox_files(self, tmp_path: Path) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
+        adapter.send_new_message.return_value = []
         config = _make_schedule_config()
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "file.txt").write_text("content")
-        result = _make_result(outbox=outbox)
+        layout = _make_layout(tmp_path)
+        (layout.outbox / "file.txt").write_text("content")
+        result = _make_result(layout=layout)
 
         _deliver_via_email(adapter, "daily", config, result)
 
         adapter.send_new_message.assert_called_once()
         kwargs = adapter.send_new_message.call_args.kwargs
-        assert kwargs["attachments"] == [("file.txt", b"content")]
+        assert kwargs["outbox_files"] == [layout.outbox / "file.txt"]
         # The conversation survives the run — recipients can reply to it —
         # so delivered files must not be attached again to that reply.
-        assert list(outbox.iterdir()) == []
+        assert list(layout.outbox.iterdir()) == []
+
+    def test_undelivered_files_set_aside(self, tmp_path: Path) -> None:
+        """Files the email left out wait in storage for the reply turn."""
+        adapter = MagicMock(spec=EmailChannelAdapter)
+        config = _make_schedule_config()
+        layout = _make_layout(tmp_path)
+        (layout.outbox / "summary.txt").write_text("summary")
+        dump = layout.outbox / "dump.bin"
+        dump.write_bytes(b"x" * 100)
+        adapter.send_new_message.return_value = [
+            UndeliveredFile(dump, "did not fit in the 25.0MB email size limit")
+        ]
+        result = _make_result(layout=layout)
+
+        _deliver_via_email(adapter, "daily", config, result)
+
+        assert list(layout.outbox.iterdir()) == []
+        assert (layout.storage / "undelivered" / "dump.bin").read_bytes() == (
+            b"x" * 100
+        )
+        store = ConversationStore(layout.conversation_dir)
+        assert store.get_undelivered() == {
+            "dump.bin": "did not fit in the 25.0MB email size limit"
+        }
 
     def test_delivery_failure_logged(self) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
@@ -170,32 +208,15 @@ class TestDeliverViaEmail:
         # Should not raise
         _deliver_via_email(adapter, "daily", config, result)
 
-    def test_unreadable_outbox_file_named_in_body(self, tmp_path: Path) -> None:
-        """A file that cannot be read is named in the delivered body."""
-        adapter = MagicMock(spec=EmailChannelAdapter)
-        config = _make_schedule_config()
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "locked.bin").write_text("unreadable")
-        result = _make_result(outbox=outbox)
-
-        with patch.object(Path, "read_bytes", side_effect=OSError("denied")):
-            _deliver_via_email(adapter, "daily", config, result)
-
-        kwargs = adapter.send_new_message.call_args.kwargs
-        assert kwargs["attachments"] == []
-        assert "Could not attach 1 file(s): locked.bin" in kwargs["body"]
-
     def test_outbox_kept_when_delivery_fails(self, tmp_path: Path) -> None:
         """A failed send leaves the files for the next attempt."""
         adapter = MagicMock(spec=EmailChannelAdapter)
         adapter.send_new_message.side_effect = RuntimeError("SMTP down")
         config = _make_schedule_config()
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "file.txt").write_text("content")
-        result = _make_result(outbox=outbox)
+        layout = _make_layout(tmp_path)
+        (layout.outbox / "file.txt").write_text("content")
+        result = _make_result(layout=layout)
 
         _deliver_via_email(adapter, "daily", config, result)
 
-        assert [p.name for p in outbox.iterdir()] == ["file.txt"]
+        assert [p.name for p in layout.outbox.iterdir()] == ["file.txt"]

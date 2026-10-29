@@ -20,16 +20,23 @@ Layout::
       inbox/                    # email attachments
       outbox/                   # files to send back via email
       storage/                  # conversation-scoped persistent storage
+        undelivered/            # outbox files a channel did not deliver
 """
 
 from __future__ import annotations
 
+import itertools
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
+
+#: Directory under ``storage/`` that holds outbox files a channel did
+#: not deliver (see ``set_aside_undelivered``).
+UNDELIVERED_DIR = "undelivered"
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,19 @@ def prepare_conversation(layout: ConversationLayout) -> None:
         logger.debug("Created/verified directory: %s", directory)
 
 
+def _candidate_paths(directory: Path, safe_name: str) -> Iterator[Path]:
+    """Yield *safe_name* in *directory*, then ``-N`` variants of it.
+
+    The counter goes before the extension: ``data.csv``, ``data-1.csv``,
+    ``data-2.csv``, and so on.
+    """
+    yield directory / safe_name
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    for counter in itertools.count(1):
+        yield directory / f"{stem}-{counter}{suffix}"
+
+
 def write_inbox_file(inbox_dir: Path, safe_name: str, data: bytes) -> Path:
     """Save an attachment in *inbox_dir* without overwriting anything.
 
@@ -115,18 +135,15 @@ def write_inbox_file(inbox_dir: Path, safe_name: str, data: bytes) -> Path:
     Raises:
         OSError: If the file cannot be written for any other reason.
     """
-    stem = Path(safe_name).stem
-    suffix = Path(safe_name).suffix
-    candidate = inbox_dir / safe_name
-    counter = 0
+    candidates = _candidate_paths(inbox_dir, safe_name)
     while True:
+        candidate = next(candidates)
         try:
             with open(candidate, "xb") as f:
                 f.write(data)
             return candidate
         except FileExistsError:
-            counter += 1
-            candidate = inbox_dir / f"{stem}-{counter}{suffix}"
+            pass
 
 
 def list_outbox_files(outbox_dir: Path) -> list[Path]:
@@ -158,6 +175,61 @@ def list_outbox_files(outbox_dir: Path) -> list[Path]:
         if path.is_file():
             files.append(path)
     return sorted(files)
+
+
+def set_aside_undelivered(
+    layout: ConversationLayout, paths: list[Path]
+) -> dict[Path, str]:
+    """Move outbox files that were not delivered into storage.
+
+    The outbox is cleared once a reply goes out, so a file the channel
+    could not deliver (too large for email, a failed upload) would be
+    lost.  It moves to ``storage/undelivered/`` instead, where the agent
+    can still reach it, with a ``-N`` counter added if the name is taken.
+
+    Args:
+        layout: Conversation layout.
+        paths: Outbox files to set aside.
+
+    Returns:
+        The new name, under ``storage/undelivered/``, of each file moved.
+        A file that cannot be moved is left for the outbox cleanup.
+    """
+    if not paths:
+        return {}
+    target_dir = layout.storage / UNDELIVERED_DIR
+    # The task can write anything in storage, including a link here
+    # naming a host directory: following it would let the task place
+    # files of its choosing there.  The container has exited, so the
+    # check cannot be raced.
+    if target_dir.is_symlink():
+        logger.warning(
+            "Not setting aside outbox files: %s is a link", target_dir
+        )
+        return {}
+    try:
+        target_dir.mkdir(exist_ok=True)
+    except OSError as e:
+        logger.warning("Not setting aside outbox files: %s", e)
+        return {}
+
+    moved: dict[Path, str] = {}
+    for path in paths:
+        # Anything already there, a link included, counts as taken, so
+        # nothing the task left in the directory is replaced.
+        target = next(
+            candidate
+            for candidate in _candidate_paths(target_dir, path.name)
+            if not candidate.exists(follow_symlinks=False)
+        )
+        try:
+            path.rename(target)
+        except OSError as e:
+            logger.warning("Failed to set aside outbox file %s: %s", path, e)
+            continue
+        moved[path] = target.name
+        logger.info("Set aside undelivered outbox file as %s", target)
+    return moved
 
 
 def clear_outbox(outbox_dir: Path) -> None:

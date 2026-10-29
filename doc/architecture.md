@@ -300,7 +300,8 @@ EmailResponder
 SMTP send
     │
     ▼
-Gateway clears /outbox (files are sent once, not on every later turn)
+Gateway clears /outbox (files are sent once, not on every later turn),
+moving any it could not deliver to /storage/undelivered for the agent
     │
     ▼
 EmailListener
@@ -390,7 +391,8 @@ SlackChannelAdapter.send_reply()
     ├──▶ Set thread title from the first message (DM only; skipped in channels)
     │
     ▼
-Gateway clears /outbox (files are sent once, not on every later turn)
+Gateway clears /outbox (files are sent once, not on every later turn),
+moving any it could not deliver to /storage/undelivered for the agent
     │
     ▼
 Done (thread mapping persisted for future messages)
@@ -418,6 +420,7 @@ Each conversation maps to a directory under the state dir (default
         ├── inbox/               # Attachments → /inbox
         ├── outbox/              # Reply files → /outbox
         └── storage/             # Persistent scratch space → /storage
+            └── undelivered/     # Outbox files a reply could not deliver
 ```
 
 The git mirror is refreshed before each task starts. After refreshing, the

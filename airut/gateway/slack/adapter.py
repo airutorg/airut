@@ -31,6 +31,7 @@ from airut.gateway.channel import (
     PlanStreamer,
     RawMessage,
     TaskPhase,
+    UndeliveredFile,
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
@@ -593,7 +594,7 @@ class SlackChannelAdapter(ChannelAdapter):
         response_text: str,
         usage_footer: str,
         outbox_files: list[Path],
-    ) -> None:
+    ) -> list[UndeliveredFile]:
         """Send reply with response text, optional files, and thread title."""
         if not isinstance(parsed, SlackParsedMessage):
             raise TypeError(
@@ -631,10 +632,10 @@ class SlackChannelAdapter(ChannelAdapter):
             raise ChannelSendError(str(e)) from e
 
         # Upload outbox files.  A single failed upload does not fail the
-        # reply (the text is already posted), but the core clears the
-        # outbox once this returns, so the user is told which files did
-        # not make it rather than losing them silently.
-        failed: list[str] = []
+        # reply (the text is already posted), but the user is told which
+        # files did not make it, and the core sets them aside for the
+        # agent once this returns.
+        failed: list[Path] = []
         for filepath in outbox_files:
             try:
                 _upload_file(
@@ -648,9 +649,9 @@ class SlackChannelAdapter(ChannelAdapter):
                 # between listing and upload; it must not escape as an
                 # unhandled error after the reply text is already out.
                 logger.warning("Failed to upload file %s: %s", filepath.name, e)
-                failed.append(filepath.name)
+                failed.append(filepath)
         if failed:
-            self._report_failed_uploads(parsed, failed)
+            self._report_failed_uploads(parsed, [f.name for f in failed])
 
         # Set thread title from first message.  assistant.threads.setTitle
         # is a DM-only (Agents & AI Apps) API; channel threads are
@@ -665,6 +666,8 @@ class SlackChannelAdapter(ChannelAdapter):
                 )
             except SlackApiError as e:
                 logger.debug("Failed to set thread title: %s", e)
+
+        return [UndeliveredFile(f, "upload to Slack failed") for f in failed]
 
     def _report_failed_uploads(
         self, parsed: SlackParsedMessage, filenames: list[str]

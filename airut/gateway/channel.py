@@ -51,6 +51,20 @@ class ChannelSendError(Exception):
     """
 
 
+@dataclass(frozen=True)
+class UndeliveredFile:
+    """An outbox file a channel did not deliver with the reply.
+
+    Attributes:
+        path: The file in the outbox.
+        reason: Why, for the agent (e.g. "did not fit in the 25.0MB
+            email size limit").
+    """
+
+    path: Path
+    reason: str
+
+
 @dataclass
 class ParsedMessage:
     """Protocol-agnostic parsed message.
@@ -394,17 +408,21 @@ class ChannelAdapter(Protocol):
         response_text: str,
         usage_footer: str,
         outbox_files: list[Path],
-    ) -> None:
+    ) -> list[UndeliveredFile]:
         """Send the final response with optional file attachments.
 
         ``outbox_files`` are the files the task left in the conversation
-        outbox.  Adapters deliver them but must never delete them: the
-        core clears the outbox once this call returns, so each file is
-        sent once instead of with every later reply.  Raise
+        outbox.  Adapters deliver them but must never delete or move
+        them: once this call returns, the core sets aside the files
+        returned as undelivered and clears the rest of the outbox, so
+        each file is sent once instead of with every later reply.  Raise
         ``ChannelSendError`` when the reply was not delivered — that
         skips the cleanup and keeps the files for the next attempt.  An
         adapter that gives up on an individual file without raising
-        should tell the user, since the file is discarded either way.
+        returns it and should also tell the user.
+
+        Returns:
+            The outbox files that were not delivered, with the reason.
         """
         ...
 

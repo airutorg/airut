@@ -15,6 +15,7 @@ managed by the sandbox's EventLog.
 
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -74,6 +75,9 @@ class ConversationMetadata:
         pending_request_text: Prompt text for a reply that is currently
             being executed. Set before execution starts so the dashboard
             can display it; cleared when the reply completes.
+        undelivered: Outbox files set aside in ``storage/undelivered/``
+            because a reply could not deliver them, by name, with the
+            reason.  Kept until the next message tells the agent.
     """
 
     conversation_id: str
@@ -81,6 +85,7 @@ class ConversationMetadata:
     model: str | None = None
     effort: str | None = None
     pending_request_text: str | None = None
+    undelivered: dict[str, str] = field(default_factory=dict)
 
     @property
     def latest_session_id(self) -> str | None:
@@ -176,6 +181,7 @@ class ConversationStore:
                 model=data.get("model"),
                 effort=data.get("effort"),
                 pending_request_text=data.get("pending_request_text"),
+                undelivered=_deserialize_undelivered(data.get("undelivered")),
             )
 
             logger.debug(
@@ -211,6 +217,8 @@ class ConversationStore:
             data["effort"] = metadata.effort
         if metadata.pending_request_text is not None:
             data["pending_request_text"] = metadata.pending_request_text
+        if metadata.undelivered:
+            data["undelivered"] = dict(metadata.undelivered)
 
         with self._file_path.open("w") as f:
             json.dump(data, f, indent=2)
@@ -310,6 +318,48 @@ class ConversationStore:
         )
 
         return metadata
+
+    def record_undelivered(
+        self, conversation_id: str, files: dict[str, str]
+    ) -> None:
+        """Remember outbox files a reply set aside, to tell the agent.
+
+        Adds to any not yet reported.
+
+        Args:
+            conversation_id: Conversation identifier.
+            files: Reason each file was not delivered, by its name in
+                ``storage/undelivered/``.
+        """
+        metadata = self.load()
+        if metadata is None:
+            metadata = ConversationMetadata(conversation_id=conversation_id)
+        metadata.undelivered.update(files)
+        self.save(metadata)
+
+    def get_undelivered(self) -> dict[str, str]:
+        """Return the undelivered files not yet reported to the agent.
+
+        Returns:
+            Reason each file was not delivered, by its name in
+            ``storage/undelivered/``; empty when there are none.
+        """
+        metadata = self.load()
+        return dict(metadata.undelivered) if metadata else {}
+
+    def clear_undelivered(self, names: Iterable[str]) -> None:
+        """Forget undelivered files once the agent has been told.
+
+        Args:
+            names: Names, in ``storage/undelivered/``, of the files the
+                agent was told about.
+        """
+        metadata = self.load()
+        if metadata is None:
+            return
+        for name in names:
+            metadata.undelivered.pop(name, None)
+        self.save(metadata)
 
     def get_session_id_for_resume(self) -> str | None:
         """Get session_id to use for --resume flag.
@@ -420,6 +470,15 @@ def _serialize_reply(reply: ReplySummary) -> JsonDict:
         },
         "request_text": reply.request_text,
         "response_text": reply.response_text,
+    }
+
+
+def _deserialize_undelivered(raw: JsonValue) -> dict[str, str]:
+    """Deserialize the undelivered file map, dropping malformed entries."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name: reason for name, reason in raw.items() if isinstance(reason, str)
     }
 
 

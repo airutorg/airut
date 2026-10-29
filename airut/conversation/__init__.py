@@ -13,12 +13,14 @@ Also provides ConversationStore for conversation metadata persistence
 """
 
 from airut.conversation.conversation_layout import (
+    UNDELIVERED_DIR,
     ConversationLayout,
     clear_outbox,
     create_conversation_layout,
     get_container_mounts,
     list_outbox_files,
     prepare_conversation,
+    set_aside_undelivered,
     write_inbox_file,
 )
 from airut.conversation.conversation_store import (
@@ -30,12 +32,14 @@ from airut.conversation.conversation_store import (
 
 
 __all__ = [
+    "UNDELIVERED_DIR",
     "ConversationLayout",
     "clear_outbox",
     "create_conversation_layout",
     "get_container_mounts",
     "list_outbox_files",
     "prepare_conversation",
+    "set_aside_undelivered",
     "write_inbox_file",
     "CONVERSATION_FILE_NAME",
     "ConversationMetadata",

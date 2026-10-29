@@ -251,9 +251,12 @@ used instead. Attachments that would push a reply over the limit are left out â€
 the largest first â€” and the reply names them, so the text and the remaining
 files still arrive. If the server refuses a reply as too large anyway, it is
 sent again without attachments, noting that the mail server rejected the email
-as too large. The agent is told how much fits (about 18 MB of files for the
-default, since attachments grow by about 37% when encoded for email) so it can
-split or compress files ahead of time.
+as too large. Files left out are kept in the conversation's
+`/storage/undelivered/`, and the agent is told about them with your next
+message, so you can ask it to split, compress, or summarize them. The agent is
+told how much fits (about 18 MB of files for the default, since attachments grow
+by about 37% when encoded for email) so it can split or compress files ahead of
+time.
 
 Set `max_message_size_mb` to the smallest limit along the way: if your server
 accepts 50 MB but your recipients' servers stop at 25 MB, a 40 MB reply leaves
