@@ -10,63 +10,24 @@ dependencies = [
 ]
 
 [tool.uv]
-# Override mitmproxy 12.2.3's transitive dependency pins to fix known
-# vulnerabilities. Remove each entry when mitmproxy releases a version whose
-# own pins already admit the fixed release.
+# Raise floors on transitive dependencies to fix known vulnerabilities that
+# mitmproxy's own pins exclude or do not rule out. Remove each entry when
+# mitmproxy releases a version whose own pins already admit the fixed release.
 #
-# - tornado >=6.5.5: fixes GHSA-78cv-mqj4-43f7 (cookie attribute injection).
-#   mitmproxy 12.2.3 pins tornado <=6.5.5, so the override crosses a minor
-#   version (6.6). mitmproxy imports tornado only in mitmweb and the console UI
-#   (mitmproxy/tools/web, mitmproxy/tools/console), never from mitmdump, which
-#   is what the proxy container runs: importing mitmproxy.tools.dump and the
-#   proxy filter addons leaves tornado unloaded, so the 6.6 breaking changes
-#   (header line folding removal, lock/queue timeout=0 semantics, dropped
-#   WebSocket v7/8) do not reach the proxy.
-# - pyopenssl >=26.0.0: fixes GHSA-vp96-hxj8-p424
-# - flask >=3.1.3: fixes GHSA-68rp-wp8r-4726 (missing Vary: Cookie header)
-# - pyasn1 >=0.6.3: fixes GHSA-jr27-m4p2-rc6r
-# - msgpack >=1.2.1: fixes GHSA-6v7p-g79w-8964
-# - cryptography >=50.0.0: fixes GHSA-jwv3-5hgf-82ww (exponential X.509 path
-#   building), GHSA-m2h6-j472-rp4c (wildcard DNS names escape
-#   permittedSubtrees) and GHSA-g6cj-pr64-35w5 (PKCS#7 Bleichenbacher oracle).
-#   mitmproxy 12.2.3 pins cryptography <=48.1 and no 48.x release carries the
-#   fixes, so the override crosses two major versions. Verified against
-#   mitmproxy 12.2.3: CA/leaf certificate generation, PEM round-trips, DNS and
-#   IP SANs, and end-to-end HTTPS interception through mitmdump all work. The
-#   49.0.0/50.0.0 backwards-incompatible changes do not touch mitmproxy or the
-#   proxy filter: dropped 32-bit Windows and x86_64 macOS wheels (container is
-#   linux/amd64 and arm64), removed *_KEY_TYPES aliases deprecated since 40.0,
-#   ChaCha20 nonce counter semantics (TLS ciphers come from OpenSSL, not this
-#   API), and stricter DER parsing rejecting malformed certificates.
-# - h2 >=4.4.1: fixes GHSA-6hr6-w5qg-qmwg (duplicate Host headers forwarded to
-#   the consuming application, an HTTP/2-to-HTTP/1.1 request smuggling
-#   primitive). mitmproxy 12.2.3 pins h2 ==4.3.0 exactly, so the override
-#   crosses a minor version. Verified against mitmproxy 12.2.3 with end-to-end
-#   HTTP/2 interception through mitmdump against an HTTP/2-only origin, in both
-#   the deployed regular-mode topology (client leg is HTTP/1.1 -- mitmproxy
-#   forces that because it does not support CONNECT over HTTP/2 -- so h2 runs
-#   in its client role toward the origin) and reverse mode (client leg
-#   negotiates h2, covering the h2 server role): 500 KB request/response
-#   bodies, flow control and WINDOW_UPDATE, connection reuse, and the proxy
-#   filter's allow/block decisions all work. The 4.4.0 backwards-incompatible
-#   changes do not affect mitmproxy or the proxy filter: dropped Python/PyPy
-#   3.9 (container is 3.13); `H2Connection.end_stream()` now raises
-#   `NoSuchStreamError`/`StreamClosedError` instead of `KeyError` for unknown
-#   or closed streams, and mitmproxy only calls it behind an `is_open_for_us()`
-#   guard; and stricter `content-length`, duplicate-Host and
-#   `SETTINGS_ENABLE_PUSH` validation raises `h2.exceptions.ProtocolError`,
-#   which mitmproxy already catches around `receive_data` and turns into a
-#   normal protocol-error teardown.
-# - brotli >=1.2.1: fixes GHSA-9v8h-qqgm-4m35 / PYSEC-2026-4322 (out-of-bounds
-#   write in the decoder on crafted streams). mitmproxy 12.2.3 pins
-#   brotli <=1.2.0; 1.2.1 is a patch release with the same API.
+# - tornado >=6.6: fixes GHSA-pcg2-g6cj-q92c (quadratic header parsing on
+#   obs-fold continuation lines), GHSA-r4j5-9xpp-3985 (tiny chunked-body
+#   chunks block the event loop) and GHSA-pw9p-v7r6-gx4p (RedirectHandler open
+#   redirect). mitmproxy 12.3.1 pins tornado <=6.5.10, so the override crosses
+#   a minor version. mitmproxy imports tornado only in mitmweb and the console
+#   UI (mitmproxy/tools/web, mitmproxy/tools/console), never from mitmdump,
+#   which is what the proxy container runs: a running mitmdump with the proxy
+#   filter addons loaded has no tornado in sys.modules, so the 6.6 breaking
+#   changes (header line folding removal, lock/queue timeout=0 semantics,
+#   dropped WebSocket v7/8) do not reach the proxy.
+# - pyasn1 >=0.6.3: fixes GHSA-jr27-m4p2-rc6r. pyasn1 comes in via ldap3
+#   (pyasn1>=0.4.6), not a mitmproxy pin, so this floor keeps vulnerable
+#   releases out of the resolution.
 override-dependencies = [
-    "tornado>=6.5.5",
-    "pyopenssl>=26.0.0",
-    "flask>=3.1.3",
+    "tornado>=6.6",
     "pyasn1>=0.6.3",
-    "msgpack>=1.2.1",
-    "cryptography>=50.0.0",
-    "h2>=4.4.1",
-    "brotli>=1.2.1",
 ]
