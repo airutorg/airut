@@ -19,7 +19,7 @@ from airut.yaml_env import VarRef, raw_resolve
 def resolve_vars_section(raw: dict[str, Any]) -> dict[str, str | None]:
     """Read ``vars:`` from the raw dict and resolve each value.
 
-    Variable values may be literals or ``!env`` references.  ``!var``
+    Variable values may be literals, ``!env`` or ``!file`` references.  ``!var``
     references inside ``vars:`` are forbidden (no var-to-var).
 
     Args:

@@ -136,7 +136,8 @@ Apply pending config schema migrations to the config file.
 - If no config file exists, prints an error and suggests `airut init` (exit 1)
 - Reads the YAML file, applies all pending migrations from `config_version` to
   `CURRENT_CONFIG_VERSION`, and writes back atomically
-- Preserves `!env` and `!var` tags during the round-trip
+- Preserves `!env`, `!var` and `!file` tags during the round-trip; tag-free
+  spellings (and a JSON file) are written back as tagged YAML
 - If already up to date, prints "already up to date (vN)" and returns 0
 - On success, prints "Migrated config schema: vN → vM" and returns 0
 - On error (parse failure, invalid version), prints the error and returns 1

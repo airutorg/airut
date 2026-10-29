@@ -14,11 +14,14 @@ from airut.config.editor import (
     MISSING,
     EditBuffer,
     InMemoryConfigSource,
+    format_raw_value,
+    raw_values_equal,
     schema_for_editor,
+    value_source,
 )
 from airut.config.schema import Scope, meta
 from airut.config.source import YAML_GLOBAL_STRUCTURE
-from airut.yaml_env import EnvVar, VarRef
+from airut.yaml_env import EnvVar, FileRef, VarRef
 from tests.conftest import make_sample_raw as _make_sample_raw
 
 
@@ -58,6 +61,7 @@ class TestSchemaForEditor:
         assert schema[0].python_type == "int"
         assert schema[0].env_eligible is True
         assert schema[0].var_eligible is True
+        assert schema[0].file_eligible is True
 
     def test_scalar_bool(self) -> None:
         @dataclass(frozen=True)
@@ -70,6 +74,7 @@ class TestSchemaForEditor:
         schema = schema_for_editor(Cfg)
         assert schema[0].env_eligible is False
         assert schema[0].var_eligible is False
+        assert schema[0].file_eligible is False
 
     def test_required_field(self) -> None:
         @dataclass(frozen=True)
@@ -497,6 +502,11 @@ class TestEditBufferSetField:
         assert isinstance(value, VarRef)
         assert value.var_name == "host_var"
 
+    def test_set_file_field(self) -> None:
+        buf = EditBuffer(_make_sample_raw(), generation=0)
+        buf.set_field("dashboard.base_url", "file", "/run/secrets/url")
+        assert buf.raw["dashboard"]["base_url"] == FileRef("/run/secrets/url")
+
     def test_unset_field(self) -> None:
         buf = EditBuffer(_make_sample_raw(), generation=0)
         buf.set_field("dashboard.base_url", "literal", "http://example.com")
@@ -765,3 +775,22 @@ class TestAtomicSave:
             loaded = yaml.load(f, Loader=make_env_loader())
         assert isinstance(loaded["password"], EnvVar)
         assert isinstance(loaded["ref"], VarRef)
+
+
+# ── !file helpers ─────────────────────────────────────────────────────
+
+
+class TestFileRefHelpers:
+    def test_value_source(self) -> None:
+        assert value_source(FileRef("/run/secrets/x")) == (
+            "file",
+            "/run/secrets/x",
+        )
+
+    def test_raw_values_equal(self) -> None:
+        assert raw_values_equal(FileRef("/a"), FileRef("/a"))
+        assert not raw_values_equal(FileRef("/a"), FileRef("/b"))
+        assert not raw_values_equal(FileRef("/a"), EnvVar("/a"))
+
+    def test_format_raw_value(self) -> None:
+        assert format_raw_value(FileRef("/a")) == "!file /a"

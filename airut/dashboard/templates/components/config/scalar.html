@@ -40,6 +40,15 @@
         Environment
       </button>
       {% endif %}
+      {% if f.file_eligible %}
+      <button data-source="file"
+              class="{{ 'active' if current_source == 'file' else '' }}"
+              hx-patch="/api/config/field"
+              hx-vals='{"path":"{{ f.path }}","source":"file","value":{{ (display_value if current_source == 'file' else '') | tojson }}}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
+        File
+      </button>
+      {% endif %}
       {% if f.var_eligible %}
       <button data-source="var"
               class="{{ 'active' if current_source == 'var' else '' }}"
@@ -88,6 +97,7 @@
            value="{{ display_value if display_value is not none else '' }}"
            {% if current_source == 'env' %}placeholder="ENV_VAR_NAME"{% endif %}
            {% if current_source == 'var' %}placeholder="VAR_NAME"{% endif %}
+           {% if current_source == 'file' %}placeholder="/run/secrets/NAME"{% endif %}
            hx-patch="/api/config/field"
            hx-trigger="change"
            hx-vals='{"path":"{{ f.path }}","source":"{{ current_source }}"}'

@@ -7,26 +7,32 @@
 
 ``ConfigSource`` decouples config loading/saving from the serialization
 format.  ``YamlConfigSource`` wraps the existing YAML file loading with
-``!env`` tag support, and includes ``YAML_*_STRUCTURE`` mappings for
+``!env``/``!var``/``!file`` tag support (and their tag-free mapping
+spellings), and includes ``YAML_*_STRUCTURE`` mappings for
 reconstructing nested YAML structure on save.
 """
 
 import hashlib
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
 import yaml
 
 from airut.gateway.dotenv_loader import load_dotenv_once
-from airut.yaml_env import EnvVar, VarRef, make_env_loader
+from airut.yaml_env import EnvVar, FileRef, VarRef, YamlValue, make_env_loader
 
 
 class ConfigSource(Protocol):
     """Read/write raw config dicts from any backing store."""
 
     def load(self) -> dict[str, Any]:
-        """Load raw config dict.  Values may contain EnvVar placeholders."""
+        """Load raw config dict.
+
+        Values may contain ``EnvVar``, ``VarRef`` and ``FileRef``
+        placeholders.
+        """
         ...
 
     def save(self, data: dict[str, Any]) -> None:
@@ -135,6 +141,63 @@ def flat_to_nested_repo(flat: dict[str, Any]) -> dict[str, Any]:
     return _flat_to_nested(flat, YAML_REPO_STRUCTURE)
 
 
+def _file_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> FileRef:
+    """Handle ``!file PATH`` in YAML."""
+    return FileRef(str(loader.construct_scalar(node)))
+
+
+def make_config_loader() -> type[yaml.SafeLoader]:
+    """Create the server config loader: ``!env``, ``!var`` and ``!file``."""
+    loader = make_env_loader()
+    loader.add_constructor("!file", _file_constructor)
+    return loader
+
+
+#: Tag-free spellings: a mapping with the single key ``"!env"``,
+#: ``"!var"`` or ``"!file"`` stands for that tag, e.g.
+#: ``{"!env": "NAME"}`` for ``!env NAME``.  For generators that cannot
+#: emit YAML tags (JSON, Nix's ``pkgs.formats.yaml``).
+_TAG_MAPPINGS: dict[str, Callable[[str], EnvVar | VarRef | FileRef]] = {
+    "!env": EnvVar,
+    "!var": VarRef,
+    "!file": FileRef,
+}
+
+
+def resolve_tag_mappings(value: YamlValue, path: str) -> YamlValue:
+    """Replace tag-free spellings with tag placeholders, recursively.
+
+    Dicts and lists are updated in place.
+
+    Args:
+        value: Raw YAML value below the document root.
+        path: Dot-path of *value*, for error messages.
+
+    Returns:
+        *value*, or the placeholder it spells.
+
+    Raises:
+        ValueError: If a tag mapping's argument is not a string.
+    """
+    if isinstance(value, dict):
+        if len(value) == 1:
+            ((key, arg),) = value.items()
+            make = _TAG_MAPPINGS.get(key)
+            if make is not None:
+                if not isinstance(arg, str):
+                    raise ValueError(
+                        f"{path}: {{{key!r}: ...}} takes a string, "
+                        f"not {type(arg).__name__}"
+                    )
+                return make(arg)
+        for key in value:
+            value[key] = resolve_tag_mappings(value[key], f"{path}.{key}")
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            value[i] = resolve_tag_mappings(item, f"{path}[{i}]")
+    return value
+
+
 def _env_representer(dumper: yaml.Dumper, data: EnvVar) -> yaml.Node:
     """Emit ``!env VAR_NAME`` tags when dumping YAML."""
     return dumper.represent_scalar("!env", data.var_name)
@@ -145,19 +208,28 @@ def _var_representer(dumper: yaml.Dumper, data: VarRef) -> yaml.Node:
     return dumper.represent_scalar("!var", data.var_name)
 
 
+def _file_representer(dumper: yaml.Dumper, data: FileRef) -> yaml.Node:
+    """Emit ``!file PATH`` tags when dumping YAML."""
+    return dumper.represent_scalar("!file", data.path)
+
+
 def make_tag_dumper() -> type[yaml.Dumper]:
-    """Create a YAML ``Dumper`` that preserves ``!env`` and ``!var`` tags."""
+    """Create a YAML ``Dumper`` preserving ``!env``/``!var``/``!file`` tags."""
 
     class _TagDumper(yaml.Dumper):
         pass
 
     _TagDumper.add_representer(EnvVar, _env_representer)
     _TagDumper.add_representer(VarRef, _var_representer)
+    _TagDumper.add_representer(FileRef, _file_representer)
     return _TagDumper
 
 
 class YamlConfigSource:
-    """Load and save config from/to a YAML file with ``!env`` support.
+    """Load and save config from/to a YAML file.
+
+    Supports ``!env``/``!var``/``!file`` tags and their tag-free
+    spellings (see :func:`resolve_tag_mappings`).
 
     The file is read-only when *read_only* is set or when saving would
     not work or would break how the file is managed: the path is a
@@ -195,14 +267,17 @@ class YamlConfigSource:
         return None
 
     def load(self) -> dict[str, Any]:
-        """Load raw config dict from YAML, resolving ``!env`` tags.
+        """Load raw config dict from YAML, with tag placeholders.
 
         Calls ``load_dotenv_once()`` before parsing to ensure ``!env``
-        tags can resolve.  Updates ``last_file_sha256`` with the SHA-256
-        of the raw file bytes that were loaded.
+        tags can resolve.  Tag-free spellings (``{"!env": NAME}``) are
+        converted to the same placeholders as the tags.  Updates
+        ``last_file_sha256`` with the SHA-256 of the raw file bytes that
+        were loaded.
 
         Returns:
-            Raw config dict with EnvVar placeholders.
+            Raw config dict with ``EnvVar``/``VarRef``/``FileRef``
+            placeholders.
 
         Raises:
             FileNotFoundError: If the YAML file does not exist.
@@ -215,11 +290,14 @@ class YamlConfigSource:
         raw_bytes = self.path.read_bytes()
         self.last_file_sha256 = hashlib.sha256(raw_bytes).hexdigest()
 
-        raw = yaml.load(raw_bytes, Loader=make_env_loader())
+        raw = yaml.load(raw_bytes, Loader=make_config_loader())
 
         if not isinstance(raw, dict):
             raise ValueError(f"Config file must be a YAML mapping: {self.path}")
 
+        # The root is the config mapping itself, never a tag.
+        for key in raw:
+            raw[key] = resolve_tag_mappings(raw[key], str(key))
         return raw
 
     def save(self, data: dict[str, Any]) -> None:
@@ -233,8 +311,8 @@ class YamlConfigSource:
         names).  Callers should use ``flat_to_nested_*`` helpers to
         convert from flat canonical dicts before calling ``save()``.
 
-        Uses a custom Dumper that preserves ``!env`` and ``!var`` tags
-        for round-trip fidelity.
+        Uses a custom Dumper that preserves ``!env``, ``!var`` and
+        ``!file`` tags for round-trip fidelity.
 
         Args:
             data: Config dict in nested YAML format.

@@ -5,12 +5,18 @@
 
 """Tests for YAML ``!env`` tag resolution."""
 
+import os
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 import yaml
 import yaml.constructor
 
 from airut.yaml_env import (
     EnvVar,
+    FileRef,
+    FileRefError,
     VarRef,
     env_constructor,
     make_env_loader,
@@ -278,3 +284,133 @@ level1:
 
         result = raw_resolve(config["level1"]["level2"]["key"])
         assert result == "found"
+
+
+class TestFileRef:
+    """Tests for the FileRef placeholder (``!file``)."""
+
+    def test_equality_and_hash(self) -> None:
+        assert FileRef("/a") == FileRef("/a")
+        assert FileRef("/a") != FileRef("/b")
+        assert FileRef("/a") != EnvVar("/a")
+        assert len({FileRef("/a"), FileRef("/a")}) == 1
+        assert repr(FileRef("/a")) == "FileRef('/a')"
+
+    def test_read_strips_trailing_newlines(self, tmp_path: Path) -> None:
+        secret = tmp_path / "secret"
+        secret.write_text("s3cret value\n")
+        assert FileRef(str(secret)).read() == "s3cret value"
+        secret.write_text("windows\r\n\r\n")
+        assert FileRef(str(secret)).read() == "windows"
+
+    def test_read_keeps_inner_and_leading_whitespace(
+        self, tmp_path: Path
+    ) -> None:
+        secret = tmp_path / "secret"
+        secret.write_text("  line one\nline two")
+        assert FileRef(str(secret)).read() == "  line one\nline two"
+
+    def test_missing_file_is_unset(self, tmp_path: Path) -> None:
+        """Like an unset env var: callers apply defaults or report it."""
+        assert FileRef(str(tmp_path / "missing")).read() is None
+
+    def test_expands_environment_variables(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Systemd LoadCredential= files live in $CREDENTIALS_DIRECTORY."""
+        (tmp_path / "slack-token").write_text("xoxb-1\n")
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+        ref = FileRef("$CREDENTIALS_DIRECTORY/slack-token")
+        assert ref.read() == "xoxb-1"
+
+    def test_expands_user(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / "token").write_text("t\n")
+        assert FileRef("~/token").read() == "t"
+
+    def test_relative_path_rejected(self) -> None:
+        with pytest.raises(FileRefError, match="got secrets/token"):
+            FileRef("secrets/token").read()
+
+    def test_unset_variable_rejected_as_relative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unset variable stays unexpanded, so the path is relative."""
+        monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+        with pytest.raises(FileRefError, match="must be absolute"):
+            FileRef("$CREDENTIALS_DIRECTORY/token").read()
+
+    def test_empty_path_is_unset(self) -> None:
+        """Like ``!env ''``: e.g. the editor's File tab before a path."""
+        assert FileRef("").read() is None
+
+    def test_not_a_regular_file_rejected(self, tmp_path: Path) -> None:
+        """A path that exists but is not a file is an error, not unset.
+
+        A FIFO or device could otherwise block the config load.
+        """
+        with pytest.raises(FileRefError, match=r"^!file \S+: not a regular"):
+            FileRef(str(tmp_path)).read()  # a directory
+        fifo = tmp_path / "fifo"
+        os.mkfifo(fifo)
+        with pytest.raises(FileRefError, match="not a regular file"):
+            FileRef(str(fifo)).read()
+
+    def test_unreadable_file_rejected(self, tmp_path: Path) -> None:
+        secret = tmp_path / "secret"
+        secret.write_text("x")
+        with (
+            patch.object(Path, "read_text", side_effect=PermissionError("no")),
+            pytest.raises(FileRefError, match="cannot read: no"),
+        ):
+            FileRef(str(secret)).read()
+
+    def test_inaccessible_parent_rejected(self, tmp_path: Path) -> None:
+        """A directory the service cannot enter is an error, not unset."""
+        with (
+            patch.object(Path, "stat", side_effect=PermissionError("denied")),
+            pytest.raises(FileRefError, match="cannot read: denied"),
+        ):
+            FileRef(str(tmp_path / "token")).read()
+
+    def test_parent_not_a_directory_is_unset(self, tmp_path: Path) -> None:
+        (tmp_path / "file").write_text("x")
+        assert FileRef(str(tmp_path / "file" / "token")).read() is None
+
+    def test_nul_byte_rejected(self) -> None:
+        with pytest.raises(FileRefError, match="cannot read"):
+            FileRef("/run/secrets/a\x00b").read()
+
+    def test_vanishing_file_is_unset(self, tmp_path: Path) -> None:
+        """A file removed between the checks and the read is unset."""
+        secret = tmp_path / "secret"
+        secret.write_text("x")
+        with patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            assert FileRef(str(secret)).read() is None
+
+    def test_reads_utf8_regardless_of_locale(self, tmp_path: Path) -> None:
+        secret = tmp_path / "secret"
+        secret.write_bytes("pässword".encode())
+        assert FileRef(str(secret)).read() == "pässword"
+
+    def test_non_utf8_rejected(self, tmp_path: Path) -> None:
+        secret = tmp_path / "secret"
+        secret.write_bytes(b"\xff\xfe")
+        with pytest.raises(FileRefError, match="cannot read"):
+            FileRef(str(secret)).read()
+
+    def test_raw_resolve(self, tmp_path: Path) -> None:
+        secret = tmp_path / "secret"
+        secret.write_text("value\n")
+        assert raw_resolve(FileRef(str(secret))) == "value"
+        assert raw_resolve(FileRef(str(tmp_path / "missing"))) is None
+
+    def test_env_loader_has_no_file_tag(self) -> None:
+        """The shared loader does not read host files.
+
+        The sandbox CLI uses it for repository-provided config.
+        """
+        with pytest.raises(yaml.constructor.ConstructorError):
+            yaml.load("k: !file /etc/passwd\n", Loader=make_env_loader())

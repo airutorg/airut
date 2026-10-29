@@ -209,8 +209,9 @@ repos:
         server: !var mail_server
 ```
 
-Variable values are **literals** or **`!env` references**. The `vars:` section
-is a flat mapping — keys are variable names, values are scalars.
+Variable values are **literals**, **`!env` references** or **`!file`
+references** (see [File References](#file-references)). The `vars:` section is a
+flat mapping — keys are variable names, values are scalars.
 
 `!var name` references a variable by name, usable anywhere a YAML scalar value
 is expected.
@@ -311,6 +312,51 @@ non-version-controlled file with the same security posture as `.env`.
 - New documentation recommends `vars:` for sharing values and consolidation.
 - `.env` becomes optional — recommended only for environments that prefer
   env-var injection (containers, systemd `EnvironmentFile=`, etc.).
+
+### File References
+
+`!file PATH` takes a value from a file — for secrets delivered as files (agenix,
+sops-nix, systemd `LoadCredential=`), which keeps them out of the gateway's
+environment, which every `git` and `podman` process it starts inherits:
+
+```yaml
+repos:
+  my-project:
+    slack:
+      bot_token: !file $CREDENTIALS_DIRECTORY/slack-bot-token
+    secrets:
+      GH_TOKEN: !file /run/agenix/gh-token
+```
+
+- `~` and environment variables in the path are expanded; the result must be
+  absolute.
+- Trailing newlines are removed, so files written with `echo` work.
+- A file that does not exist counts as **unset**, exactly like an unset `!env`
+  variable: optional fields take their default, required fields fail with "file
+  '…' does not exist". A file that exists but cannot be read is a config error.
+- The file is read on every config load, so a reload (e.g. `SIGHUP`) picks up a
+  rotated secret. Changes to the file alone do not trigger a reload.
+- `!file` is gateway-only: the shared loader the sandbox CLI uses for
+  repository-provided `.airut/sandbox.yaml` does not read host files.
+
+### Tag-Free Spellings
+
+Generators that cannot emit YAML tags (JSON, Nix's `pkgs.formats.yaml`) can
+spell each tag as a mapping with that single key:
+
+| Tag                | Mapping                   |
+| ------------------ | ------------------------- |
+| `!env NAME`        | `{"!env": "NAME"}`        |
+| `!var name`        | `{"!var": "name"}`        |
+| `!file /path/to/x` | `{"!file": "/path/to/x"}` |
+
+`YamlConfigSource.load()` converts these to the same placeholders as the tags
+before anything else sees the raw dict, so they are interchangeable everywhere
+(and the editor saves them as tags). Only a mapping whose single key is one of
+these is converted; its value must be a string. Schema keys never start with
+`!`, nor do valid environment variable or `vars:` names, so in practice this
+cannot collide with a real mapping. The document root is never converted. Since
+YAML is a superset of JSON, the config file can also be plain JSON.
 
 ### Schema Migration
 

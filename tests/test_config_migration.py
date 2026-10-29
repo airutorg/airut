@@ -755,6 +755,12 @@ class TestGetFileConfigVersion:
         config.write_text("config_version: 3\nrepos: {}\n")
         assert get_file_config_version(config) == 3
 
+    def test_file_tags_parse(self, tmp_path: Path) -> None:
+        """A config using !file still reports its version."""
+        config = tmp_path / "airut.yaml"
+        config.write_text("config_version: 3\nvars:\n  pw: !file /run/pw\n")
+        assert get_file_config_version(config) == 3
+
     def test_defaults_to_1_when_absent(self, tmp_path: Path) -> None:
         """Returns 1 when config_version is not set."""
         config = tmp_path / "airut.yaml"

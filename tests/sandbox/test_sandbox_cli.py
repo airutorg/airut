@@ -2764,6 +2764,42 @@ class TestRunIntegration:
         assert result == 0
 
 
+class TestLoadConfigNoFileReads:
+    """Repository-provided config cannot read host files.
+
+    ``!file`` and its tag-free spelling are gateway-only.
+    """
+
+    def _write(self, cfg_file: Path, value: str) -> None:
+        cfg_file.write_text(
+            "masked_secrets:\n"
+            "  TOKEN:\n"
+            f"    value: {value}\n"
+            "    scopes:\n"
+            "      - api.example.com\n"
+            "    headers:\n"
+            "      - Authorization\n"
+        )
+
+    def test_file_tag_rejected(self, tmp_path: Path) -> None:
+        host_secret = tmp_path / "host-secret"
+        host_secret.write_text("host-only")
+        cfg_file = tmp_path / "config.yaml"
+        self._write(cfg_file, f"!file {host_secret}")
+        from airut.sandbox_cli import _ConfigError
+
+        with pytest.raises(_ConfigError, match="Invalid YAML"):
+            _load_config(cfg_file)
+
+    def test_file_mapping_not_read(self, tmp_path: Path) -> None:
+        host_secret = tmp_path / "host-secret"
+        host_secret.write_text("host-only")
+        cfg_file = tmp_path / "config.yaml"
+        self._write(cfg_file, f'{{"!file": "{host_secret}"}}')
+        config = _load_config(cfg_file)
+        assert "host-only" not in config.masked_secrets[0].real_value
+
+
 class TestLoadConfigWithEnvTag:
     """Tests for config loading with !env tag resolution."""
 

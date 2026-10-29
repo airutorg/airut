@@ -132,6 +132,7 @@
 .cfg-source button.active[data-source="literal"] { background: var(--status-info); }
 .cfg-source button.active[data-source="env"] { background: var(--status-warning); }
 .cfg-source button.active[data-source="var"] { background: var(--status-success); }
+.cfg-source button.active[data-source="file"] { background: var(--text-secondary); }
 
 /* ---- Tabbed field wrapper (scalar fields) ---- */
 .cfg-tabbed {
@@ -178,6 +179,7 @@
 .cfg-tabbed[data-source="literal"] .cfg-input { background: var(--status-info-bg); }
 .cfg-tabbed[data-source="env"] .cfg-input { background: var(--status-warning-bg); }
 .cfg-tabbed[data-source="var"] .cfg-input { background: var(--status-success-bg); }
+.cfg-tabbed[data-source="file"] .cfg-input { background: var(--bg-code); }
 /* Match container bg to source tint so rounded corners don't show gray */
 .cfg-tabbed-multiline[data-source="literal"] { background: var(--status-info-bg); }
 

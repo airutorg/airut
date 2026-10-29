@@ -21,8 +21,8 @@ from typing import Any
 
 import yaml
 
+from airut.config.source import make_config_loader
 from airut.gateway.config import ConfigError
-from airut.yaml_env import make_env_loader
 
 
 logger = logging.getLogger(__name__)
@@ -344,7 +344,7 @@ def get_file_config_version(config_path: Path) -> int:
     """Read ``config_version`` from a YAML file without full validation.
 
     Parses the YAML just enough to extract the version integer.
-    ``!env``/``!var`` tags are parsed into placeholder objects but not
+    ``!env``/``!var``/``!file`` tags are parsed into placeholder objects but not
     resolved to actual values.  Does not apply migrations or validate
     the config structure.
 
@@ -366,7 +366,7 @@ def get_file_config_version(config_path: Path) -> int:
         raise ConfigError(f"Cannot read config file: {e}") from e
 
     try:
-        raw = yaml.load(raw_bytes, Loader=make_env_loader())
+        raw = yaml.load(raw_bytes, Loader=make_config_loader())
     except yaml.YAMLError as e:
         raise ConfigError(f"Cannot parse config file: {e}") from e
 
@@ -387,7 +387,8 @@ def migrate_config_file(config_path: Path) -> tuple[int, int]:
     """Apply pending migrations to a config file and save.
 
     Loads the raw YAML, applies all pending migrations, then writes
-    the result back atomically.  Preserves ``!env`` and ``!var`` tags.
+    the result back atomically.  Preserves ``!env``, ``!var`` and
+    ``!file`` tags; tag-free spellings are written back as tags.
 
     Args:
         config_path: Path to the YAML config file.
