@@ -7,8 +7,8 @@
 
 Builds the MIME message for an outgoing email and keeps it under the
 size limit by leaving out attachments that do not fit.  Files left out
-are named in the body, because the outbox is cleared once the reply is
-delivered and the user would otherwise never learn they existed.
+are named in the body, so the user learns they exist even though they
+did not arrive.
 """
 
 import io

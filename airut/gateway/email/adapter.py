@@ -24,6 +24,7 @@ from airut.gateway.channel import (
     PlanStreamer,
     RawMessage,
     TaskPhase,
+    UndeliveredFile,
 )
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.channel_listener import EmailChannelListener
@@ -351,7 +352,7 @@ class EmailChannelAdapter(ChannelAdapter):
         response_text: str,
         usage_footer: str,
         outbox_files: list[Path],
-    ) -> None:
+    ) -> list[UndeliveredFile]:
         """Send email reply with response text and attachments."""
         assert isinstance(parsed, EmailParsedMessage)
 
@@ -363,54 +364,26 @@ class EmailChannelAdapter(ChannelAdapter):
             conversation_id, self._config.account.from_address
         )
 
-        # Attach the outbox files the core handed us.  Removing them once
-        # delivered is the core's job (see ``ChannelAdapter.send_reply``),
-        # so that every channel behaves the same.
-        attachments: list[tuple[str, bytes]] | None = None
-        unreadable_note = ""
-        if outbox_files:
-            outbox = read_outbox_files(outbox_files)
-            unreadable_note = outbox.unreadable_note()
-            if outbox.attachments:
-                attachments = outbox.attachments
-                logger.info(
-                    "Attaching %d files from outbox: %s",
-                    len(outbox.attachments),
-                    ", ".join(name for name, _ in outbox.attachments),
-                )
-
-        body = response_text
-        # The core clears the outbox once this returns, so name the files
-        # that could not be attached instead of losing them silently.
-        if unreadable_note:
-            body = f"{body}\n\n{unreadable_note}"
-
-        try:
-            self._responder.send_reply(
+        def send() -> list[UndeliveredFile]:
+            return self._send_with_outbox(
                 to=parsed.sender,
                 subject=subject,
-                body=body,
+                body=response_text,
+                footer=usage_footer,
+                outbox_files=outbox_files,
+                message_id=outgoing_message_id,
                 in_reply_to=parsed.original_message_id,
                 references=references_list,
-                attachments=attachments,
-                message_id=outgoing_message_id,
-                footer=usage_footer,
             )
+
+        try:
+            return send()
         except SMTPSendError as e:
             logger.error("Failed to send reply: %s", e)
             # Retry once
             logger.info("Retrying SMTP send...")
             try:
-                self._responder.send_reply(
-                    to=parsed.sender,
-                    subject=subject,
-                    body=body,
-                    in_reply_to=parsed.original_message_id,
-                    references=references_list,
-                    attachments=attachments,
-                    message_id=outgoing_message_id,
-                    footer=usage_footer,
-                )
+                return send()
             except SMTPSendError as retry_error:
                 logger.critical("SMTP retry failed: %s", retry_error)
                 raise ChannelSendError(str(retry_error)) from retry_error
@@ -450,9 +423,9 @@ class EmailChannelAdapter(ChannelAdapter):
         subject: str,
         body: str,
         conversation_id: str,
-        attachments: list[tuple[str, bytes]],
+        outbox_files: list[Path],
         footer: str,
-    ) -> None:
+    ) -> list[UndeliveredFile]:
         """Send a new (non-reply) email and register for reply routing.
 
         Used by scheduled tasks to deliver results. The Message-ID embeds
@@ -464,23 +437,83 @@ class EmailChannelAdapter(ChannelAdapter):
             subject: Email subject line.
             body: Markdown-formatted body text.
             conversation_id: Conversation ID for Message-ID encoding.
-            attachments: List of (filename, content) pairs.
+            outbox_files: Files to attach, as for ``send_reply``.
             footer: Usage summary, set in italics after the body (and
                 after any note about attachments too large to send), or
                 empty.
-        """
-        outgoing_message_id = generate_message_id(
-            conversation_id, self._config.account.from_address
-        )
 
-        self._responder.send_reply(
+        Returns:
+            The outbox files that were not delivered, with the reason.
+        """
+        return self._send_with_outbox(
             to=to,
             subject=subject,
             body=body,
-            message_id=outgoing_message_id,
-            attachments=attachments if attachments else None,
+            footer=footer,
+            outbox_files=outbox_files,
+            message_id=generate_message_id(
+                conversation_id, self._config.account.from_address
+            ),
+        )
+
+    def _send_with_outbox(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        footer: str,
+        outbox_files: list[Path],
+        message_id: str,
+        in_reply_to: str | None = None,
+        references: list[str] | None = None,
+    ) -> list[UndeliveredFile]:
+        """Send an email with the outbox files attached.
+
+        Removing the files once delivered is the core's job (see
+        ``ChannelAdapter.send_reply``), so that every channel behaves
+        the same.
+
+        Returns:
+            The files that could not be read or were left out of the
+            email for its size, with the reason.
+
+        Raises:
+            SMTPSendError: If sending fails.
+        """
+        outbox = read_outbox_files(outbox_files)
+        if outbox.attachments:
+            logger.info(
+                "Attaching %d files from outbox: %s",
+                len(outbox.attachments),
+                ", ".join(name for name, _ in outbox.attachments),
+            )
+        # The core clears the outbox once delivery finishes, so name the
+        # files that could not be attached instead of losing them
+        # silently.
+        unreadable_note = outbox.unreadable_note()
+        if unreadable_note:
+            body = f"{body}\n\n{unreadable_note}"
+
+        left_out = self._responder.send_reply(
+            to=to,
+            subject=subject,
+            body=body,
+            in_reply_to=in_reply_to,
+            references=references,
+            attachments=outbox.attachments or None,
+            message_id=message_id,
             footer=footer,
         )
+
+        by_name = {path.name: path for path in outbox_files}
+        return [
+            UndeliveredFile(by_name[name], "could not be read")
+            for name in outbox.unreadable
+        ] + [
+            UndeliveredFile(by_name[name], reason)
+            for name, reason in left_out.items()
+        ]
 
     def create_plan_streamer(
         self, parsed: ParsedMessage

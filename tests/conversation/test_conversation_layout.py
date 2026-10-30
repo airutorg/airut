@@ -9,12 +9,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from airut.conversation import (
+    UNDELIVERED_DIR,
     ConversationLayout,
     clear_outbox,
     create_conversation_layout,
     get_container_mounts,
     list_outbox_files,
     prepare_conversation,
+    set_aside_undelivered,
     write_inbox_file,
 )
 
@@ -267,6 +269,119 @@ class TestClearOutbox:
             clear_outbox(outbox)
 
         assert (outbox / "file.txt").exists()
+
+
+class TestSetAsideUndelivered:
+    """Tests for set_aside_undelivered() keeping undelivered files."""
+
+    def _layout(self, tmp_path: Path) -> ConversationLayout:
+        layout = create_conversation_layout(tmp_path / "conv")
+        prepare_conversation(layout)
+        return layout
+
+    def test_moves_files_to_storage(self, tmp_path: Path) -> None:
+        layout = self._layout(tmp_path)
+        dump = layout.outbox / "dump.bin"
+        dump.write_bytes(b"data")
+        (layout.outbox / "sent.txt").write_text("delivered")
+
+        moved = set_aside_undelivered(layout, [dump])
+
+        assert moved == {dump: "dump.bin"}
+        assert not dump.exists()
+        target = layout.storage / UNDELIVERED_DIR / "dump.bin"
+        assert target.read_bytes() == b"data"
+        # Only the files named are moved.
+        assert (layout.outbox / "sent.txt").exists()
+
+    def test_keeps_earlier_file_with_same_name(self, tmp_path: Path) -> None:
+        """A file set aside on an earlier turn is not overwritten."""
+        layout = self._layout(tmp_path)
+        undelivered = layout.storage / UNDELIVERED_DIR
+        undelivered.mkdir()
+        (undelivered / "dump.bin").write_bytes(b"old")
+        dump = layout.outbox / "dump.bin"
+        dump.write_bytes(b"new")
+
+        moved = set_aside_undelivered(layout, [dump])
+
+        assert moved == {dump: "dump-1.bin"}
+        assert (undelivered / "dump.bin").read_bytes() == b"old"
+        assert (undelivered / "dump-1.bin").read_bytes() == b"new"
+
+    def test_link_inside_counts_as_taken(self, tmp_path: Path) -> None:
+        """A link the task left in the directory is never replaced.
+
+        Nor followed: the file takes the next free name instead.
+        """
+        layout = self._layout(tmp_path)
+        undelivered = layout.storage / UNDELIVERED_DIR
+        undelivered.mkdir()
+        missing = tmp_path / "missing"
+        (undelivered / "dump.bin").symlink_to(missing)
+        dump = layout.outbox / "dump.bin"
+        dump.write_bytes(b"data")
+
+        moved = set_aside_undelivered(layout, [dump])
+
+        assert moved == {dump: "dump-1.bin"}
+        assert (undelivered / "dump.bin").is_symlink()
+        assert not missing.exists()
+
+    def test_skips_files_that_cannot_move(self, tmp_path: Path) -> None:
+        """A file that vanished is logged and left out of the result."""
+        layout = self._layout(tmp_path)
+        gone = layout.outbox / "gone.bin"
+        kept = layout.outbox / "kept.bin"
+        kept.write_bytes(b"data")
+
+        moved = set_aside_undelivered(layout, [gone, kept])
+
+        assert moved == {kept: "kept.bin"}
+
+    def test_refuses_symlinked_undelivered_dir(self, tmp_path: Path) -> None:
+        """A link the agent planted in /storage must not be followed.
+
+        /storage is writable from the container, so the link could name
+        any host directory: following it would let the task write files
+        of its choosing there.  The files go with the outbox instead.
+        """
+        layout = self._layout(tmp_path)
+        host_dir = tmp_path / "host_dir"
+        host_dir.mkdir()
+        (layout.storage / UNDELIVERED_DIR).symlink_to("../../host_dir")
+        evil = layout.outbox / "evil.pth"
+        evil.write_text("import os")
+
+        moved = set_aside_undelivered(layout, [evil])
+
+        assert moved == {}
+        assert list(host_dir.iterdir()) == []
+        assert evil.exists()
+
+    def test_refuses_dangling_symlink(self, tmp_path: Path) -> None:
+        layout = self._layout(tmp_path)
+        missing = tmp_path / "missing"
+        (layout.storage / UNDELIVERED_DIR).symlink_to(missing)
+        dump = layout.outbox / "dump.bin"
+        dump.write_bytes(b"data")
+
+        assert set_aside_undelivered(layout, [dump]) == {}
+        assert not missing.exists()
+
+    def test_refuses_file_in_the_way(self, tmp_path: Path) -> None:
+        layout = self._layout(tmp_path)
+        (layout.storage / UNDELIVERED_DIR).write_text("not a directory")
+        dump = layout.outbox / "dump.bin"
+        dump.write_bytes(b"data")
+
+        assert set_aside_undelivered(layout, [dump]) == {}
+        assert dump.exists()
+
+    def test_nothing_to_move(self, tmp_path: Path) -> None:
+        layout = self._layout(tmp_path)
+        assert set_aside_undelivered(layout, []) == {}
+        assert not (layout.storage / UNDELIVERED_DIR).exists()
 
 
 class TestGetContainerMounts:

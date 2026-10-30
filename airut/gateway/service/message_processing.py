@@ -33,7 +33,6 @@ from airut.conversation import (
     ConversationLayout,
     ConversationStore,
     ReplySummary,
-    clear_outbox,
     create_conversation_layout,
     list_outbox_files,
     prepare_conversation,
@@ -53,6 +52,7 @@ from airut.gateway.channel import (
 )
 from airut.gateway.config import ReplacementMap
 from airut.gateway.conversation import GitCloneError
+from airut.gateway.service.outbox import finish_delivery, undelivered_note
 from airut.gateway.service.usage_stats import UsageStats
 from airut.sandbox import (
     NETWORK_LOG_FILENAME,
@@ -728,9 +728,9 @@ def _deliver_reply(
     result: SandboxTaskResult,
     usage_footer: str,
 ) -> None:
-    """Send the reply with any outbox files, then clear the outbox.
+    """Send the reply with any outbox files, then finish the delivery.
 
-    Clearing here — rather than in each adapter — keeps every channel
+    Finishing here — rather than in each adapter — keeps every channel
     consistent, and happens only once ``send_reply`` returns: a raised
     ``ChannelSendError`` means nothing was delivered, so the files stay
     for the next attempt.
@@ -742,16 +742,14 @@ def _deliver_reply(
             and layout.
         usage_footer: Formatted usage summary, or empty for none.
     """
-    outbox = result.layout.outbox
-    outbox_files = list_outbox_files(outbox)
-    adapter.send_reply(
+    undelivered = adapter.send_reply(
         parsed,
         result.conversation_id,
         result.response_text,
         usage_footer,
-        outbox_files,
+        list_outbox_files(result.layout.outbox),
     )
-    clear_outbox(outbox)
+    finish_delivery(result.layout, result.conversation_id, undelivered)
 
 
 def process_message(
@@ -918,6 +916,10 @@ def process_message(
                 f"{', '.join(filenames)}."
             )
             channel_context += inbox_note
+        # Cleared only once the agent has run with the note (see below).
+        undelivered = conversation_store.get_undelivered()
+        if undelivered:
+            channel_context += undelivered_note(undelivered)
 
         # ── Build prompt ──
 
@@ -950,6 +952,15 @@ def process_message(
         )
 
         conv_id = sandbox_result.conversation_id
+        # A container that failed may never have shown the agent the
+        # note, so it is kept for the next message.  Clearing comes
+        # before delivery, which may record new files under the same
+        # names.
+        if undelivered and sandbox_result.outcome in (
+            Outcome.SUCCESS,
+            Outcome.TIMEOUT,
+        ):
+            conversation_store.clear_undelivered(undelivered)
 
         # ── Finalize and deliver ──
 

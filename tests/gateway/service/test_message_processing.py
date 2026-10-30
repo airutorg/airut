@@ -13,8 +13,14 @@ import pytest
 
 from airut._json_types import JsonValue
 from airut.claude_output.types import Usage
+from airut.conversation import ConversationStore
 from airut.dashboard.tracker import CompletionReason
-from airut.gateway.channel import ChannelSendError, ParsedMessage, TaskPhase
+from airut.gateway.channel import (
+    ChannelSendError,
+    ParsedMessage,
+    TaskPhase,
+    UndeliveredFile,
+)
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import (
@@ -451,6 +457,7 @@ class TestProcessMessage:
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
         mock_conv_store.get_effort.return_value = None
+        mock_conv_store.get_undelivered.return_value = {}
 
         # Configure sandbox mock: ensure_image returns tag,
         # create_task returns a mock Task whose execute returns success
@@ -463,6 +470,7 @@ class TestProcessMessage:
 
         # Create mock adapter
         adapter = MagicMock()
+        adapter.send_reply.return_value = []
         adapter.save_attachments.return_value = []
 
         return svc, handler, mock_conv_store, adapter
@@ -691,6 +699,176 @@ class TestProcessMessage:
         assert reason == CompletionReason.TIMEOUT
         adapter.send_reply.assert_not_called()
         assert outfile.exists()
+
+    def test_undelivered_files_set_aside(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Files the channel did not deliver move to storage, recorded.
+
+        They would otherwise be deleted with the rest of the outbox.
+        """
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        dump = self._seed_outbox(tmp_path, "dump.bin")
+        sent = self._seed_outbox(tmp_path, "summary.txt")
+        adapter.send_reply.return_value = [
+            UndeliveredFile(dump, "did not fit in the 25.0MB email size limit")
+        ]
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        storage = tmp_path / "conversations" / "storage"
+        assert (storage / "undelivered" / "dump.bin").read_text() == (
+            "contents of dump.bin"
+        )
+        assert not dump.exists()
+        assert not sent.exists()
+        recorded = ConversationStore(tmp_path / "conversations")
+        assert recorded.get_undelivered() == {
+            "dump.bin": "did not fit in the 25.0MB email size limit"
+        }
+
+    def test_nothing_recorded_when_everything_delivered(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        self._seed_outbox(tmp_path)
+        adapter.send_reply.return_value = []
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        assert not (
+            tmp_path / "conversations" / "storage" / "undelivered"
+        ).exists()
+        recorded = ConversationStore(tmp_path / "conversations")
+        assert recorded.get_undelivered() == {}
+
+    def test_next_prompt_names_undelivered_files(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """The agent hears which files did not reach the user, once."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = (
+            tmp_path / "repo"
+        )
+        mock_cs.get_undelivered.return_value = {
+            "dump.bin": "did not fit in the 25.0MB email size limit",
+            "chart.png": "upload to Slack failed",
+        }
+        parsed = _make_parsed_message(
+            body="Can you split it?", conversation_id="aabb1122"
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        prompt = svc._mock_task.execute.call_args[0][0]
+        assert (
+            "Some files you left in /outbox last time did not reach the "
+            "user, so I have moved them to /storage/undelivered/: dump.bin "
+            "(did not fit in the 25.0MB email size limit), chart.png "
+            "(upload to Slack failed)."
+        ) in prompt
+        # Forgotten once the agent has run with the note.
+        mock_cs.clear_undelivered.assert_called_once_with(
+            {
+                "dump.bin": "did not fit in the 25.0MB email size limit",
+                "chart.png": "upload to Slack failed",
+            }
+        )
+
+    def test_undelivered_note_kept_when_container_fails(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """A container that failed may not have shown the agent the note."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = (
+            tmp_path / "repo"
+        )
+        mock_cs.get_undelivered.return_value = {"dump.bin": "too big"}
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(error_summary="exit 125")
+        )
+        parsed = _make_parsed_message(
+            body="Can you split it?", conversation_id="aabb1122"
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.EXECUTION_FAILED
+        mock_cs.clear_undelivered.assert_not_called()
+
+    def test_reported_files_cleared_before_new_ones_recorded(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """A file the new reply sets aside under a reported name is kept.
+
+        The agent may have deleted the earlier file from storage, so the
+        new one can take its name; clearing the old record after
+        delivery would then wipe the new one.
+        """
+        svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = (
+            tmp_path / "repo"
+        )
+        conversation_dir = tmp_path / "conversations"
+        conversation_dir.mkdir()
+        store = ConversationStore(conversation_dir)
+        store.record_undelivered("aabb1122", {"dump.bin": "old"})
+        dump = self._seed_outbox(tmp_path, "dump.bin")
+        adapter.send_reply.return_value = [UndeliveredFile(dump, "new")]
+        parsed = _make_parsed_message(
+            body="Try again", conversation_id="aabb1122"
+        )
+
+        process_message(svc, parsed, "task1", handler, adapter)
+
+        prompt = svc._mock_task.execute.call_args[0][0]
+        assert "/storage/undelivered/: dump.bin (old)." in prompt
+        assert store.get_undelivered() == {"dump.bin": "new"}
+
+    def test_undelivered_note_kept_when_run_fails_to_start(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """If the agent never runs, the next attempt still names the files."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = (
+            tmp_path / "repo"
+        )
+        mock_cs.get_undelivered.return_value = {"dump.bin": "too big"}
+        svc.sandbox.ensure_image.side_effect = RuntimeError("build failed")
+        parsed = _make_parsed_message(
+            body="Can you split it?", conversation_id="aabb1122"
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.INTERNAL_ERROR
+        mock_cs.clear_undelivered.assert_not_called()
 
     def test_outbox_kept_when_delivery_fails(
         self, email_config: RepoServerConfig, tmp_path: Path
@@ -1651,6 +1829,7 @@ class TestClaudeBinaryError:
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
         mock_conv_store.get_effort.return_value = None
+        mock_conv_store.get_undelivered.return_value = {}
 
         mock_task = MagicMock()
         mock_task.execute = AsyncMock(return_value=_make_success_result())
@@ -1659,6 +1838,7 @@ class TestClaudeBinaryError:
         svc.sandbox.create_task.return_value = mock_task
 
         adapter = MagicMock()
+        adapter.send_reply.return_value = []
         adapter.save_attachments.return_value = []
 
         return svc, handler, mock_conv_store, adapter
@@ -1720,6 +1900,7 @@ class TestSandboxDisabledWarning:
         mock_cs.get_session_id_for_resume.return_value = None
         mock_cs.get_model.return_value = None
         mock_cs.get_effort.return_value = None
+        mock_cs.get_undelivered.return_value = {}
 
         mock_task = MagicMock()
         mock_task.execute = AsyncMock(return_value=_make_success_result())
@@ -1728,6 +1909,7 @@ class TestSandboxDisabledWarning:
         svc.sandbox.create_task.return_value = mock_task
 
         adapter = MagicMock()
+        adapter.send_reply.return_value = []
         adapter.save_attachments.return_value = []
 
         return svc, handler, mock_cs, adapter
@@ -1847,6 +2029,7 @@ class TestBuildImageErrors:
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
         mock_conv_store.get_effort.return_value = None
+        mock_conv_store.get_undelivered.return_value = {}
 
         mock_task = MagicMock()
         mock_task.execute = AsyncMock(return_value=_make_success_result())
@@ -1856,6 +2039,7 @@ class TestBuildImageErrors:
         svc._mock_task = mock_task
 
         adapter = MagicMock()
+        adapter.send_reply.return_value = []
         adapter.save_attachments.return_value = []
 
         return svc, handler, mock_conv_store, adapter
@@ -2045,6 +2229,7 @@ class TestAllowlistParseError:
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
         mock_conv_store.get_effort.return_value = None
+        mock_conv_store.get_undelivered.return_value = {}
 
         mock_task = MagicMock()
         mock_task.execute = AsyncMock(return_value=_make_success_result())
@@ -2053,6 +2238,7 @@ class TestAllowlistParseError:
         svc.sandbox.create_task.return_value = mock_task
 
         adapter = MagicMock()
+        adapter.send_reply.return_value = []
         adapter.save_attachments.return_value = []
 
         return svc, handler, mock_conv_store, adapter
@@ -2117,6 +2303,7 @@ class TestConvertReplacementMap:
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
         mock_conv_store.get_effort.return_value = None
+        mock_conv_store.get_undelivered.return_value = {}
 
         mock_task = MagicMock()
         mock_task.execute = AsyncMock(return_value=_make_success_result())
@@ -2126,6 +2313,7 @@ class TestConvertReplacementMap:
         svc._mock_task = mock_task
 
         adapter = MagicMock()
+        adapter.send_reply.return_value = []
         adapter.save_attachments.return_value = []
 
         return svc, handler, mock_conv_store, adapter
@@ -2396,6 +2584,7 @@ class TestRunInSandbox:
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
         mock_conv_store.get_effort.return_value = None
+        mock_conv_store.get_undelivered.return_value = {}
 
         mock_task = MagicMock()
         mock_task.execute = AsyncMock(return_value=_make_success_result())

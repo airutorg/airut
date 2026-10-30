@@ -340,9 +340,10 @@ Files in `/outbox` are attached to the message and the outbox is cleared once
 the send succeeds, matching the interactive reply path (see
 [Outbox ownership](gateway-architecture.md#channel-abstraction)), including
 leaving out files too large to send (see
-[Response Construction](gateway-architecture.md#response-construction)). The
-conversation outlives the run — recipients reply to continue it — so files left
-behind would be attached again to every later reply.
+[Response Construction](gateway-architecture.md#response-construction)). Files
+left out are set aside in `storage/undelivered/` and named to the agent when the
+recipient replies. The conversation outlives the run — recipients reply to
+continue it — so files left behind would be attached again to every later reply.
 
 ### Error Delivery
 

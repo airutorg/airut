@@ -27,20 +27,21 @@ def _sent(server: MagicMock, index: int = 0) -> Message:
 
 
 def test_send_reply_footer_follows_body(email_config, smtp_server):
-    _responder(email_config).send_reply(
+    left_out = _responder(email_config).send_reply(
         to="user@example.com",
         subject="Test",
         body="Done.",
         footer="Cost: $1",
     )
     assert plain_text(_sent(smtp_server)) == "Done.\n\n*Cost: $1*"
+    assert left_out == {}
 
 
 def test_send_reply_leaves_out_files_over_configured_limit(
     email_config, smtp_server
 ):
     """The largest file goes; the rest and the text still arrive."""
-    _responder(email_config, max_message_size_mb=1).send_reply(
+    left_out = _responder(email_config, max_message_size_mb=1).send_reply(
         to="user@example.com",
         subject="Test",
         body="Here are the files.",
@@ -60,6 +61,7 @@ def test_send_reply_leaves_out_files_over_configured_limit(
         "size limit: dump.bin (2.0MB)\n\n"
         "*Cost: $1*"
     )
+    assert left_out == {"dump.bin": "did not fit in the 1.0MB email size limit"}
 
 
 def test_send_reply_honours_lower_server_size(email_config, smtp_server):
@@ -129,7 +131,7 @@ def test_send_reply_resends_without_attachments_on_size_rejection(
         None,
     ]
 
-    _responder(email_config).send_reply(
+    left_out = _responder(email_config).send_reply(
         to="user@example.com",
         subject="Test",
         body="Files.",
@@ -149,6 +151,8 @@ def test_send_reply_resends_without_attachments_on_size_rejection(
         "email as too large: a.txt (3B), b.txt (4B)\n\n"
         "*Cost: $1*"
     )
+    reason = "the mail server rejected the email as too large"
+    assert left_out == {"a.txt": reason, "b.txt": reason}
 
 
 def test_send_reply_size_rejection_without_attachments_fails(

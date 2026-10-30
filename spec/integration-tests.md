@@ -52,7 +52,8 @@ Gateway tests cover:
 - **Outbox**: Reply file attachments from outbox/ directory, the clearing that
   keeps them from being re-sent on later turns, and leaving out files over the
   email size limit (configured, advertised by the server, or found when the
-  server refuses the message)
+  server refuses the message) or that fail to upload to Slack — set aside in
+  storage and named to the agent on the next turn
 - **Streaming and stop**: Streaming output handling and task cancellation
 
 ### Sandbox (`tests/integration/sandbox/`)
