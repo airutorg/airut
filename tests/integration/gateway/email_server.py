@@ -23,9 +23,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from email.message import EmailMessage, Message
+from typing import override
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.handlers import Message as SMTPMessageHandler
+from aiosmtpd.smtp import SMTP, Envelope, Session
 
 
 logger = logging.getLogger(__name__)
@@ -186,11 +188,34 @@ class MailboxStore:
 
 
 class TestSMTPHandler(SMTPMessageHandler):
-    """SMTP handler that stores messages in the outbox."""
+    """SMTP handler that stores messages in the outbox.
+
+    Attributes:
+        reject_over: Refuse messages larger than this many bytes after
+            DATA with ``552 5.3.4``, or ``None`` to accept everything.
+        hang_up_on_reject: Close the connection after refusing.
+    """
 
     def __init__(self, outbox: MailboxStore) -> None:
         super().__init__()
         self.outbox = outbox
+        self.reject_over: int | None = None
+        self.hang_up_on_reject = False
+
+    @override
+    async def handle_DATA(
+        self, server: SMTP, session: Session, envelope: Envelope
+    ) -> str:
+        """Refuse an oversized message, otherwise store it."""
+        content = envelope.original_content or b""
+        if self.reject_over is not None and len(content) > self.reject_over:
+            if self.hang_up_on_reject:
+                # Runs once the reply below has been written; closing
+                # flushes it before the connection goes.
+                assert server.transport is not None
+                asyncio.get_running_loop().call_soon(server.transport.close)
+            return "552 5.3.4 Message size exceeds fixed maximum message size"
+        return await super().handle_DATA(server, session, envelope)
 
     def handle_message(self, message: Message) -> None:
         """Handle incoming SMTP message by storing in outbox."""
@@ -835,6 +860,40 @@ class TestEmailServer:
             self._thread.join(timeout=5.0)
 
         logger.info("Test email server stopped")
+
+    def set_smtp_size_limit(self, limit: int) -> None:
+        """Set the message size limit the SMTP server advertises.
+
+        The server answers EHLO with ``SIZE <limit>`` and refuses larger
+        messages with 552, as RFC 1870 servers do.  Takes effect for new
+        connections.
+
+        Args:
+            limit: Largest accepted message in bytes.
+        """
+        if self._smtp_controller is None:
+            raise RuntimeError("Server not started")
+        self._smtp_controller.SMTP_kwargs["data_size_limit"] = limit
+
+    def reject_messages_over(
+        self, limit: int, *, hang_up: bool = False
+    ) -> None:
+        """Refuse messages over *limit* bytes without advertising a limit.
+
+        Models a server whose real limit is lower than the ``SIZE`` it
+        advertises (or that advertises none): the message is only
+        refused after DATA, with ``552 5.3.4``.
+
+        Args:
+            limit: Largest accepted message in bytes.
+            hang_up: Close the connection after refusing, as some
+                servers do.
+        """
+        if self._smtp_controller is None:
+            raise RuntimeError("Server not started")
+        self._smtp_controller.SMTP_kwargs["data_size_limit"] = None
+        self._smtp_handler.reject_over = limit
+        self._smtp_handler.hang_up_on_reject = hang_up
 
     def add_inbox(self, username: str) -> None:
         """Register an additional inbox for multi-repo testing.

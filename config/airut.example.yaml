@@ -109,6 +109,8 @@ repos:
         # port: 587
         # Whether SMTP requires authentication
         # require_auth: true
+        # Max outgoing email size in MB, attachments included (the server's advertised limit applies if lower)
+        # max_message_size_mb: 25
 
       # Sender authorization settings
       auth:

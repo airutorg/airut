@@ -49,8 +49,10 @@ Gateway tests cover:
 - **Concurrency**: Parallel execution, duplicate rejection
 - **Git mirror updates**: Mirror creation, updates at service start and before
   each new conversation, ensuring conversations get latest code
-- **Outbox**: Reply file attachments from outbox/ directory, and the clearing
-  that keeps them from being re-sent on later turns
+- **Outbox**: Reply file attachments from outbox/ directory, the clearing that
+  keeps them from being re-sent on later turns, and leaving out files over the
+  email size limit (configured, advertised by the server, or found when the
+  server refuses the message)
 - **Streaming and stop**: Streaming output handling and task cancellation
 
 ### Sandbox (`tests/integration/sandbox/`)

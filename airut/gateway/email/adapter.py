@@ -27,6 +27,7 @@ from airut.gateway.channel import (
 )
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.channel_listener import EmailChannelListener
+from airut.gateway.email.composer import attachment_budget
 from airut.gateway.email.parsing import (
     decode_subject,
     extract_attachments,
@@ -42,6 +43,7 @@ from airut.gateway.email.responder import (
     generate_message_id,
 )
 from airut.gateway.email.security import SenderAuthenticator, SenderAuthorizer
+from airut.units import MB, format_size
 
 
 logger = logging.getLogger(__name__)
@@ -164,6 +166,7 @@ class EmailChannelAdapter(ChannelAdapter):
         that applies to every email-delivered task — both interactive
         messages and scheduled tasks.
         """
+        limit = self._config.smtp.max_message_size_mb * MB
         return (
             "User is interacting with this session via email interface "
             "and will receive your last reply as email. "
@@ -172,6 +175,10 @@ class EmailChannelAdapter(ChannelAdapter):
             "Markdown formatting is supported in your responses. "
             "To send files back to the user, place them in the "
             "/outbox directory root (no subdirectories). "
+            "Files in /outbox must total under "
+            f"{format_size(attachment_budget(limit))} to fit the "
+            f"{format_size(limit)} email size limit once encoded; files "
+            "that do not fit are left out of the reply. "
             "Use /storage to persist files across messages.\n\n"
             "IMPORTANT: AskUserQuestion and plan mode tools "
             "(EnterPlanMode/ExitPlanMode) do not work over email "
@@ -306,19 +313,12 @@ class EmailChannelAdapter(ChannelAdapter):
             parsed, conversation_id
         )
 
+        body = "I've started working on this and will reply shortly."
         if dashboard_url:
             task_url = f"{dashboard_url}/conversation/{conversation_id}"
-            body = (
-                f"I've started working on this and will reply shortly. "
-                f"See progress at {task_url}"
-            )
-            html_body = (
-                f"I've started working on this and will reply shortly. "
-                f'See progress at <a href="{task_url}">{task_url}</a>'
-            )
-        else:
-            body = "I've started working on this and will reply shortly."
-            html_body = "I've started working on this and will reply shortly."
+            # A markdown autolink: a link in HTML, and the conventional
+            # <...> delimiters around a URL in plain text.
+            body = f"{body} See progress at <{task_url}>"
 
         outgoing_message_id = generate_message_id(
             conversation_id, self._config.account.from_address
@@ -331,7 +331,6 @@ class EmailChannelAdapter(ChannelAdapter):
                 body=body,
                 in_reply_to=parsed.original_message_id,
                 references=references_list,
-                html_body=html_body,
                 message_id=outgoing_message_id,
             )
             logger.info(
@@ -385,8 +384,6 @@ class EmailChannelAdapter(ChannelAdapter):
         # that could not be attached instead of losing them silently.
         if unreadable_note:
             body = f"{body}\n\n{unreadable_note}"
-        if usage_footer:
-            body = f"{body}\n\n*{usage_footer}*"
 
         try:
             self._responder.send_reply(
@@ -397,6 +394,7 @@ class EmailChannelAdapter(ChannelAdapter):
                 references=references_list,
                 attachments=attachments,
                 message_id=outgoing_message_id,
+                footer=usage_footer,
             )
         except SMTPSendError as e:
             logger.error("Failed to send reply: %s", e)
@@ -411,6 +409,7 @@ class EmailChannelAdapter(ChannelAdapter):
                     references=references_list,
                     attachments=attachments,
                     message_id=outgoing_message_id,
+                    footer=usage_footer,
                 )
             except SMTPSendError as retry_error:
                 logger.critical("SMTP retry failed: %s", retry_error)
@@ -452,6 +451,7 @@ class EmailChannelAdapter(ChannelAdapter):
         body: str,
         conversation_id: str,
         attachments: list[tuple[str, bytes]],
+        footer: str,
     ) -> None:
         """Send a new (non-reply) email and register for reply routing.
 
@@ -465,6 +465,9 @@ class EmailChannelAdapter(ChannelAdapter):
             body: Markdown-formatted body text.
             conversation_id: Conversation ID for Message-ID encoding.
             attachments: List of (filename, content) pairs.
+            footer: Usage summary, set in italics after the body (and
+                after any note about attachments too large to send), or
+                empty.
         """
         outgoing_message_id = generate_message_id(
             conversation_id, self._config.account.from_address
@@ -476,6 +479,7 @@ class EmailChannelAdapter(ChannelAdapter):
             body=body,
             message_id=outgoing_message_id,
             attachments=attachments if attachments else None,
+            footer=footer,
         )
 
     def create_plan_streamer(

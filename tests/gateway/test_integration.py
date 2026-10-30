@@ -44,6 +44,7 @@ from airut.gateway.email.parsing import (
 )
 from airut.gateway.service import GatewayService
 from airut.gateway.service.repo_handler import RepoHandler
+from airut.markdown import markdown_to_html
 
 from .service.conftest import expire_shutdown_wait
 
@@ -1221,11 +1222,13 @@ class TestAcknowledgmentReply:
 
         call_kwargs = responder.send_reply.call_args[1]
         body = call_kwargs["body"]
-        html_body = call_kwargs["html_body"]
         expected_url = "https://dashboard.example.com/conversation/abc12345"
-        assert expected_url in body
         assert "started working" in body
-        assert f'<a href="{expected_url}">{expected_url}</a>' in html_body
+        # A markdown autolink, which renders as a link in the HTML part.
+        assert f"<{expected_url}>" in body
+        assert f'<a href="{expected_url}">{expected_url}</a>' in (
+            markdown_to_html(body)
+        )
 
     def test_send_acknowledgment_no_dashboard_link_when_not_configured(
         self,

@@ -22,6 +22,7 @@ from airut.gateway.scheduler.delivery import deliver_result
 from airut.gateway.service.message_processing import (
     run_in_sandbox,
 )
+from airut.units import format_size
 
 
 if TYPE_CHECKING:
@@ -341,21 +342,12 @@ def _truncate_output(output: str, limit: int) -> str:
 
     total_size = len(encoded)
     truncated = encoded[:limit].decode("utf-8", errors="replace")
-    size_str = _format_size(total_size)
-    limit_str = _format_size(limit)
+    size_str = format_size(total_size)
+    limit_str = format_size(limit)
     return (
         f"{truncated}\n\n"
         f"[...truncated at {limit_str}, total output was {size_str}]"
     )
-
-
-def _format_size(size: int) -> str:
-    """Format byte size as human-readable string."""
-    if size >= 1024 * 1024:
-        return f"{size / (1024 * 1024):.1f}MB"
-    if size >= 1024:
-        return f"{size / 1024:.0f}KB"
-    return f"{size}B"
 
 
 def _build_script_error_prompt(

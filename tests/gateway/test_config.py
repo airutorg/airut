@@ -669,6 +669,11 @@ def test_repo_server_config_invalid_smtp_port(
         _make_repo_server_config(master_repo, tmp_path, smtp_port=100000)
 
 
+def test_smtp_config_invalid_max_message_size() -> None:
+    with pytest.raises(ValueError, match="max_message_size_mb must be >= 1"):
+        SmtpConfig(server="smtp.example.com", max_message_size_mb=0)
+
+
 def test_repo_server_config_invalid_imap_connect_retries(
     master_repo: Path, tmp_path: Path
 ) -> None:
@@ -999,6 +1004,7 @@ repos:
         server: smtp.test.com
         port: 25
         require_auth: false
+        max_message_size_mb: 35
       auth:
         authorized_senders:
           - auth@test.com
@@ -1125,6 +1131,7 @@ class TestFromYaml:
         assert email_ch.imap.server == "imap.test.com"
         assert email_ch.imap.port == 993
         assert email_ch.smtp.port == 587
+        assert email_ch.smtp.max_message_size_mb == 25
         assert email_ch.account.password == "plain_password"
         assert email_ch.imap.poll_interval == 60
         assert email_ch.imap.use_idle is True
@@ -1164,6 +1171,7 @@ class TestFromYaml:
         assert email_ch.smtp.port == 25
         assert email_ch.account.password == "env_pw"
         assert email_ch.smtp.require_auth is False
+        assert email_ch.smtp.max_message_size_mb == 35
         assert email_ch.imap.connect_retries == 5
         assert email_ch.imap.poll_interval == 45
         assert email_ch.imap.use_idle is False

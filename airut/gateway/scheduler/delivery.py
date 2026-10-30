@@ -90,10 +90,9 @@ def _deliver_via_email(
     unreadable_note = outbox.unreadable_note()
     if unreadable_note:
         body = f"{body}\n\n{unreadable_note}"
+    footer = ""
     if result.usage_stats and result.usage_stats.has_any():
         footer = result.usage_stats.format_summary()
-        if footer:
-            body = f"{body}\n\n*{footer}*"
 
     try:
         adapter.send_new_message(
@@ -102,6 +101,7 @@ def _deliver_via_email(
             body=body,
             conversation_id=result.conversation_id,
             attachments=outbox.attachments,
+            footer=footer,
         )
         # The conversation outlives the schedule run — recipients can
         # reply to continue it — so delivered files must not stay behind

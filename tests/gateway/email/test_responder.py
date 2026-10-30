@@ -216,43 +216,8 @@ def test_send_reply_unicode_content(email_config):
         )
 
 
-def test_send_reply_with_explicit_html_body(email_config):
-    """Test sending reply with explicit HTML body."""
-    responder = EmailResponder(email_config.channels["email"])
-
-    with patch("smtplib.SMTP") as mock_smtp_class:
-        mock_server = MagicMock()
-        mock_smtp_class.return_value.__enter__.return_value = mock_server
-
-        plain_body = "Plain text body"
-        html_body = "<p>Custom <strong>HTML</strong> body</p>"
-
-        responder.send_reply(
-            to="recipient@example.com",
-            subject="Test",
-            body=plain_body,
-            html_body=html_body,
-        )
-
-        mock_server.send_message.assert_called_once()
-        sent_message = mock_server.send_message.call_args[0][0]
-
-        # Verify multipart structure with custom HTML
-        assert sent_message.is_multipart()
-        parts = sent_message.get_payload()
-        assert len(parts) == 2
-
-        # Plain text part
-        assert parts[0].get_content_type() == "text/plain"
-        assert plain_body in parts[0].get_payload()
-
-        # HTML part should use explicit html_body
-        assert parts[1].get_content_type() == "text/html"
-        assert html_body in parts[1].get_payload()
-
-
 def test_send_reply_markdown_to_html_conversion(email_config):
-    """Test markdown is converted to HTML when no explicit html_body."""
+    """Test markdown is converted to HTML."""
     responder = EmailResponder(email_config.channels["email"])
 
     with patch("smtplib.SMTP") as mock_smtp_class:
@@ -288,6 +253,7 @@ def test_send_reply_with_single_attachment(email_config):
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
+        mock_server.esmtp_features = {}
         mock_smtp_class.return_value.__enter__.return_value = mock_server
 
         responder.send_reply(
@@ -325,6 +291,7 @@ def test_send_reply_with_multiple_attachments(email_config):
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
+        mock_server.esmtp_features = {}
         mock_smtp_class.return_value.__enter__.return_value = mock_server
 
         responder.send_reply(
@@ -388,6 +355,7 @@ def test_send_reply_with_binary_attachment(email_config):
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
+        mock_server.esmtp_features = {}
         mock_smtp_class.return_value.__enter__.return_value = mock_server
 
         binary_content = bytes([0x00, 0x01, 0x02, 0xFF, 0xFE])
@@ -422,6 +390,7 @@ def test_send_reply_attachment_preserves_mime_type(email_config):
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
+        mock_server.esmtp_features = {}
         mock_smtp_class.return_value.__enter__.return_value = mock_server
 
         responder.send_reply(
@@ -443,6 +412,7 @@ def test_send_reply_text_attachment_mime_type(email_config):
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
+        mock_server.esmtp_features = {}
         mock_smtp_class.return_value.__enter__.return_value = mock_server
 
         responder.send_reply(
@@ -464,6 +434,7 @@ def test_send_reply_with_unknown_extension_attachment(email_config):
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
+        mock_server.esmtp_features = {}
         mock_smtp_class.return_value.__enter__.return_value = mock_server
 
         responder.send_reply(
