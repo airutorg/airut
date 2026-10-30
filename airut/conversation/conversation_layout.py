@@ -87,33 +87,46 @@ def prepare_conversation(layout: ConversationLayout) -> None:
         logger.debug("Created/verified directory: %s", directory)
 
 
-def unique_inbox_path(inbox_dir: Path, safe_name: str) -> Path:
-    """Return a path in *inbox_dir* for *safe_name* that does not collide.
+def write_inbox_file(inbox_dir: Path, safe_name: str, data: bytes) -> Path:
+    """Save an attachment in *inbox_dir* without overwriting anything.
 
     Channels save attachments into a shared inbox directory.  When two
     files carry the same name — within one message, across a coalesced
     burst, across replayed thread history, or across conversation turns —
     a direct write would silently clobber the earlier file and lose data.
-    This inserts a ``-N`` counter before the extension until a free name is
-    found, so every attachment is preserved.
+    The file is created exclusively instead, inserting a ``-N`` counter
+    before the extension until a free name is found, so every attachment
+    is preserved.
+
+    Exclusive creation also means nothing already at a path is written
+    through, in particular a symlink, even a dangling one: the inbox is
+    writable from the container, and writing through a link the task
+    planted would create a file wherever it points on the host.
 
     Args:
-        inbox_dir: Directory the file will be written to (must exist).
+        inbox_dir: Directory to save the file in (must exist).
         safe_name: Sanitized basename (caller is responsible for stripping
             path components and rejecting traversal sequences).
+        data: File content.
 
     Returns:
-        A path under *inbox_dir* that does not currently exist.
+        The path the file was saved to.
+
+    Raises:
+        OSError: If the file cannot be written for any other reason.
     """
-    candidate = inbox_dir / safe_name
-    if not candidate.exists():
-        return candidate
     stem = Path(safe_name).stem
     suffix = Path(safe_name).suffix
-    counter = 1
-    while (candidate := inbox_dir / f"{stem}-{counter}{suffix}").exists():
-        counter += 1
-    return candidate
+    candidate = inbox_dir / safe_name
+    counter = 0
+    while True:
+        try:
+            with open(candidate, "xb") as f:
+                f.write(data)
+            return candidate
+        except FileExistsError:
+            counter += 1
+            candidate = inbox_dir / f"{stem}-{counter}{suffix}"
 
 
 def list_outbox_files(outbox_dir: Path) -> list[Path]:

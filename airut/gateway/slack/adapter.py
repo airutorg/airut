@@ -22,7 +22,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError, SlackRequestError
 
 from airut._json_types import JsonDict
-from airut.conversation import unique_inbox_path
+from airut.conversation import write_inbox_file
 from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
@@ -480,10 +480,9 @@ class SlackChannelAdapter(ChannelAdapter):
                 safe_name = Path(filename).name
                 if not safe_name:
                     safe_name = "unnamed"
-                # Avoid clobbering an earlier attachment (or a prior turn's
+                # Never clobbers an earlier attachment (or a prior turn's
                 # file) that shares the same name.
-                filepath = unique_inbox_path(inbox_dir, safe_name)
-                filepath.write_bytes(data)
+                filepath = write_inbox_file(inbox_dir, safe_name, data)
                 saved.append(filepath.name)
                 logger.info("Saved Slack attachment: %s", filepath.name)
 

@@ -15,7 +15,7 @@ from airut.conversation import (
     get_container_mounts,
     list_outbox_files,
     prepare_conversation,
-    unique_inbox_path,
+    write_inbox_file,
 )
 
 
@@ -78,19 +78,22 @@ class TestPrepareConversation:
         assert layout.claude.is_dir()
 
 
-class TestUniqueInboxPath:
-    """Tests for unique_inbox_path() collision avoidance."""
+class TestWriteInboxFile:
+    """Tests for write_inbox_file() collision avoidance."""
 
-    def test_no_collision_returns_name(self, tmp_path: Path) -> None:
-        """An unused name is returned unchanged."""
-        assert unique_inbox_path(tmp_path, "data.csv") == tmp_path / "data.csv"
+    def test_no_collision_keeps_name(self, tmp_path: Path) -> None:
+        """An unused name is used unchanged."""
+        path = write_inbox_file(tmp_path, "data.csv", b"new")
+        assert path == tmp_path / "data.csv"
+        assert path.read_bytes() == b"new"
 
     def test_single_collision_appends_counter(self, tmp_path: Path) -> None:
         """A collision inserts ``-1`` before the extension."""
         (tmp_path / "data.csv").write_bytes(b"existing")
-        assert (
-            unique_inbox_path(tmp_path, "data.csv") == tmp_path / "data-1.csv"
-        )
+        path = write_inbox_file(tmp_path, "data.csv", b"new")
+        assert path == tmp_path / "data-1.csv"
+        assert path.read_bytes() == b"new"
+        assert (tmp_path / "data.csv").read_bytes() == b"existing"
 
     def test_multiple_collisions_increment_counter(
         self, tmp_path: Path
@@ -99,22 +102,67 @@ class TestUniqueInboxPath:
         (tmp_path / "data.csv").write_bytes(b"a")
         (tmp_path / "data-1.csv").write_bytes(b"b")
         (tmp_path / "data-2.csv").write_bytes(b"c")
-        assert (
-            unique_inbox_path(tmp_path, "data.csv") == tmp_path / "data-3.csv"
-        )
+        path = write_inbox_file(tmp_path, "data.csv", b"new")
+        assert path == tmp_path / "data-3.csv"
 
     def test_collision_without_extension(self, tmp_path: Path) -> None:
         """A name with no extension still gets a ``-N`` counter."""
         (tmp_path / "README").write_bytes(b"x")
-        assert unique_inbox_path(tmp_path, "README") == tmp_path / "README-1"
+        path = write_inbox_file(tmp_path, "README", b"new")
+        assert path == tmp_path / "README-1"
 
     def test_collision_multi_dot_extension(self, tmp_path: Path) -> None:
         """The counter is inserted before the final extension only."""
         (tmp_path / "archive.tar.gz").write_bytes(b"x")
-        assert (
-            unique_inbox_path(tmp_path, "archive.tar.gz")
-            == tmp_path / "archive.tar-1.gz"
-        )
+        path = write_inbox_file(tmp_path, "archive.tar.gz", b"new")
+        assert path == tmp_path / "archive.tar-1.gz"
+
+
+class TestWriteInboxFileSymlinks:
+    """write_inbox_file() never writes through what is already there.
+
+    The inbox is writable from the container, so a task can leave links
+    in it.  Writing through one would create or overwrite a file
+    wherever it points on the host.
+    """
+
+    def test_dangling_symlink_not_followed(self, tmp_path: Path) -> None:
+        target = tmp_path / "host" / "planted.txt"
+        target.parent.mkdir()
+        (tmp_path / "data.csv").symlink_to(target)
+
+        path = write_inbox_file(tmp_path, "data.csv", b"new")
+
+        assert path == tmp_path / "data-1.csv"
+        assert path.read_bytes() == b"new"
+        assert not target.exists()
+
+    def test_symlink_to_existing_file_not_followed(
+        self, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "host.txt"
+        target.write_bytes(b"host data")
+        (tmp_path / "data.csv").symlink_to(target)
+
+        write_inbox_file(tmp_path, "data.csv", b"new")
+
+        assert target.read_bytes() == b"host data"
+
+    def test_dangling_symlink_with_counter_skipped(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "data.csv").write_bytes(b"existing")
+        (tmp_path / "data-1.csv").symlink_to(tmp_path / "missing")
+
+        path = write_inbox_file(tmp_path, "data.csv", b"new")
+
+        assert path == tmp_path / "data-2.csv"
+        assert not (tmp_path / "missing").exists()
+
+    def test_directory_in_the_way(self, tmp_path: Path) -> None:
+        (tmp_path / "data.csv").mkdir()
+        path = write_inbox_file(tmp_path, "data.csv", b"new")
+        assert path == tmp_path / "data-1.csv"
 
 
 class TestListOutboxFiles:
