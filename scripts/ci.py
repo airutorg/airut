@@ -32,9 +32,13 @@ from dataclasses import dataclass
 # Can be overridden with --step-timeout flag
 DEFAULT_STEP_TIMEOUT_SECONDS = 300
 
-# Default overall timeout for the entire CI run (120 seconds).
+# Default overall timeout for the entire CI run (150 seconds).
+# Measured full run (all workflows): 67s on an idle 4-core host, 98s when
+# the host is shared with other workloads; integration tests (~228,
+# nearly double the count when 120s was set) are 60-75s of that. 150s is
+# the loaded measurement plus 50%.
 # Can be overridden with --timeout flag.
-DEFAULT_TIMEOUT_SECONDS = 120
+DEFAULT_TIMEOUT_SECONDS = 150
 
 # Some steps fetch data over the network and can fail transiently. The
 # uv-secure vulnerability scans fire all PyPI metadata requests concurrently
