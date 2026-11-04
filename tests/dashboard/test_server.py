@@ -1612,25 +1612,123 @@ class TestDashboardServerStartStop:
         # Should not raise — _close_pipe() handles r
         server.stop()
 
-    def test_stop_does_not_join_unstarted_thread(self) -> None:
-        """stop() must tolerate a thread that was assigned but not started.
+    def test_start_after_stop_does_not_serve(self) -> None:
+        """start() does nothing once stop() has been called.
 
-        start() and stop() run on different threads (start() in the
-        service boot thread, stop() from the caller). If stop() observes
-        self._thread in the window after ``self._thread = Thread(...)``
-        but before ``self._thread.start()``, joining it raises
-        ``RuntimeError: cannot join thread before it is started``.
-        join_if_started() swallows that so stop() is safe at any point.
+        The gateway may be stopped while its boot thread has yet to
+        start the dashboard; the dashboard must then stay stopped.
         """
         tracker = TaskTracker()
         server = DashboardServer(tracker, host="127.0.0.1", port=5200)
-
-        # Real, never-started thread — a MagicMock would hide the bug
-        # because its join() never raises.
-        server._thread = threading.Thread(target=lambda: None)
-
-        # Must not raise (previously raised RuntimeError on join()).
         server.stop()
+
+        with patch("airut.dashboard.server.make_server") as make_server:
+            server.start()
+
+        make_server.assert_not_called()
+        assert server._thread is None
+        assert server._server is None
+
+    def test_stop_during_start_stops_server(self) -> None:
+        """stop() called while start() runs leaves the server stopped.
+
+        start() runs in the gateway's boot thread and stop() may be
+        called from another thread at any point.  Neither may stop()
+        tear the server down underneath a start() that then serves
+        anyway, nor may start() leave a server running after stop().
+        """
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+        stopper = threading.Thread(target=server.stop)
+        mock_wsgi_server = MagicMock()
+        test_r, test_w = os.pipe()
+        mock_wsgi_server.fileno.return_value = test_r
+
+        def make_server_and_stop(*args: object, **kwargs: object) -> MagicMock:
+            stopper.start()
+            # Let stop() run in the middle of start(); it must wait for
+            # start() to finish instead.
+            stopper.join(timeout=0.2)
+            assert stopper.is_alive(), "stop() did not wait for start()"
+            return mock_wsgi_server
+
+        try:
+            with patch(
+                "airut.dashboard.server.make_server",
+                side_effect=make_server_and_stop,
+            ):
+                server.start()
+            stopper.join()
+
+            assert server._thread is None
+            assert server._server is None
+            mock_wsgi_server.server_close.assert_called_once()
+        finally:
+            for fd in (test_r, test_w):
+                os.close(fd)
+
+    def test_stop_reentered_during_start_stops_server(self) -> None:
+        """stop() from a signal handler interrupting start() stops it.
+
+        The gateway calls start() on the main thread, where its SIGTERM
+        and SIGINT handlers call stop().  Such a stop() must neither
+        deadlock nor let the interrupted start() leave a server running.
+        """
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+        mock_wsgi_server = MagicMock()
+        test_r, test_w = os.pipe()
+        mock_wsgi_server.fileno.return_value = test_r
+
+        def make_server_interrupted(
+            *args: object, **kwargs: object
+        ) -> MagicMock:
+            server.stop()  # as a signal handler on this thread would
+            return mock_wsgi_server
+
+        try:
+            with patch(
+                "airut.dashboard.server.make_server",
+                side_effect=make_server_interrupted,
+            ):
+                server.start()
+
+            assert server._thread is None
+            assert server._server is None
+            assert server._wakeup_r == -1
+            mock_wsgi_server.server_close.assert_called_once()
+        finally:
+            for fd in (test_r, test_w):
+                os.close(fd)
+
+    def test_stop_reentered_during_stop(self) -> None:
+        """stop() from a signal handler interrupting stop() returns.
+
+        The interrupted stop() finishes stopping the server.
+        """
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+        mock_wsgi_server = MagicMock()
+        test_r, test_w = os.pipe()
+        mock_wsgi_server.fileno.return_value = test_r
+        # As a signal handler on this thread would.
+        mock_wsgi_server.server_close.side_effect = lambda: server.stop()
+
+        try:
+            with patch(
+                "airut.dashboard.server.make_server",
+                return_value=mock_wsgi_server,
+            ):
+                server.start()
+            server.stop()
+
+            assert server._thread is None
+            assert server._server is None
+            assert server._wakeup_r == -1
+            mock_wsgi_server.server_close.assert_called_once()
+        finally:
+            for fd in (test_r, test_w):
+                os.close(fd)
 
     def test_serve_handles_request(self) -> None:
         """_serve() dispatches to _handle_request_noblock on socket ready."""
@@ -1642,11 +1740,8 @@ class TestDashboardServerStartStop:
         try:
             mock_wsgi = MagicMock()
             mock_wsgi.fileno.return_value = sock_r
-            server._server = mock_wsgi
 
             wake_r, wake_w = os.pipe()
-            server._wakeup_r = wake_r
-            server._wakeup_w = wake_w
 
             # When _handle_request_noblock is called, signal shutdown
             def handle_and_stop() -> None:
@@ -1657,7 +1752,7 @@ class TestDashboardServerStartStop:
             # Trigger the server socket
             os.write(sock_w, b"\x01")
 
-            server._serve()
+            server._serve(mock_wsgi, wake_r)
 
             mock_wsgi._handle_request_noblock.assert_called_once()
         finally:
@@ -1677,11 +1772,9 @@ class TestDashboardServerStartStop:
         os.close(r)
         mock_wsgi = MagicMock()
         mock_wsgi.fileno.return_value = r  # closed fd
-        server._server = mock_wsgi
-        server._wakeup_r = w  # doesn't matter, select will fail first
 
-        # Should not raise
-        server._serve()
+        # Should not raise (w doesn't matter, select will fail first)
+        server._serve(mock_wsgi, w)
 
         os.close(w)
 

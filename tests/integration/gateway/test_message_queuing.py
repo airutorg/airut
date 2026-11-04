@@ -973,27 +973,27 @@ events = [
             )
 
             # Check dashboard API shows pending > 0
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
+            client = Client(service.dashboard._wsgi_app)
 
-                # /api/tracker
-                # Each message has its own task entry.  The second
-                # message's task is PENDING while the first keeps
-                # EXECUTING.
-                r = client.get("/api/tracker")
-                assert r.status_code == 200
-                data = json.loads(r.get_data(as_text=True))
-                assert data["counts"]["pending"] >= 1, (
-                    f"Expected pending >= 1, got {data['counts']}"
-                )
+            # /api/tracker
+            # Each message has its own task entry.  The second
+            # message's task is PENDING while the first keeps
+            # EXECUTING.
+            r = client.get("/api/tracker")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert data["counts"]["pending"] >= 1, (
+                f"Expected pending >= 1, got {data['counts']}"
+            )
 
-                # /api/health
-                r = client.get("/api/health")
-                assert r.status_code == 200
-                health = json.loads(r.get_data(as_text=True))
-                assert health["tasks"]["pending"] >= 1
+            # /api/health
+            r = client.get("/api/health")
+            assert r.status_code == 200
+            health = json.loads(r.get_data(as_text=True))
+            assert health["tasks"]["pending"] >= 1
 
             # Release first task
             workspace_dir = sync_file.parent
@@ -1010,18 +1010,18 @@ events = [
             )
 
             # Check dashboard shows pending == 0 after completion
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
+            client = Client(service.dashboard._wsgi_app)
 
-                r = client.get("/api/tracker")
-                assert r.status_code == 200
-                data = json.loads(r.get_data(as_text=True))
-                assert data["counts"]["pending"] == 0, (
-                    f"Expected pending=0 after completion, got {data['counts']}"
-                )
-                assert data["counts"]["executing"] == 0
+            r = client.get("/api/tracker")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert data["counts"]["pending"] == 0, (
+                f"Expected pending=0 after completion, got {data['counts']}"
+            )
+            assert data["counts"]["executing"] == 0
 
         finally:
             service.stop()
@@ -1073,43 +1073,43 @@ events = [
             )
             assert task is not None
 
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
+            client = Client(service.dashboard._wsgi_app)
 
-                # Single task endpoint
-                r = client.get(f"/api/conversation/{conv_id}")
-                assert r.status_code == 200
-                data = json.loads(r.get_data(as_text=True))
-                assert data["completion_reason"] == "success"
-                assert data["status"] == "completed"
+            # Single task endpoint
+            r = client.get(f"/api/conversation/{conv_id}")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert data["completion_reason"] == "success"
+            assert data["status"] == "completed"
 
-                # Tracker endpoint
-                r = client.get("/api/tracker")
-                assert r.status_code == 200
-                tracker_data = json.loads(r.get_data(as_text=True))
-                api_task = next(
-                    (
-                        t
-                        for t in tracker_data["tasks"]
-                        if t["conversation_id"] == conv_id
-                    ),
-                    None,
-                )
-                assert api_task is not None
-                assert api_task["completion_reason"] == "success"
+            # Tracker endpoint
+            r = client.get("/api/tracker")
+            assert r.status_code == 200
+            tracker_data = json.loads(r.get_data(as_text=True))
+            api_task = next(
+                (
+                    t
+                    for t in tracker_data["tasks"]
+                    if t["conversation_id"] == conv_id
+                ),
+                None,
+            )
+            assert api_task is not None
+            assert api_task["completion_reason"] == "success"
 
-                # Conversations list endpoint
-                r = client.get("/api/conversations")
-                assert r.status_code == 200
-                conv_data = json.loads(r.get_data(as_text=True))
-                conv_task = next(
-                    (t for t in conv_data if t["conversation_id"] == conv_id),
-                    None,
-                )
-                assert conv_task is not None
-                assert conv_task["completion_reason"] == "success"
+            # Conversations list endpoint
+            r = client.get("/api/conversations")
+            assert r.status_code == 200
+            conv_data = json.loads(r.get_data(as_text=True))
+            conv_task = next(
+                (t for t in conv_data if t["conversation_id"] == conv_id),
+                None,
+            )
+            assert conv_task is not None
+            assert conv_task["completion_reason"] == "success"
 
         finally:
             service.stop()

@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING
 from wsgiref.types import WSGIEnvironment
 
 from airut._json_types import JsonDict
-from airut._threads import join_if_started
 
 
 if TYPE_CHECKING:
@@ -135,6 +134,14 @@ class DashboardServer:
         self.stop_callback = stop_callback
         self._server: BaseWSGIServer | None = None
         self._thread: threading.Thread | None = None
+        # The lock serializes start() and stop() across threads.  It is
+        # re-entrant because the gateway's signal handlers call stop()
+        # on the main thread, which may be inside start() or stop() at
+        # that moment; ``_busy`` makes such a stop() leave the work to
+        # the call it interrupted.
+        self._lifecycle_lock = threading.RLock()
+        self._busy = False
+        self._stopped = False
         self._sse_manager = SSEConnectionManager()
         self._wakeup_r: int = -1
         self._wakeup_w: int = -1
@@ -308,21 +315,40 @@ class DashboardServer:
         }
 
     def start(self) -> None:
-        """Start the dashboard server in a background thread."""
-        server = make_server(
-            self.host,
-            self.port,
-            self._wsgi_app,
-            threaded=True,
-        )
-        self._server = server
-        self._wakeup_r, self._wakeup_w = os.pipe()
-        self._thread = threading.Thread(
-            target=self._serve,
-            daemon=True,
-            name="DashboardServer",
-        )
-        self._thread.start()
+        """Start the dashboard server in a background thread.
+
+        Once stop() has been called, start() does nothing, and a stop()
+        that interrupts start() stops the server once it has started.
+        """
+        with self._lifecycle_lock:
+            if self._stopped:
+                logger.debug("Dashboard server stopped before it started")
+                return
+            self._busy = True
+            try:
+                self._server = make_server(
+                    self.host,
+                    self.port,
+                    self._wsgi_app,
+                    threaded=True,
+                )
+                self._wakeup_r, self._wakeup_w = os.pipe()
+                thread = threading.Thread(
+                    target=self._serve,
+                    args=(self._server, self._wakeup_r),
+                    daemon=True,
+                    name="DashboardServer",
+                )
+                thread.start()
+                self._thread = thread
+            finally:
+                self._busy = False
+                if self._stopped:
+                    # stop() was called by a signal handler on this
+                    # thread and left stopping the server to this call.
+                    self.stop()
+            if self._stopped:
+                return
         logger.info(
             "Dashboard server started at http://%s:%d/",
             self.host,
@@ -336,32 +362,49 @@ class DashboardServer:
             )
 
     def stop(self) -> None:
-        """Stop the dashboard server."""
-        if self._wakeup_w >= 0:
+        """Stop the dashboard server; later start() calls do nothing.
+
+        Safe to call from any thread at any time.  Called from another
+        thread while start() runs, it waits for start() to finish.
+        Called from a signal handler interrupting start() or stop() on
+        the same thread, it returns at once and the interrupted call
+        stops the server.
+        """
+        with self._lifecycle_lock:
+            self._stopped = True
+            if self._busy:
+                return
+            self._busy = True
             try:
-                os.write(self._wakeup_w, b"\x00")
-            except OSError:
-                pass
-        if join_if_started(self._thread, timeout=5):
-            self._thread = None
-        if self._server:
-            self._server.server_close()
-            self._server = None
-        self._close_pipe()
+                if self._wakeup_w >= 0:
+                    try:
+                        os.write(self._wakeup_w, b"\x00")
+                    except OSError:
+                        pass
+                if self._thread is not None:
+                    self._thread.join(timeout=5)
+                    self._thread = None
+                if self._server:
+                    self._server.server_close()
+                    self._server = None
+                self._close_pipe()
+            finally:
+                self._busy = False
         logger.info("Dashboard server stopped")
 
-    def _serve(self) -> None:
+    def _serve(self, server: BaseWSGIServer, wakeup_r: int) -> None:
         """Select-based serve loop with instant wakeup on stop.
 
         Blocks on ``select()`` waiting for either an incoming connection
         on the server socket or a byte on the wakeup pipe (sent by
         ``stop()``).  This eliminates the polling overhead of the stdlib
         ``serve_forever(poll_interval=...)`` loop.
+
+        Args:
+            server: The server to accept connections on.
+            wakeup_r: Read end of the wakeup pipe.
         """
-        server = self._server
-        assert server is not None
         server_fd = server.fileno()
-        wakeup_r = self._wakeup_r
         try:
             while True:
                 readable, _, _ = select.select([server_fd, wakeup_r], [], [])
@@ -369,7 +412,8 @@ class DashboardServer:
                     break
                 if server_fd in readable:
                     server._handle_request_noblock()  # ty:ignore[unresolved-attribute]  # inherited from BaseServer
-        except OSError:
+        except (OSError, ValueError):
+            # Closed underneath us (ValueError: a closed socket's fd is -1).
             pass
 
     def _close_pipe(self) -> None:

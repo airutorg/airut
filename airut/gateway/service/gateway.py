@@ -169,6 +169,8 @@ class GatewayService:
         self.global_config = config.global_config
         self._running = True
         self._stopped = False
+        # Set once stop() has finished (or failed) stopping components.
+        self._stop_done = threading.Event()
 
         # Config reload state
         self._config_source = config_source
@@ -305,6 +307,8 @@ class GatewayService:
 
         Starts dashboard immediately, then boots remaining components
         (proxy, repos, executor) while reporting progress on the dashboard.
+        If stop() is called during boot, returns once boot is aborted and
+        stop(), on whichever thread it runs, has finished.
 
         Args:
             resilient: If True, catch boot errors and stay running with the
@@ -349,13 +353,23 @@ class GatewayService:
             )
 
         # If stop() was called during boot, any listeners started after
-        # stop() iterated them would be orphaned.  Re-stop all listeners
-        # to clean up the race window.
+        # stop() iterated them would be orphaned, as would a config
+        # watcher, scheduler or dashboard created after stop() looked
+        # for one.  Re-stop them to clean up the race window.
         if self._stopped:
+            # Components' stop() methods must not run concurrently, so
+            # wait for a stop() on another thread to finish first.
+            self._stop_done.wait()
+            if self._watcher:
+                self._watcher.stop()
+            if self._scheduler:
+                self._scheduler.stop()
             for repo_handler in self.repo_handlers.values():
                 repo_handler.stop()
             if self._executor_pool:
                 self._executor_pool.shutdown(wait=False)
+            if self.dashboard:
+                self.dashboard.stop()
             return
 
         # Block main thread until shutdown
@@ -606,41 +620,44 @@ class GatewayService:
                 return
             self._stopped = True
 
-        logger.info("Stopping gateway service...")
-        self._running = False
-        self._shutdown_event.set()
+        try:
+            logger.info("Stopping gateway service...")
+            self._running = False
+            self._shutdown_event.set()
 
-        # Stop config watcher before listeners
-        if self._watcher:
-            self._watcher.stop()
+            # Stop config watcher before listeners
+            if self._watcher:
+                self._watcher.stop()
 
-        # Stop scheduler before executor pool shutdown
-        if self._scheduler:
-            self._scheduler.stop()
+            # Stop scheduler before executor pool shutdown
+            if self._scheduler:
+                self._scheduler.stop()
 
-        # Interrupt all listeners
-        for repo_handler in self.repo_handlers.values():
-            repo_handler.stop()
+            # Interrupt all listeners
+            for repo_handler in self.repo_handlers.values():
+                repo_handler.stop()
 
-        # Shutdown thread pool with timeout
-        if self._executor_pool:
-            self._wait_for_pending_executions()
-            # cancel_futures: a task finishing after the drain's last
-            # snapshot may still have queued a follow-up.
-            self._executor_pool.shutdown(wait=False, cancel_futures=True)
-            logger.info("Execution pool shut down")
+            # Shutdown thread pool with timeout
+            if self._executor_pool:
+                self._wait_for_pending_executions()
+                # cancel_futures: a task finishing after the drain's last
+                # snapshot may still have queued a follow-up.
+                self._executor_pool.shutdown(wait=False, cancel_futures=True)
+                logger.info("Execution pool shut down")
 
-        # Shutdown sandbox only after the grace period.  Tearing it down
-        # removes every task's network and, with it, its container, so
-        # this is also what terminates tasks still running at the
-        # deadline.
-        self.sandbox.shutdown()
+            # Shutdown sandbox only after the grace period.  Tearing it down
+            # removes every task's network and, with it, its container, so
+            # this is also what terminates tasks still running at the
+            # deadline.
+            self.sandbox.shutdown()
 
-        # Stop dashboard server
-        if self.dashboard:
-            self.dashboard.stop()
+            # Stop dashboard server
+            if self.dashboard:
+                self.dashboard.stop()
 
-        logger.info("Service stopped")
+            logger.info("Service stopped")
+        finally:
+            self._stop_done.set()
 
     def _wait_for_pending_executions(self) -> None:
         """Wait for pending executions until none remain or time runs out.

@@ -118,6 +118,13 @@ filterwarnings = [
     "error",
 ]
 
+[tool.coverage.run]
+# sys.monitoring cuts the unit test suite's CPU time by about a third
+# compared with the default C tracer on Python 3.13 (coverage already
+# defaults to it on 3.14+). It measures line coverage only, which is all
+# CI checks.
+core = "sysmon"
+
 [tool.pip-licenses]
 # Allowed licenses for runtime dependencies (using partial matching).
 # Checked via scripts/check_licenses.py which scans only runtime deps.
