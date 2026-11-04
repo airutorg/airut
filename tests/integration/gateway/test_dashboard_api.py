@@ -118,8 +118,7 @@ events = [
             assert task is not None, f"Task {conv_id} not completed"
 
             # Now test all endpoints via WSGI test client
-            if service.dashboard is None:
-                return  # Dashboard not enabled
+            assert service.dashboard is not None, "Dashboard not started"
 
             from werkzeug.test import Client
 
@@ -359,8 +358,7 @@ events = [
             task = _wait_for_task_completion(service, conv_id)
             assert task is not None
 
-            if service.dashboard is None:
-                return
+            assert service.dashboard is not None, "Dashboard not started"
 
             from werkzeug.test import Client
 
@@ -437,34 +435,32 @@ class TestDashboardAPIBeforeBoot:
     ) -> None:
         """Verify /api/health returns booting status during startup.
 
-        Creates the service and checks the dashboard before the boot
-        sequence completes.
+        Starts the dashboard as start() does before booting, and checks
+        it before the boot sequence runs.
         """
         service = integration_env.create_service()
 
-        # The dashboard is available before start() is called, so we
-        # can test the boot state directly
-        if service.dashboard is None:
-            return
+        try:
+            service._start_dashboard_early()
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-        from werkzeug.test import Client
+            client = Client(service.dashboard._wsgi_app)
 
-        client = Client(service.dashboard._wsgi_app)
+            r = client.get("/api/health")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert data["status"] == "booting"
 
-        # Before start(), boot state may not be set
-        r = client.get("/api/health")
-        assert r.status_code == 200
-        data = json.loads(r.get_data(as_text=True))
-        # Status should be degraded (no repos yet) or booting
-        assert data["status"] in ("degraded", "booting", "ok")
-
-        # /api/tracker should work too
-        r = client.get("/api/tracker")
-        assert r.status_code == 200
-        data = json.loads(r.get_data(as_text=True))
-        assert data["counts"]["queued"] == 0
-        assert data["counts"]["executing"] == 0
-        assert data["counts"]["completed"] == 0
+            # /api/tracker should work too
+            r = client.get("/api/tracker")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert data["counts"]["queued"] == 0
+            assert data["counts"]["executing"] == 0
+            assert data["counts"]["completed"] == 0
+        finally:
+            service.stop()
 
 
 class TestDashboardDuringReload:

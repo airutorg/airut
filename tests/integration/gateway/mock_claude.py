@@ -39,6 +39,10 @@ Available in code context:
   generate_result_event, generate_tool_use_event
 - Standard library: Path, time, json, sys, os
 
+The code can import other standard library and project modules, but not
+packages installed in the virtualenv: mock_podman_wrapper.sh runs Python
+with -S.
+
 Environment Variables:
     MOCK_CLAUDE_WORKSPACE: Path to conversation workspace (set by executor)
     MOCK_CLAUDE_INBOX: Path to inbox directory (set by executor)

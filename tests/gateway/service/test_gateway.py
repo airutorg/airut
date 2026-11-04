@@ -1153,6 +1153,97 @@ class TestStartStop:
         # Listener.start should NOT have been called — boot aborted
         handler.adapters["email"].listener.start.assert_not_called()
 
+    def test_stop_before_dashboard_created_stops_dashboard(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """start() stops a dashboard that stop() ran too early to see.
+
+        stop() runs on another thread than start() and can finish before
+        start() creates the dashboard, so it has none to stop.
+        """
+        svc, _ = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=True)
+
+        with patch("airut.gateway.service.gateway.DashboardServer") as mock_ds:
+            svc.stop()
+            svc.start()
+
+        mock_ds.return_value.stop.assert_called_once()
+
+    def test_stop_during_boot_stops_scheduler_and_watcher(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """start() stops a scheduler and watcher stop() ran too early to see.
+
+        stop() runs on another thread than start(); when it runs before
+        boot creates the scheduler and config watcher, it has none to
+        stop.
+        """
+        from airut.config.source import YamlConfigSource
+
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+        svc._config_source = MagicMock(spec=YamlConfigSource)
+        svc._config_source.path = tmp_path / "airut.yaml"
+        handler.start_listener = svc.stop
+
+        with (
+            patch("airut.gateway.service.gateway.Scheduler") as mock_sched,
+            patch(
+                "airut.gateway.service.gateway.ConfigFileWatcher"
+            ) as mock_cfw,
+        ):
+            svc.start()
+
+        mock_sched.return_value.stop.assert_called_once()
+        mock_cfw.return_value.stop.assert_called_once()
+
+    def test_stop_during_boot_cleanup_waits_for_stop(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """start() re-stops components only after stop() has finished.
+
+        Components' stop() methods are not safe to run concurrently
+        with themselves, so start() must not re-stop a component while
+        stop() on another thread is still stopping it.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+        stopper = threading.Thread(target=svc.stop)
+        stopping = threading.Event()
+        overlap = threading.Event()
+        lock = threading.Lock()
+        active = 0
+        calls = 0
+
+        def stop_listener() -> None:
+            nonlocal active, calls
+            with lock:
+                active += 1
+                calls += 1
+                if active > 1:
+                    overlap.set()
+            stopping.set()
+            # The first call lingers so that a concurrent second call
+            # would overlap it; a sequential one comes after it.
+            overlap.wait(timeout=0.2)
+            with lock:
+                active -= 1
+
+        def start_listener_then_stop() -> None:
+            stopper.start()
+            stopping.wait()
+
+        handler.start_listener = start_listener_then_stop
+        handler.stop = stop_listener
+
+        with patch("airut.gateway.service.gateway.Scheduler"):
+            svc.start()
+        stopper.join()
+
+        assert not overlap.is_set()
+        assert calls == 2  # by stop(), then by start() cleaning up
+
     def test_stop_during_boot_mid_listener_loop(
         self, email_config, tmp_path: Path
     ) -> None:

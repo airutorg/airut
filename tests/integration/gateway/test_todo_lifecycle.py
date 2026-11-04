@@ -127,18 +127,18 @@ events = [
             )
 
             # Verify via dashboard API as well
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
+            client = Client(service.dashboard._wsgi_app)
 
-                r = client.get(f"/api/conversation/{conv_id}")
-                assert r.status_code == 200
-                data = json.loads(r.get_data(as_text=True))
-                assert "todos" not in data, (
-                    f"API should not include todos for completed task, "
-                    f"got {data.get('todos')!r}"
-                )
+            r = client.get(f"/api/conversation/{conv_id}")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert "todos" not in data, (
+                f"API should not include todos for completed task, "
+                f"got {data.get('todos')!r}"
+            )
 
         finally:
             service.stop()
@@ -327,17 +327,17 @@ events = [
             )
 
             # Verify via API
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
-                r = client.get(f"/api/conversation/{conv_id}")
-                assert r.status_code == 200
-                data = json.loads(r.get_data(as_text=True))
-                assert "todos" not in data, (
-                    f"API should not include stale todos after resume, "
-                    f"got {data.get('todos')!r}"
-                )
+            client = Client(service.dashboard._wsgi_app)
+            r = client.get(f"/api/conversation/{conv_id}")
+            assert r.status_code == 200
+            data = json.loads(r.get_data(as_text=True))
+            assert "todos" not in data, (
+                f"API should not include stale todos after resume, "
+                f"got {data.get('todos')!r}"
+            )
 
         finally:
             service.stop()

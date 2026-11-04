@@ -21,6 +21,12 @@ Tests substitute `CONTAINER_COMMAND` with a mock that simulates container
 behavior (`mock_podman.py` → `mock_claude.py`). Response strategies: `echo`,
 `file_ops`, `scripted`, `error`, `slow`.
 
+Like podman, the mock remembers the images, networks and containers it has
+created for the duration of a test, so an image built for one task is reused by
+the next rather than rebuilt. Code scripted for `mock_claude` can import only
+the standard library and project modules, not packages installed in the
+virtualenv.
+
 ## CI Integration
 
 Tests run as part of the CI workflow (`.github/workflows/ci.yml`) via

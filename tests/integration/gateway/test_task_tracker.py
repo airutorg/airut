@@ -34,6 +34,7 @@ from airut.dashboard.tracker import TaskStatus
 from .conftest import (
     get_message_text,
     wait_for_conv_completion,
+    wait_for_service_ready,
 )
 from .environment import IntegrationEnvironment
 
@@ -641,67 +642,63 @@ events = [
             )
             assert task is not None
 
-            # Query dashboard API if dashboard is running
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            # Query dashboard API
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
+            client = Client(service.dashboard._wsgi_app)
 
-                # Test /api/tracker endpoint
-                api_response = client.get("/api/tracker")
-                assert api_response.status_code == 200
-                data = json.loads(api_response.get_data(as_text=True))
+            # Test /api/tracker endpoint
+            api_response = client.get("/api/tracker")
+            assert api_response.status_code == 200
+            data = json.loads(api_response.get_data(as_text=True))
 
-                # Validate structure
-                assert "version" in data
-                assert "counts" in data
-                assert "tasks" in data
-                assert isinstance(data["version"], int)
+            # Validate structure
+            assert "version" in data
+            assert "counts" in data
+            assert "tasks" in data
+            assert isinstance(data["version"], int)
 
-                # Find our task
-                api_task = next(
-                    (
-                        t
-                        for t in data["tasks"]
-                        if t["conversation_id"] == conv_id
-                    ),
-                    None,
-                )
-                assert api_task is not None, (
-                    f"Task {conv_id} not found in /api/tracker response"
-                )
+            # Find our task
+            api_task = next(
+                (t for t in data["tasks"] if t["conversation_id"] == conv_id),
+                None,
+            )
+            assert api_task is not None, (
+                f"Task {conv_id} not found in /api/tracker response"
+            )
 
-                # Validate task data
-                assert api_task["status"] == "completed"
-                assert api_task["completion_reason"] == "success"
-                assert api_task["sender"] == "user@test.local"
-                assert api_task["display_title"] == "API tracker test"
-                assert "task_id" in api_task
-                assert api_task["model"] is not None
-                assert api_task["repo_id"] == "test"
+            # Validate task data
+            assert api_task["status"] == "completed"
+            assert api_task["completion_reason"] == "success"
+            assert api_task["sender"] == "user@test.local"
+            assert api_task["display_title"] == "API tracker test"
+            assert "task_id" in api_task
+            assert api_task["model"] is not None
+            assert api_task["repo_id"] == "test"
 
-                # Validate counts match
-                assert data["counts"]["completed"] >= 1
-                assert data["counts"]["executing"] == 0
-                assert data["counts"]["queued"] == 0
+            # Validate counts match
+            assert data["counts"]["completed"] >= 1
+            assert data["counts"]["executing"] == 0
+            assert data["counts"]["queued"] == 0
 
-                # Test /api/conversations endpoint matches
-                conv_response = client.get("/api/conversations")
-                assert conv_response.status_code == 200
-                conv_data = json.loads(conv_response.get_data(as_text=True))
-                conv_task = next(
-                    (t for t in conv_data if t["conversation_id"] == conv_id),
-                    None,
-                )
-                assert conv_task is not None
-                assert conv_task["status"] == "completed"
+            # Test /api/conversations endpoint matches
+            conv_response = client.get("/api/conversations")
+            assert conv_response.status_code == 200
+            conv_data = json.loads(conv_response.get_data(as_text=True))
+            conv_task = next(
+                (t for t in conv_data if t["conversation_id"] == conv_id),
+                None,
+            )
+            assert conv_task is not None
+            assert conv_task["status"] == "completed"
 
-                # Test /api/health endpoint
-                health_response = client.get("/api/health")
-                assert health_response.status_code == 200
-                health_data = json.loads(health_response.get_data(as_text=True))
-                assert health_data["status"] == "ok"
-                assert health_data["tasks"]["completed"] >= 1
+            # Test /api/health endpoint
+            health_response = client.get("/api/health")
+            assert health_response.status_code == 200
+            health_data = json.loads(health_response.get_data(as_text=True))
+            assert health_data["status"] == "ok"
+            assert health_data["tasks"]["completed"] >= 1
 
         finally:
             service.stop()
@@ -718,61 +715,60 @@ events = [
         service_thread.start()
 
         try:
-            if service.dashboard is not None:
-                from werkzeug.test import Client
+            # Until boot completes service.dashboard may not exist yet;
+            # wait rather than skip the checks and stop mid-boot.
+            wait_for_service_ready(service)
+            assert service.dashboard is not None, "Dashboard not started"
+            from werkzeug.test import Client
 
-                client = Client(service.dashboard._wsgi_app)
+            # The werkzeug test client calls the WSGI app directly.
+            client = Client(service.dashboard._wsgi_app)
 
-                # Dashboard WSGI app is available immediately (no
-                # need to wait for the HTTP server thread — we use
-                # the werkzeug test client which calls the app
-                # directly).
+            # Get initial ETag
+            r1 = client.get("/api/tracker")
+            assert r1.status_code == 200
+            etag1 = r1.headers.get("ETag")
+            assert etag1 is not None
 
-                # Get initial ETag
-                r1 = client.get("/api/tracker")
-                assert r1.status_code == 200
-                etag1 = r1.headers.get("ETag")
-                assert etag1 is not None
-
-                # Send a message to mutate state
-                mock_code = """
+            # Send a message to mutate state
+            mock_code = """
 events = [
     generate_system_event(session_id),
     generate_assistant_event("ETag test done"),
     generate_result_event(session_id, "Done"),
 ]
 """
-                msg = create_email(subject="ETag test", body=mock_code)
-                integration_env.email_server.inject_message(msg)
+            msg = create_email(subject="ETag test", body=mock_code)
+            integration_env.email_server.inject_message(msg)
 
-                # Wait for completion
-                integration_env.email_server.wait_for_sent(
-                    lambda m: "etag test" in get_message_text(m).lower(),
-                    timeout=30.0,
-                )
+            # Wait for completion
+            integration_env.email_server.wait_for_sent(
+                lambda m: "etag test" in get_message_text(m).lower(),
+                timeout=30.0,
+            )
 
-                # Poll until ETag changes (tracker updated)
-                deadline = time.monotonic() + 10.0
-                etag2 = etag1
-                while etag2 == etag1 and time.monotonic() < deadline:
-                    time.sleep(0.1)
-                    r2 = client.get("/api/tracker")
-                    etag2 = r2.headers.get("ETag")
-                assert etag1 != etag2, "ETag should change after state mutation"
+            # Poll until ETag changes (tracker updated)
+            deadline = time.monotonic() + 10.0
+            etag2 = etag1
+            while etag2 == etag1 and time.monotonic() < deadline:
+                time.sleep(0.1)
+                r2 = client.get("/api/tracker")
+                etag2 = r2.headers.get("ETag")
+            assert etag1 != etag2, "ETag should change after state mutation"
 
-                # Old ETag should still return 200 (not 304)
-                r3 = client.get(
-                    "/api/tracker",
-                    headers={"If-None-Match": etag1},
-                )
-                assert r3.status_code == 200
+            # Old ETag should still return 200 (not 304)
+            r3 = client.get(
+                "/api/tracker",
+                headers={"If-None-Match": etag1},
+            )
+            assert r3.status_code == 200
 
-                # New ETag should return 304
-                r4 = client.get(
-                    "/api/tracker",
-                    headers={"If-None-Match": etag2},
-                )
-                assert r4.status_code == 304
+            # New ETag should return 304
+            r4 = client.get(
+                "/api/tracker",
+                headers={"If-None-Match": etag2},
+            )
+            assert r4.status_code == 304
 
         finally:
             service.stop()
