@@ -203,7 +203,9 @@ class EmailChannelAdapter(ChannelAdapter):
                 authorization fails.
         """
         email_msg = raw_message.content
-        sender = email_msg.get("From", "")
+        # The raw From header: for logs and display only.  Replies go to
+        # the authenticated address, since the header may name others.
+        sender = str(email_msg.get("From", ""))
         message_id = email_msg.get("Message-ID", "")
         repo_id = self._repo_id
 
@@ -264,7 +266,7 @@ class EmailChannelAdapter(ChannelAdapter):
         msg_subject = subject if not conv_id and subject else ""
 
         return EmailParsedMessage(
-            sender=sender,
+            sender=authenticated_sender,
             sender_display=sender,
             body=clean_body,
             conversation_id=conv_id,

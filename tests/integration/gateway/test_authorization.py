@@ -9,16 +9,22 @@ Tests that unauthorized senders are rejected:
 1. Wrong sender email is rejected
 2. No conversation directory created for rejected messages
 3. No response sent for rejected messages
+4. Forged DMARC results and From headers naming others are rejected
 """
 
 import sys
 import threading
 from pathlib import Path
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
+from airut.dashboard.tracker import CompletionReason, TaskStatus
+
+from .conftest import wait_for_task
 from .environment import IntegrationEnvironment
 
 
@@ -245,6 +251,88 @@ class TestAuthorizationRejection:
                 f"found: {conversations}"
             )
 
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)
+
+
+#: The header the mail server wrote for a forged DKIM signature whose
+#: identity held ``dmarc=pass``, followed by the real DMARC failure.
+_FORGED_DKIM_IDENTITY = (
+    'test.local; dkim=neutral header.i="a dmarc=pass b@evil.example"'
+    " header.s=x; dmarc=fail header.from=test.local"
+)
+
+
+class TestForgedSender:
+    """Forged DMARC results and From headers naming others are rejected."""
+
+    @pytest.mark.parametrize(
+        ("sender", "authentication_results"),
+        [
+            pytest.param(
+                "user@test.local", _FORGED_DKIM_IDENTITY, id="dmarc-in-value"
+            ),
+            pytest.param(
+                "<user@test.local>, attacker@evil.example",
+                "test.local; dmarc=pass header.from=test.local",
+                id="several-mailboxes",
+            ),
+        ],
+    )
+    def test_rejected(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+        sender: str,
+        authentication_results: str,
+    ) -> None:
+        msg = create_email(
+            subject="Forged",
+            body="This should be rejected",
+            sender=sender,
+            authentication_results=authentication_results,
+        )
+        integration_env.email_server.inject_message(msg)
+
+        service = integration_env.create_service()
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            task = wait_for_task(
+                service.tracker,
+                lambda t: t.status == TaskStatus.COMPLETED,
+                timeout=10.0,
+            )
+            assert task is not None, "Service did not process message in time"
+            assert task.completion_reason == CompletionReason.AUTH_FAILED
+            assert integration_env.email_server.get_sent_messages() == []
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)
+
+    def test_reply_goes_only_to_authenticated_address(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+    ) -> None:
+        msg = create_email(
+            subject="Display name",
+            body="Hello",
+            sender="Test User <user@test.local>",
+        )
+        integration_env.email_server.inject_message(msg)
+
+        service = integration_env.create_service()
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            response = integration_env.email_server.wait_for_sent(timeout=15.0)
+            assert response is not None
+            assert response["To"] == "user@test.local"
+            assert response["X-RcptTo"] == "user@test.local"
         finally:
             service.stop()
             service_thread.join(timeout=10.0)

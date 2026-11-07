@@ -317,7 +317,7 @@ To: claude@example.com
 Subject: [ID:abc12345] Test request
 Message-ID: <test123@example.com>
 References: <prev@example.com>
-Authentication-Results: mx.example.com; dmarc=pass; spf=pass
+Authentication-Results: mx.example.com; dmarc=pass header.from=example.com
 
 Please fix the linting errors.
 
@@ -342,7 +342,7 @@ To: claude@example.com
 Subject: [ID:abc12345] Test request
 Message-ID: <test123@example.com>
 References: <prev@example.com>
-Authentication-Results: mx.example.com; dmarc=pass; spf=pass
+Authentication-Results: mx.example.com; dmarc=pass header.from=example.com
 
 Please fix the linting errors.
 

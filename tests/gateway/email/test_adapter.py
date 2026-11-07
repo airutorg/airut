@@ -58,7 +58,9 @@ def _make_email(
     body: str = "Test body",
     message_id: str = "<msg1@example.com>",
     references: str = "",
-    auth_results: str = ("mx.example.com; dmarc=pass; spf=pass"),
+    auth_results: str = (
+        "mx.example.com; dmarc=pass header.from=example.com; spf=pass"
+    ),
 ):
     raw = (
         f"From: {sender}\r\n"
@@ -99,7 +101,9 @@ def _make_email_with_attachments(
     msg["To"] = "bot@example.com"
     msg["Subject"] = subject
     msg["Message-ID"] = message_id
-    msg["Authentication-Results"] = "mx.example.com; dmarc=pass; spf=pass"
+    msg["Authentication-Results"] = (
+        "mx.example.com; dmarc=pass header.from=example.com; spf=pass"
+    )
     msg.attach(MIMEText(body))
     for filename, content in attachments:
         part = MIMEText(content)
@@ -161,6 +165,26 @@ class TestAuthenticateAndParse:
         result = adapter.authenticate_and_parse(msg)
 
         assert result.sender_display == "Pyry Haulos <user@example.com>"
+
+    def test_sender_is_the_authenticated_address(self) -> None:
+        """Replies go to the authenticated address, not the raw From.
+
+        The raw From header may name other recipients too.
+        """
+        adapter, auth, authz, responder = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        raw_from = "User <user@example.com>, attacker@evil.example"
+        msg = _make_raw_message(sender=raw_from)
+
+        result = adapter.authenticate_and_parse(msg)
+        adapter.send_reply(result, "aabb1122", "Done", "", [])
+
+        assert result.sender == "user@example.com"
+        assert result.sender_display == raw_from
+        assert responder.send_reply.call_args.kwargs["to"] == (
+            "user@example.com"
+        )
 
     def test_unauthenticated_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError

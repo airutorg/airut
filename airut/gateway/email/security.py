@@ -22,73 +22,90 @@ Security model:
 - When ``trusted_authserv_id`` is empty, the authserv-id check is skipped
   (for Microsoft 365 / EOP which omits it from the header).
 - DMARC pass is required (SPF alone is insufficient because SPF does not
-  validate the From header, only the envelope sender).
+  validate the From header, only the envelope sender).  The header is
+  parsed per RFC 8601 (``authres``), never searched: values in it come
+  from the sender and may contain any text, including ``dmarc=pass``.
+  It must hold exactly one ``dmarc`` entry, with result ``pass`` and a
+  ``header.from`` equal to the From address's domain.
 - When ``allow_internal_auth_fallback`` is enabled and no
   ``Authentication-Results`` header exists, the message is accepted if
   ``X-MS-Exchange-Organization-AuthAs: Internal`` is present.  This
   covers intra-org email in Microsoft 365 where EOP skips external
   authentication entirely.
-- From header is parsed with strict validation, not the permissive
-  ``email.utils.parseaddr``.
+- The From header is parsed as an RFC 5322 address list (not with the
+  permissive ``email.utils.parseaddr``) and must hold exactly one mailbox.
 """
 
 import logging
 import re
+from email import policy
+from email.errors import ObsoleteHeaderDefect
 from email.message import Message
+
+from airut.gateway.email.authres import (
+    AuthResults,
+    AuthResultsParseError,
+    parse_authentication_results,
+)
 
 
 logger = logging.getLogger(__name__)
 
-# Match "dmarc=pass" as a whole token — not as a substring of longer values
-# like "dmarc=passthrough".  The value must be followed by a word boundary
-# (whitespace, semicolon, parenthesis, end-of-string).
-_DMARC_PASS_RE = re.compile(r"(?:^|[\s;])dmarc=pass(?=[\s;(]|$)", re.IGNORECASE)
-
 # RFC 5322 addr-spec: simple but strict pattern for email addresses.
-# Rejects display names, multiple angle brackets, and other tricks.
+# Rejects local parts that need quoting, domain literals, and other tricks.
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+$")
+
+#: Line breaks that fold a header onto continuation lines.
+_FOLDING_RE = re.compile(r"\r?\n(?=[ \t])")
+
+
+def _ascii_lower(value: str) -> str:
+    """Lowercase *value* if it is ASCII; leave it unchanged otherwise.
+
+    Hostnames are compared case-insensitively, but ``str.lower`` also
+    folds some non-ASCII characters onto ASCII ones (the Kelvin sign
+    becomes ``k``), so such a value must never match an ASCII one.
+    """
+    return value.lower() if value.isascii() else value
 
 
 def _extract_email(from_header: str) -> str | None:
-    """Extract email address from a From header value.
+    """Extract the single mailbox from a From header value.
 
-    Handles two formats:
-    - Bare email: ``user@example.com``
-    - Display name with angle brackets: ``Name <user@example.com>``
-
-    Returns None if the header is malformed or contains multiple angle
-    bracket pairs (a common injection technique).
+    Parses the value as an RFC 5322 address list.  It must hold exactly
+    one mailbox, outside any group, whose address passes a strict
+    pattern.  Anything else is rejected: several addresses (where the
+    reply would also reach the others), a group, an address without a
+    domain, a local part that needs quoting, or a parse error.  Obsolete syntax
+    (such as an unquoted ``.`` in a display name) is accepted; the
+    DMARC check compares the domain read here with the one the mail
+    server read.
 
     Args:
-        from_header: Raw From header value.
+        from_header: Raw From header value, folded or not.
 
     Returns:
-        Lowercase email address, or None if parsing fails.
+        Lowercase email address, or None if the header is rejected.
     """
-    value = from_header.strip()
-    if not value:
+    value = _FOLDING_RE.sub("", from_header)
+    try:
+        header = policy.default.header_factory("from", value)
+    except (ValueError, IndexError):
+        # ValueError: a bare CR or LF left in an address.  IndexError:
+        # the parser fails on some malformed groups, such as "(c):".
         return None
 
-    # If angle brackets present, extract content between the LAST < and >
-    if "<" in value or ">" in value:
-        # Reject multiple < or > (injection attempt)
-        if value.count("<") != 1 or value.count(">") != 1:
-            return None
-        lt = value.index("<")
-        gt = value.index(">")
-        if gt <= lt:
-            return None
-        addr = value[lt + 1 : gt].strip()
-    else:
-        addr = value.strip()
-
-    if not addr:
+    if any(not isinstance(d, ObsoleteHeaderDefect) for d in header.defects):
+        return None
+    if len(header.groups) != 1:
+        return None
+    group = header.groups[0]
+    if group.display_name is not None or len(group.addresses) != 1:
         return None
 
-    # Validate the extracted address looks like a real email
+    addr = group.addresses[0].addr_spec
     if not _EMAIL_RE.match(addr):
         return None
-
     return addr.lower()
 
 
@@ -147,8 +164,9 @@ class SenderAuthenticator:
     def authenticate(self, message: Message) -> str | None:
         """Authenticate the sender via DMARC and return the From address.
 
-        Verifies DMARC pass from a trusted Authentication-Results header,
-        then extracts and returns the From address using strict parsing.
+        Extracts the From address using strict parsing, then verifies
+        a DMARC pass for its domain in the trusted Authentication-Results
+        header.
 
         When ``allow_internal_auth_fallback`` is enabled and there is no
         ``Authentication-Results`` header at all, the message is accepted
@@ -161,7 +179,7 @@ class SenderAuthenticator:
             Lowercase email address if authentication succeeds, None
             otherwise.
         """
-        from_values: list[str] = message.get_all("From", [])
+        from_values = [str(v) for v in message.get_all("From", [])]
         if len(from_values) != 1:
             logger.warning(
                 "Rejecting message with %d From headers (expected 1)",
@@ -173,19 +191,74 @@ class SenderAuthenticator:
 
         if sender is None:
             logger.warning(
-                "Could not parse From header: %s", from_values[0][:100]
+                "Rejecting From header that is not a single valid mailbox: %s",
+                from_values[0][:100],
             )
             return None
 
-        if not self._verify_dmarc(message):
+        domain = sender.rpartition("@")[2]
+        if not self._verify_dmarc(message, domain):
             if not self._verify_internal_auth(message):
                 return None
 
         logger.debug("Sender authenticated: %s", sender)
         return sender
 
-    def _verify_dmarc(self, message: Message) -> bool:
-        """Verify DMARC pass in the first Authentication-Results header.
+    def _verify_dmarc(self, message: Message, from_domain: str) -> bool:
+        """Verify DMARC pass for *from_domain* in the trusted header.
+
+        Reads the first ``Authentication-Results`` header (see
+        ``_trusted_results``) and requires exactly one ``dmarc`` entry,
+        with result ``pass`` and a ``header.from`` equal to
+        *from_domain*.  A second ``dmarc`` entry means the header is not
+        what it seems (one may have been injected through a value the
+        server failed to quote), so it is rejected rather than resolved.
+
+        SPF alone is not sufficient because SPF validates the envelope
+        sender (Return-Path), not the From header — an attacker can pass
+        SPF with their own domain while spoofing the From header.
+
+        Args:
+            message: Email message.
+            from_domain: Lowercase domain of the From address.
+
+        Returns:
+            True if the trusted header records a DMARC pass for
+            *from_domain*.
+        """
+        results = self._trusted_results(message)
+        if results is None:
+            return False
+
+        authserv_id = results.authserv_id or "(not checked)"
+        dmarc = [r for r in results.results if r.method == "dmarc"]
+        if len(dmarc) != 1:
+            logger.warning(
+                "DMARC verification failed: %d dmarc entries in first "
+                "Authentication-Results header (authserv-id: %s)",
+                len(dmarc),
+                authserv_id,
+            )
+            return False
+
+        entry = dmarc[0]
+        header_from = [_ascii_lower(d) for d in entry.values("header.from")]
+        if entry.result != "pass" or header_from != [from_domain]:
+            logger.warning(
+                "DMARC verification failed (authserv-id: %s): dmarc=%s "
+                "header.from=%s, From domain %s",
+                authserv_id,
+                entry.result,
+                ",".join(header_from) or "(missing)",
+                from_domain,
+            )
+            return False
+
+        logger.debug("DMARC verification passed (authserv-id: %s)", authserv_id)
+        return True
+
+    def _trusted_results(self, message: Message) -> AuthResults | None:
+        """Parse the first ``Authentication-Results`` header, if trusted.
 
         Only considers the **first** (topmost) ``Authentication-Results``
         header, period.  The receiving MTA prepends its header at the top
@@ -197,10 +270,6 @@ class SenderAuthenticator:
         matching authserv-id and ``dmarc=pass``) below legitimate headers
         from other servers.
 
-        SPF alone is not sufficient because SPF validates the envelope
-        sender (Return-Path), not the From header — an attacker can pass
-        SPF with their own domain while spoofing the From header.
-
         When ``trusted_authserv_id`` is empty, the authserv-id check is
         skipped.  This supports Microsoft 365 / EOP which omits the
         authserv-id from the ``Authentication-Results`` header (an
@@ -211,62 +280,47 @@ class SenderAuthenticator:
             message: Email message.
 
         Returns:
-            True if the first Authentication-Results header is from the
-            trusted server and contains ``dmarc=pass``.
+            The parsed header, or None if there is none, it cannot be
+            parsed, or it is not from the trusted server.
         """
-        all_results: list[str] = message.get_all("Authentication-Results", [])
-
+        all_results = message.get_all("Authentication-Results", [])
         if not all_results:
             logger.warning("No Authentication-Results header found")
-            return False
+            return None
 
         # Only examine the first (topmost) Authentication-Results header.
-        auth_results = all_results[0]
-
-        # The authserv-id is the first token in the header value,
-        # terminated by a semicolon.  RFC 8601 §2.2.
-        header_stripped = auth_results.strip()
-        semi_idx = header_stripped.find(";")
-        if semi_idx < 0:
+        header = str(all_results[0])
+        try:
+            results = parse_authentication_results(header)
+        except AuthResultsParseError as e:
             logger.warning(
-                "First Authentication-Results header malformed (no semicolon)"
+                "First Authentication-Results header is malformed (%s): %s",
+                e,
+                header.strip(),
             )
-            return False
+            return None
 
         # When trusted_authserv_id is empty, skip the authserv-id check.
         # This supports Microsoft 365 / EOP which omits the authserv-id
         # from Authentication-Results headers (non-standard).
-        trusted_id = self.trusted_authserv_id.lower()
-        if trusted_id:
-            authserv_id = header_stripped[:semi_idx].strip().lower()
-            if authserv_id != trusted_id:
-                logger.warning(
-                    "First Authentication-Results header is from untrusted "
-                    "server %s (expected %s): %s",
-                    authserv_id,
-                    trusted_id,
-                    auth_results.strip(),
-                )
-                return False
-        else:
-            authserv_id = "(not checked)"
+        trusted_id = _ascii_lower(self.trusted_authserv_id)
+        if not trusted_id:
             logger.debug(
                 "Skipping authserv-id check (trusted_authserv_id is empty)"
             )
+            return results
 
-        # Only accept dmarc=pass (not spf=pass alone).
-        if _DMARC_PASS_RE.search(auth_results):
-            logger.debug(
-                "DMARC verification passed (authserv-id: %s)", authserv_id
+        authserv_id = _ascii_lower(results.authserv_id or "")
+        if authserv_id != trusted_id:
+            logger.warning(
+                "First Authentication-Results header is from untrusted "
+                "server %s (expected %s): %s",
+                authserv_id or "(none)",
+                trusted_id,
+                header.strip(),
             )
-            return True
-
-        logger.warning(
-            "DMARC verification failed on first Authentication-Results "
-            "header (authserv-id: %s)",
-            authserv_id,
-        )
-        return False
+            return None
+        return results
 
     def _verify_internal_auth(self, message: Message) -> bool:
         """Fall back to Microsoft internal authentication header.
@@ -337,7 +391,8 @@ class SenderAuthorizer:
     All comparisons are case-insensitive.
 
     Attributes:
-        patterns: List of lowercase (pattern, is_wildcard) tuples.
+        patterns: List of lowercase (pattern, is_wildcard) tuples; a
+            wildcard's pattern is its domain.
     """
 
     def __init__(self, authorized_senders: list[str]) -> None:
@@ -351,8 +406,8 @@ class SenderAuthorizer:
         for pattern in authorized_senders:
             lower = pattern.lower()
             if lower.startswith("*@"):
-                # Domain wildcard: store domain suffix (e.g., "@example.com")
-                self.patterns.append((lower[1:], True))
+                # Domain wildcard: store the domain (e.g., "example.com")
+                self.patterns.append((lower[2:], True))
             else:
                 # Exact match
                 self.patterns.append((lower, False))
@@ -372,12 +427,13 @@ class SenderAuthorizer:
         Returns:
             True if sender matches any authorized pattern.
         """
+        domain = sender.rpartition("@")[2]
         for pattern, is_wildcard in self.patterns:
             if is_wildcard:
-                # Domain wildcard: check if sender ends with @domain
-                if sender.endswith(pattern):
+                # Domain wildcard: the sender's domain must be exactly it
+                if domain == pattern:
                     logger.debug(
-                        "Sender %s authorized (pattern: *%s)", sender, pattern
+                        "Sender %s authorized (pattern: *@%s)", sender, pattern
                     )
                     return True
             else:
