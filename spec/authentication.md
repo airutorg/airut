@@ -63,7 +63,9 @@ may hold any text — including `dmarc=pass`. So the header is parsed as RFC 860
 - Methods, results, and keys are case-insensitive.
 - A header with no authserv-id (Microsoft 365) is read as starting with its
   first entry.
-- A header that does not parse is unusable, and the message is rejected.
+- A header that does not parse is unusable, and the message is rejected. So is
+  one longer than 16 KiB: real headers are a few hundred characters, and the
+  bound keeps parsing cheap whatever the input.
 
 Requiring exactly one `dmarc` entry is a second line of defence: if an MTA ever
 wrote a sender's value unquoted and it held `; dmarc=pass`, the injected entry
@@ -177,13 +179,32 @@ The From header is parsed as an RFC 5322 address list, strictly (not with the
 permissive `email.utils.parseaddr`). It must hold **exactly one mailbox**,
 outside any group:
 
-- Accepted: a bare address (`user@example.com`), a display name with an angle
-  address (`Name <user@example.com>`), RFC 2047-encoded display names, comments,
-  and obsolete syntax such as an unquoted `.` in a display name.
+- Accepted: a bare address (`user@example.com`) as the whole header, or a
+  display name with an angle address (`Name <user@example.com>`). The display
+  name may be RFC 2047-encoded, carry comments, or use obsolete syntax such as
+  an unquoted `.`.
 - **Rejected**: several addresses (`<user@example.com>, other@example.org`) —
   the reply would reach the others too; a group (`team: user@example.com;`); an
   address without a domain; a local part that needs quoting; a domain literal;
   any parse error other than obsolete syntax.
+- **Rejected**: an address not written plainly. The header must be the bare
+  address, or a display name followed by the only `<address>` in it. RFC 5322
+  allows some of the forms below, but another parser — in a sending relay, the
+  MTA, or a mail client — may read such a header as naming a different address.
+  Rejected are:
+  - a comment, whitespace or obsolete route inside the address
+    (`user(c)@example.com`, `<@route:...>`), or anything after it
+    (`user@example.com (Name)`);
+  - any other `<` or `>` (as in `"<other@example.org>" <user@example.com>`);
+  - specials in the display name outside quoted strings and comments, read raw
+    (an encoded word may hide them from a parser that decodes it first);
+  - a display name holding an encoded word that decodes, as lenient mail clients
+    decode it, to text with `<`, `>` or `@`.
+- **Rejected without parsing**: a header longer than 998 characters once
+  unfolded (a bound taken from RFC 5322's line limit), or with more than three
+  `(` open at once — counting every `(`, even quoted ones. Reading the From is
+  bounded in time whatever the input, and any header that cannot be read within
+  the bound is rejected rather than raising.
 
 The DMARC check compares the domain read here with the `header.from` the MTA
 recorded, so a From header that the two read differently is rejected.

@@ -32,14 +32,12 @@ Security model:
   ``X-MS-Exchange-Organization-AuthAs: Internal`` is present.  This
   covers intra-org email in Microsoft 365 where EOP skips external
   authentication entirely.
-- The From header is parsed as an RFC 5322 address list (not with the
-  permissive ``email.utils.parseaddr``) and must hold exactly one mailbox.
+- The From header is read strictly (``from_header``): it must hold
+  exactly one mailbox, written plainly, and is rejected unread when
+  overly long or deeply nested.
 """
 
 import logging
-import re
-from email import policy
-from email.errors import ObsoleteHeaderDefect
 from email.message import Message
 
 from airut.gateway.email.authres import (
@@ -47,16 +45,10 @@ from airut.gateway.email.authres import (
     AuthResultsParseError,
     parse_authentication_results,
 )
+from airut.gateway.email.from_header import parse_from_mailbox
 
 
 logger = logging.getLogger(__name__)
-
-# RFC 5322 addr-spec: simple but strict pattern for email addresses.
-# Rejects local parts that need quoting, domain literals, and other tricks.
-_EMAIL_RE = re.compile(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+$")
-
-#: Line breaks that fold a header onto continuation lines.
-_FOLDING_RE = re.compile(r"\r?\n(?=[ \t])")
 
 
 def _ascii_lower(value: str) -> str:
@@ -67,46 +59,6 @@ def _ascii_lower(value: str) -> str:
     becomes ``k``), so such a value must never match an ASCII one.
     """
     return value.lower() if value.isascii() else value
-
-
-def _extract_email(from_header: str) -> str | None:
-    """Extract the single mailbox from a From header value.
-
-    Parses the value as an RFC 5322 address list.  It must hold exactly
-    one mailbox, outside any group, whose address passes a strict
-    pattern.  Anything else is rejected: several addresses (where the
-    reply would also reach the others), a group, an address without a
-    domain, a local part that needs quoting, or a parse error.  Obsolete syntax
-    (such as an unquoted ``.`` in a display name) is accepted; the
-    DMARC check compares the domain read here with the one the mail
-    server read.
-
-    Args:
-        from_header: Raw From header value, folded or not.
-
-    Returns:
-        Lowercase email address, or None if the header is rejected.
-    """
-    value = _FOLDING_RE.sub("", from_header)
-    try:
-        header = policy.default.header_factory("from", value)
-    except (ValueError, IndexError):
-        # ValueError: a bare CR or LF left in an address.  IndexError:
-        # the parser fails on some malformed groups, such as "(c):".
-        return None
-
-    if any(not isinstance(d, ObsoleteHeaderDefect) for d in header.defects):
-        return None
-    if len(header.groups) != 1:
-        return None
-    group = header.groups[0]
-    if group.display_name is not None or len(group.addresses) != 1:
-        return None
-
-    addr = group.addresses[0].addr_spec
-    if not _EMAIL_RE.match(addr):
-        return None
-    return addr.lower()
 
 
 class SecurityValidationError(Exception):
@@ -187,12 +139,13 @@ class SenderAuthenticator:
             )
             return None
 
-        sender = _extract_email(from_values[0])
+        sender = parse_from_mailbox(from_values[0])
 
         if sender is None:
             logger.warning(
-                "Rejecting From header that is not a single valid mailbox: %s",
-                from_values[0][:100],
+                "Rejecting From header that is not a single valid "
+                "mailbox: %.100s",
+                from_values[0],
             )
             return None
 
@@ -235,7 +188,7 @@ class SenderAuthenticator:
         if len(dmarc) != 1:
             logger.warning(
                 "DMARC verification failed: %d dmarc entries in first "
-                "Authentication-Results header (authserv-id: %s)",
+                "Authentication-Results header (authserv-id: %.100s)",
                 len(dmarc),
                 authserv_id,
             )
@@ -245,8 +198,8 @@ class SenderAuthenticator:
         header_from = [_ascii_lower(d) for d in entry.values("header.from")]
         if entry.result != "pass" or header_from != [from_domain]:
             logger.warning(
-                "DMARC verification failed (authserv-id: %s): dmarc=%s "
-                "header.from=%s, From domain %s",
+                "DMARC verification failed (authserv-id: %.100s): "
+                "dmarc=%.100s header.from=%.200s, From domain %s",
                 authserv_id,
                 entry.result,
                 ",".join(header_from) or "(missing)",
@@ -254,7 +207,9 @@ class SenderAuthenticator:
             )
             return False
 
-        logger.debug("DMARC verification passed (authserv-id: %s)", authserv_id)
+        logger.debug(
+            "DMARC verification passed (authserv-id: %.100s)", authserv_id
+        )
         return True
 
     def _trusted_results(self, message: Message) -> AuthResults | None:
@@ -294,7 +249,8 @@ class SenderAuthenticator:
             results = parse_authentication_results(header)
         except AuthResultsParseError as e:
             logger.warning(
-                "First Authentication-Results header is malformed (%s): %s",
+                "First Authentication-Results header is malformed "
+                "(%.100s): %.500s",
                 e,
                 header.strip(),
             )
@@ -314,7 +270,7 @@ class SenderAuthenticator:
         if authserv_id != trusted_id:
             logger.warning(
                 "First Authentication-Results header is from untrusted "
-                "server %s (expected %s): %s",
+                "server %.100s (expected %s): %.500s",
                 authserv_id or "(none)",
                 trusted_id,
                 header.strip(),
@@ -359,15 +315,17 @@ class SenderAuthenticator:
         if all_results:
             return False
 
-        auth_as: str | None = message.get("X-MS-Exchange-Organization-AuthAs")
-        if auth_as is None:
+        header = message.get("X-MS-Exchange-Organization-AuthAs")
+        if header is None:
             logger.warning(
                 "No Authentication-Results header and no "
                 "X-MS-Exchange-Organization-AuthAs header found"
             )
             return False
 
-        if auth_as.strip().lower() == "internal":
+        # str(): an undecodable 8-bit header is a Header object.
+        auth_as = str(header).strip()
+        if auth_as.lower() == "internal":
             logger.debug(
                 "Sender authenticated via "
                 "X-MS-Exchange-Organization-AuthAs: Internal"
@@ -375,8 +333,8 @@ class SenderAuthenticator:
             return True
 
         logger.warning(
-            "X-MS-Exchange-Organization-AuthAs is %r (expected Internal)",
-            auth_as.strip(),
+            "X-MS-Exchange-Organization-AuthAs is %.100r (expected Internal)",
+            auth_as,
         )
         return False
 

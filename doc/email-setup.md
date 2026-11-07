@@ -191,7 +191,11 @@ requires:
 
 5. **Messages must come from a single, valid address** — A `From` header naming
    more than one address, a group, or one that is not valid RFC 5322 syntax
-   (such as an unquoted comma or `[ ]` in the display name) is rejected.
+   (such as an unquoted comma or `[ ]` in the display name) is rejected. So is
+   one longer than 998 characters, with a comment inside or after the address
+   (`user(c)@example.com`, `user@example.com (Name)`), with `<` or `>` anywhere
+   in the display name, or with `,`, `:`, `;` or `@` in it outside quotes and
+   comments. Mail clients write `Name <user@example.com>`, which is accepted.
 
 ### Verifying DMARC
 

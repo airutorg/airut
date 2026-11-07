@@ -14,7 +14,6 @@ import pytest
 from airut.gateway.email.security import (
     SenderAuthenticator,
     SenderAuthorizer,
-    _extract_email,
 )
 
 
@@ -39,58 +38,6 @@ def _msg(
         else:
             msg["Authentication-Results"] = auth_results
     return msg
-
-
-# ---------------------------------------------------------------------------
-# _extract_email unit tests
-# ---------------------------------------------------------------------------
-
-
-class TestExtractEmail:
-    """Test strict email address extraction."""
-
-    def test_bare_email(self):
-        assert _extract_email("user@example.com") == "user@example.com"
-
-    def test_with_display_name(self):
-        assert _extract_email("User <user@example.com>") == "user@example.com"
-
-    def test_quoted_display_name(self):
-        assert (
-            _extract_email('"User, Name" <user@example.com>')
-            == "user@example.com"
-        )
-
-    def test_case_insensitive(self):
-        assert _extract_email("USER@EXAMPLE.COM") == "user@example.com"
-
-    def test_whitespace(self):
-        assert _extract_email("  user@example.com  ") == "user@example.com"
-
-    def test_empty(self):
-        assert _extract_email("") is None
-
-    def test_empty_angle_brackets(self):
-        assert _extract_email("User <>") is None
-
-    def test_multiple_angle_brackets(self):
-        """Multiple angle brackets are rejected (injection attempt)."""
-        assert _extract_email("Evil <evil@x.com> <good@x.com>") is None
-
-    def test_unquoted_address_as_display_name_rejected(self):
-        """An unquoted address is not a valid display name."""
-        assert _extract_email("good@x.com <evil@x.com>") is None
-
-    def test_quoted_address_as_display_name(self):
-        """A quoted display name may look like an address."""
-        assert _extract_email('"good@x.com" <evil@x.com>') == "evil@x.com"
-
-    def test_gt_before_lt(self):
-        assert _extract_email(">user@x.com<") is None
-
-    def test_invalid_email_format(self):
-        """Address with spaces fails regex validation."""
-        assert _extract_email("not an email") is None
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +380,16 @@ class TestInternalAuthFallback:
         msg = self._internal_msg(from_addr="Evil <a@x> <b@x>")
         assert auth.authenticate(msg) is None
 
+    def test_auth_as_raw_8bit(self):
+        """An undecodable header is a Header object, not a str."""
+        raw = (
+            f"From: {AUTHORIZED}\r\n"
+            "X-MS-Exchange-Organization-AuthAs: Intern\u00e4l\r\n\r\n"
+        ).encode()
+        msg = BytesParser().parsebytes(raw)
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        assert auth.authenticate(msg) is None
+
     def test_auth_as_with_whitespace(self):
         """AuthAs value with leading/trailing whitespace."""
         auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
@@ -545,6 +502,17 @@ class TestEncodedHeaders:
             auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) is None
+
+    def test_raw_8bit_headers(self):
+        """Undecodable 8-bit headers arrive as Header objects."""
+        raw = (
+            "From: Pyry H\u00e4ulos <authorized@example.com>\r\n"
+            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}"
+            " (\u00e4)\r\n\r\n"
+        ).encode()
+        msg = BytesParser().parsebytes(raw)
+        auth = SenderAuthenticator(TRUSTED)
+        assert auth.authenticate(msg) == AUTHORIZED
 
 
 class TestDuplicateFromHeaders:
@@ -782,75 +750,40 @@ class TestForgedResultInValues:
         assert auth.authenticate(msg) is None
 
 
-class TestFromAddressList:
-    """From must hold exactly one mailbox: replies go to every address."""
+class TestHostileHeaderSizes:
+    """Oversized or deeply nested headers are rejected without parsing."""
 
-    @pytest.mark.parametrize(
-        "from_addr",
-        [
-            "<authorized@example.com>, x@",
-            "<authorized@example.com>, attacker@evil.example",
-            "attacker@evil.example, <authorized@example.com>",
-            "Authorized <authorized@example.com>, attacker@evil.example",
-            "group: authorized@example.com;",
-            "group: authorized@example.com, attacker@evil.example;",
-            "undisclosed-recipients:;",
-            "authorized",
-            "<authorized>",
-            "authorized@example.com <attacker@evil.example>",
-            '"authorized@example.com"@evil.example',
-            "authorized@[192.0.2.1]",
-            "Authorized <authorized@example.com",
-            "authorized..x@example.com",
-            "Doe, John <authorized@example.com>",
-            "Authorized [Company] <authorized@example.com>",
-            "(c):",
-            "(c): authorized@example.com;",
-        ],
-    )
-    def test_rejected(self, from_addr: str):
+    def test_long_from_rejected(self):
+        """Valid syntax, but longer than RFC 5322's 998-character line."""
         auth = SenderAuthenticator(TRUSTED)
+        from_addr = "a." * 500 + " <authorized@example.com>"
         msg = _msg(from_addr=from_addr, auth_results=f"{TRUSTED}; {DMARC_PASS}")
         assert auth.authenticate(msg) is None
 
-    @pytest.mark.parametrize(
-        "from_addr",
-        [
-            "authorized@example.com",
-            "Authorized <authorized@example.com>",
-            '"Authorized, User" <authorized@example.com>',
-            "John Q. Public <authorized@example.com>",
-            "authorized@example.com (Authorized)",
-            "Authorized\r\n <authorized@example.com>",
-            "=?utf-8?q?P=C3=BCry?= <authorized@example.com>",
-        ],
-    )
-    def test_accepted(self, from_addr: str):
+    def test_malformed_authentication_results_log_is_bounded(
+        self, caplog: pytest.LogCaptureFixture
+    ):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(from_addr=from_addr, auth_results=f"{TRUSTED}; {DMARC_PASS}")
-        assert auth.authenticate(msg) == AUTHORIZED
+        msg = _msg(auth_results=f"{TRUSTED}; " + "x" * 16000 + " y")
+        with caplog.at_level(
+            logging.WARNING, logger="airut.gateway.email.security"
+        ):
+            assert auth.authenticate(msg) is None
+        assert max(len(r.getMessage()) for r in caplog.records) < 1000
 
-    @pytest.mark.parametrize(
-        "from_header",
-        [
-            "authorized@example.com\nBcc: x@y.com",
-            "Authorized\r\n<authorized@example.com>",
-            "<authorized@example.com\n>",
-        ],
-    )
-    def test_bare_line_break_rejected(self, from_header: str):
-        assert _extract_email(from_header) is None
-
-    def test_raw_8bit_headers(self):
-        """Undecodable 8-bit headers arrive as Header objects."""
-        raw = (
-            "From: Pyry H\u00e4ulos <authorized@example.com>\r\n"
-            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}"
-            " (\u00e4)\r\n\r\n"
-        ).encode()
-        msg = BytesParser().parsebytes(raw)
+    def test_deeply_nested_from_rejected(self):
         auth = SenderAuthenticator(TRUSTED)
-        assert auth.authenticate(msg) == AUTHORIZED
+        msg = _msg(
+            from_addr="(" * 480 + ")" * 480 + f" <{AUTHORIZED}>",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_long_authentication_results_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        padding = " (" + "x" * 16384 + ")"
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}{padding}")
+        assert auth.authenticate(msg) is None
 
 
 # ---------------------------------------------------------------------------
