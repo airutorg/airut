@@ -28,10 +28,15 @@ the From domain.
 
 ### Verification Flow
 
-1. **Reject ambiguous header sections**: If the header section holds a carriage
-   return not followed by a line feed, reject: parsers disagree on whether it
-   ends a line, and so on which header fields — which `From` — the message has.
-   No normalization by the mail server is assumed. If the message has zero or
+1. **Reject ambiguous header sections**: Every line of the header section must
+   be the first line of a header field (a field name of printable ASCII other
+   than `:`, then `:`) or, after the first line, a continuation line (starting
+   with a space or tab), and no carriage return may stand without a line feed.
+   Otherwise, reject: parsers treat other lines inconsistently (as the start of
+   the body, as lines to skip, or as errors) and disagree on whether a bare
+   carriage return ends a line, so they could read different header fields (a
+   different `From`), or a different body from the one a signature covers. No
+   normalization by the mail server is assumed. If the message has zero or
    multiple `From` headers, reject (prevents confusion attacks where DMARC
    validates one From but the application reads another).
 2. **Parse From header** as an RFC 5322 address list (see
@@ -272,7 +277,8 @@ Incoming email
     |
     v
 SenderAuthenticator.authenticate(email)
-    |-- Reject a bare CR in the header section
+    |-- Reject an ambiguous header section (a line that is not a
+    |     field or a continuation, or a bare CR)
     |-- Parse From header (exactly one mailbox)
     |-- Parse first Authentication-Results header (RFC 8601)
     |-- Check its authserv-id

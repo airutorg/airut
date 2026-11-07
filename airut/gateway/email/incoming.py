@@ -8,13 +8,37 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import BytesParser
 
 
-#: A carriage return not followed by a line feed.
-_BARE_CR_RE = re.compile(rb"\r(?!\n)")
+#: A line break: CRLF, or a lone LF.
+_LINE_BREAK_RE = re.compile(rb"\r?\n")
+
+#: The start of a header field's first line: a name of printable ASCII
+#: other than ``:``, then ``:`` (RFC 5322 §2.2).
+_FIELD_RE = re.compile(rb"[\x21-\x39\x3b-\x7e]+:")
+
+#: How much of a refused header-section line is shown.
+_SHOWN_LINE_LENGTH = 100
+
+
+def _header_lines(raw: bytes) -> Iterator[bytes]:
+    """Yield the lines of *raw*'s header section, without line breaks.
+
+    The section ends at the first empty line, or with the message.
+    """
+    start = 0
+    for match in _LINE_BREAK_RE.finditer(raw):
+        line = raw[start : match.start()]
+        if not line:
+            return
+        yield line
+        start = match.end()
+    if start < len(raw):
+        yield raw[start:]
 
 
 @dataclass(frozen=True)
@@ -37,19 +61,28 @@ class IncomingEmail:
         """Parse *raw* into an ``IncomingEmail``."""
         return cls(raw, BytesParser().parsebytes(raw))
 
-    def has_bare_cr_in_header(self) -> bool:
-        """Whether a carriage return without a line feed is in the header.
+    def header_section_problem(self) -> str | None:
+        """Return why parsers may read the header section differently.
 
-        Parsers disagree on whether such a carriage return ends a line,
-        and so on which header fields the message has.  The header
-        section ends at the first CRLF CRLF or LF LF.
+        Every line of the section must be a header field's first line (a
+        name of printable ASCII other than ``:``, then ``:``) or, after
+        the first line, a continuation of one (starting with a space or a
+        tab), and no carriage return may stand without a line feed.
+        Parsers treat other lines inconsistently — as the start of the
+        body, as lines to skip, or as errors — and disagree on whether a
+        bare carriage return ends a line, so they could read different
+        header fields, or a different body.
+
+        Returns:
+            What is wrong, or None if the section is unambiguous.
         """
-        ends = []
-        crlf = self.raw.find(b"\r\n\r\n")
-        if crlf >= 0:
-            ends.append(crlf + 2)
-        lf = self.raw.find(b"\n\n")
-        if lf >= 0:
-            ends.append(lf + 1)
-        header = self.raw[: min(ends)] if ends else self.raw
-        return _BARE_CR_RE.search(header) is not None
+        for index, line in enumerate(_header_lines(self.raw)):
+            if b"\r" in line:
+                return "a carriage return not followed by a line feed"
+            if line[:1] in (b" ", b"\t"):
+                if index == 0:
+                    return "a continuation line at the start"
+            elif not _FIELD_RE.match(line):
+                shown = line[:_SHOWN_LINE_LENGTH]
+                return f"a line that is not a header field: {shown!r}"
+        return None

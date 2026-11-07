@@ -844,6 +844,11 @@ def _received(
     The receiving server prepends its Authentication-Results.
     """
     raw = dkim_signing.sign(body, "example.com") if signed else body
+    return _received_raw(raw, server_dkim=server_dkim)
+
+
+def _received_raw(raw: bytes, *, server_dkim: str | None) -> IncomingEmail:
+    """*raw* as fetched, with the server's header prepended."""
     entries = [DMARC_PASS] + ([server_dkim] if server_dkim else [])
     header = f"Authentication-Results: {TRUSTED}; {'; '.join(entries)}\r\n"
     return _parse(header.encode() + raw)
@@ -990,46 +995,41 @@ class TestDkimVerification:
             SenderAuthenticator(TRUSTED, dkim_verification="maybe")
 
 
-class TestBareCarriageReturn:
-    """Parsers disagree on where a bare CR ends a header line; refuse it."""
+class TestAmbiguousHeaderSection:
+    """A header section parsers may read differently is refused.
+
+    The rule itself is tested in ``test_incoming``.
+    """
 
     @pytest.mark.parametrize("mode", ["both", "server", "airut", "none"])
-    def test_bare_cr_in_header_rejected(self, mode: str):
-        auth = SenderAuthenticator(
-            TRUSTED,
-            dkim_verification=mode,
-            dkim_verifier=DkimVerifier(dkim_signing.lookup),
+    @pytest.mark.parametrize(
+        "line",
+        [b"From the sender: a note", b"X-Note: a\r b"],
+        ids=["not-a-field", "bare-cr"],
+    )
+    def test_rejected_in_every_mode(self, mode: str, line: bytes):
+        """Even where the message is otherwise valid."""
+        signed = dkim_signing.sign(_UNSIGNED, "example.com")
+        header, _, body = signed.partition(b"\r\n\r\n")
+        raw = header + b"\r\n" + line + b"\r\n\r\n" + body
+        email = _received_raw(raw, server_dkim=_SERVER_PASS)
+        assert _accepts(_authenticator(mode), email) is None
+
+    def test_reason_logged(self, caplog: pytest.LogCaptureFixture):
+        email = _received_raw(
+            _UNSIGNED.replace(b"\r\n\r\n", b"\r\nFrom x\r\n\r\n"),
+            server_dkim=None,
         )
-        raw = (
-            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}; {_SERVER_PASS}"
-            "\r\nX-Note: a\r b\r\n"
-        ).encode() + dkim_signing.sign(_UNSIGNED, "example.com")
-        assert auth.authenticate(_parse(raw)) is None
+        with caplog.at_level(logging.WARNING):
+            assert _authenticator("none").authenticate(email) is None
+        assert "a line that is not a header field: b'From x'" in caplog.text
 
-    def test_bare_cr_in_body_allowed(self):
-        auth = SenderAuthenticator(TRUSTED, dkim_verification="none")
-        raw = (
-            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}\r\n"
-            f"From: {AUTHORIZED}\r\n\r\nline\ronly\r\n"
-        ).encode()
-        assert auth.authenticate(_parse(raw)) == AUTHORIZED
-
-    def test_crlf_then_lf_blank_line_is_not_a_bare_cr(self):
-        auth = SenderAuthenticator(TRUSTED, dkim_verification="none")
-        raw = (
-            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}\r\n"
-            f"From: {AUTHORIZED}\r\n\nbody\r\n"
-        ).encode()
-        assert auth.authenticate(_parse(raw)) == AUTHORIZED
-
-    def test_header_section_ends_at_first_blank_line(self):
-        """With LF line endings the blank line is LF LF."""
-        auth = SenderAuthenticator(TRUSTED, dkim_verification="none")
-        raw = (
-            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}\n"
-            f"From: {AUTHORIZED}\n\nline\ronly\n"
-        ).encode()
-        assert auth.authenticate(_parse(raw)) == AUTHORIZED
+    def test_folded_signed_message_accepted(self):
+        message = _UNSIGNED.replace(
+            b"Subject: Hello\r\n", b"Subject: Hello\r\n\tthere\r\n \r\n"
+        )
+        email = _received(signed=True, server_dkim=_SERVER_PASS, body=message)
+        assert _accepts(_authenticator("both"), email) == AUTHORIZED
 
 
 # ---------------------------------------------------------------------------

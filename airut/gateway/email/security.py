@@ -84,9 +84,9 @@ class SenderAuthenticator:
     check authorization between the two, so that messages from senders
     who are not allowed anyway cause no lookups.
 
-    A message whose header section holds a carriage return not followed
-    by a line feed is rejected: parsers disagree on whether it ends a
-    line, and so on which header fields the message has.
+    A message whose header section parsers may read differently is
+    rejected (see ``IncomingEmail.header_section_problem``): they could
+    disagree on which header fields the message has, or on its body.
 
     Attributes:
         trusted_authserv_id: Hostname of the trusted mail server whose
@@ -153,7 +153,7 @@ class SenderAuthenticator:
         """Check the message's headers; return the From address if they pass.
 
         The first step of authentication, needing no network: rejects a
-        bare carriage return in the header section, extracts the From
+        header section parsers may read differently, extracts the From
         address using strict parsing, and verifies a DMARC pass for its
         domain in the trusted Authentication-Results header, and — when
         ``dkim_verification`` is ``server`` or ``both`` — the server's
@@ -172,9 +172,10 @@ class SenderAuthenticator:
             Lowercase email address if the header checks pass, None
             otherwise.
         """
-        if email.has_bare_cr_in_header():
+        problem = email.header_section_problem()
+        if problem is not None:
             logger.warning(
-                "Rejecting message with a bare carriage return in its header"
+                "Rejecting message whose header section holds %s", problem
             )
             return None
 
