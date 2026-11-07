@@ -173,6 +173,10 @@ repos:
         # email where Microsoft 365 omits Authentication-Results entirely
         microsoft_internal_fallback: true
 
+        # Exchange often changes messages after they are signed (Safe Links,
+        # disclaimers), so rely on Microsoft's recorded DKIM result
+        dkim_verification: server
+
         authorized_senders:
           - you@company.com
 
@@ -207,9 +211,17 @@ instead of password authentication. The `password` field can be omitted.
 > `X-MS-Exchange-Organization-AuthAs: Internal`. Set
 > `auth.microsoft_internal_fallback: true` to accept this header as
 > authentication proof when no `Authentication-Results` header is present.
-> Authorization (sender allowlist) still applies. See
+> Authorization (sender allowlist) still applies, but no DKIM check does: this
+> fallback trusts Exchange's own authentication of internal senders. See
 > [Demystifying Hybrid Mail Flow (Microsoft Tech Community)](https://techcommunity.microsoft.com/blog/exchange/demystifying-and-troubleshooting-hybrid-mail-flow-when-is-a-message-internal/1420838)
 > for background.
+
+> **DKIM:** Airut requires a DKIM signature by the sender's domain (see
+> [DKIM Requirements](email-setup.md#dkim-requirements)). Exchange Online
+> records it as `dkim=pass header.d=...` in its header. It often modifies
+> messages after they are signed, which breaks Airut's own verification, so set
+> `auth.dkim_verification: server` unless you have checked that the default
+> (`both`) works for your tenant.
 
 ## Step 8: Verify
 

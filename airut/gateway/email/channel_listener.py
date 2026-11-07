@@ -15,7 +15,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from email.message import Message
 
 from airut._threads import join_if_started
 from airut.gateway.channel import (
@@ -25,6 +24,7 @@ from airut.gateway.channel import (
     RawMessage,
 )
 from airut.gateway.config import EmailChannelConfig
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
@@ -39,16 +39,16 @@ class _ReconnectFailedError(Exception):
     """Sentinel raised when IMAP reconnection attempts are exhausted."""
 
 
-def _raw_message(message: Message) -> RawMessage[Message]:
+def _raw_message(email: IncomingEmail) -> RawMessage[IncomingEmail]:
     """Wrap a fetched email for submission to the gateway.
 
     Header values are converted to text: a header with undecodable 8-bit
     bytes comes back from the email library as a ``Header`` object.
     """
     return RawMessage(
-        sender=str(message.get("From", "")),
-        content=message,
-        display_title=str(message.get("Subject", "")),
+        sender=str(email.message.get("From", "")),
+        content=email,
+        display_title=str(email.message.get("Subject", "")),
     )
 
 
@@ -85,12 +85,14 @@ class EmailChannelListener(ChannelListener):
         self._log = logging.LoggerAdapter(logger, {"repo_id": repo_id})
         self._email_listener = email_listener or EmailListener(config)
         self._thread: threading.Thread | None = None
-        self._submit: Callable[[RawMessage[Message]], bool] | None = None
+        self._submit: Callable[[RawMessage[IncomingEmail]], bool] | None = None
         self._running = False
         self._stop_event = threading.Event()
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
 
-    def start(self, submit: Callable[[RawMessage[Message]], bool]) -> None:
+    def start(
+        self, submit: Callable[[RawMessage[IncomingEmail]], bool]
+    ) -> None:
         """Connect to IMAP and start the listener thread.
 
         The initial IMAP connection is synchronous (may block with

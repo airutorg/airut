@@ -21,7 +21,7 @@ Named "Airut" (Finnish: herald/messenger).
 2. **[GitHub App setup](github-app-setup.md)** (recommended) — Create a GitHub
    App for the agent's GitHub identity
 3. **Set up a channel:**
-   - [Email setup](email-setup.md) — IMAP/SMTP provider, DMARC, sender
+   - [Email setup](email-setup.md) — IMAP/SMTP provider, DMARC, DKIM, sender
      authorization
    - [Slack setup](slack-setup.md) — App creation, Socket Mode, authorization
      rules
@@ -45,8 +45,8 @@ Named "Airut" (Finnish: herald/messenger).
 
 ## Channels
 
-- [Email setup](email-setup.md) — Email provider selection, DMARC verification,
-  and sender authorization
+- [Email setup](email-setup.md) — Email provider selection, DMARC and DKIM
+  verification, and sender authorization
 - [Slack setup](slack-setup.md) — Slack app creation, tokens, and authorization
   rules
 - [M365 OAuth2](m365-oauth2.md) — Microsoft 365 OAuth2 configuration for

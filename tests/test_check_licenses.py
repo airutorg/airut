@@ -126,6 +126,23 @@ class TestMain:
             text=True,
         )
 
+    def test_reviewed_packages_left_out(self) -> None:
+        """Packages reviewed by hand are not passed to pip-licenses."""
+        with (
+            patch(
+                "check_licenses.resolve_runtime_packages",
+                return_value=["dkimpy", "msal"],
+            ),
+            patch("check_licenses.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            assert check_licenses.main() == 0
+
+        mock_run.assert_called_once_with(
+            ["uv", "run", "pip-licenses", "--packages", "msal"],
+            text=True,
+        )
+
     def test_returns_pip_licenses_exit_code(self) -> None:
         """Returns exit code from pip-licenses."""
         with (

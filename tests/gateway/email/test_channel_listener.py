@@ -6,8 +6,6 @@
 """Tests for EmailChannelListener."""
 
 import threading
-from email.message import Message
-from email.parser import BytesParser
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +20,7 @@ from airut.gateway.config import (
     SmtpConfig,
 )
 from airut.gateway.email.channel_listener import EmailChannelListener
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.email.listener import IMAPConnectionError, IMAPIdleError
 
 
@@ -52,15 +51,15 @@ def _make_config(
     )
 
 
-def _make_message(subject: str = "Test") -> Message:
-    """Build a simple email Message for testing."""
+def _make_message(subject: str = "Test") -> IncomingEmail:
+    """Build a simple fetched email for testing."""
     raw = (
         f"From: user@example.com\r\n"
         f"Subject: {subject}\r\n"
         f"Message-ID: <msg1@example.com>\r\n"
         f"\r\nHello"
     )
-    return BytesParser().parsebytes(raw.encode())
+    return IncomingEmail.parse(raw.encode())
 
 
 def _make_polling_listener() -> tuple[EmailChannelListener, MagicMock]:
@@ -288,7 +287,7 @@ class TestPollingLoop:
         Header object does not support.
         """
         cl, mock_el = _make_polling_listener()
-        msg = BytesParser().parsebytes(
+        msg = IncomingEmail.parse(
             "From: P\u00e4ivi <user@example.com>\r\n"
             "Subject: Hyv\u00e4\r\n\r\nHello".encode()
         )

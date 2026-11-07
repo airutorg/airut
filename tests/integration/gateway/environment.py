@@ -13,8 +13,11 @@ Provides a complete test environment including:
 
 import logging
 import subprocess
-from dataclasses import dataclass
+from contextlib import ExitStack
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from airut.gateway.config import (
     EmailAccountConfig,
@@ -28,6 +31,7 @@ from airut.gateway.config import (
     get_storage_dir,
 )
 from airut.gateway.slack.config import SlackChannelConfig
+from tests import dkim_signing
 
 from .email_server import TestEmailServer
 from .slack_server import TestSlackServer
@@ -104,6 +108,15 @@ def create_test_repo(path: Path) -> Path:
     return path
 
 
+def _resolve_test_key(
+    name: str, rdtype: str, **kwargs: object
+) -> SimpleNamespace:
+    """Stand in for DNS when Airut verifies DKIM: serve the test key."""
+    record = dkim_signing.lookup(name.encode())
+    rrset = [SimpleNamespace(strings=(record,))] if record else None
+    return SimpleNamespace(rrset=rrset)
+
+
 @dataclass
 class IntegrationEnvironment:
     """Complete integration test environment.
@@ -114,6 +127,9 @@ class IntegrationEnvironment:
     - email_server: Combined SMTP/IMAP test server
     - config: ServerConfig for the service
     - egress_network: Unique network name to avoid conflicts in parallel tests
+
+    While it exists, DKIM key lookups resolve to the test key, with which
+    ``create_email`` signs messages.
 
     Use the create() classmethod to create and start the environment.
     """
@@ -128,6 +144,12 @@ class IntegrationEnvironment:
     repo_root: Path
     egress_network: str
     slack_server: TestSlackServer | None = None
+    _patches: ExitStack = field(default_factory=ExitStack, repr=False)
+
+    def __post_init__(self) -> None:
+        self._patches.enter_context(
+            patch("dns.resolver.resolve", side_effect=_resolve_test_key)
+        )
 
     @classmethod
     def create(
@@ -477,6 +499,7 @@ class IntegrationEnvironment:
     def cleanup(self) -> None:
         """Stop servers and clean up resources."""
         logger.info("Cleaning up integration environment")
+        self._patches.close()
         self.email_server.stop()
         if self.slack_server is not None:
             self.slack_server.stop()

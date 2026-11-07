@@ -32,8 +32,8 @@ class AuthenticationError(Exception):
         sender: Raw sender identifier (e.g. email From header) for
             dashboard visibility.  May be empty if the sender could
             not be determined.
-        reason: Human-readable rejection reason (e.g. "DMARC
-            verification failed", "sender not authorized").
+        reason: Human-readable rejection reason (e.g. "sender
+            authentication failed", "sender not authorized").
     """
 
     def __init__(self, *, sender: str = "", reason: str = "") -> None:

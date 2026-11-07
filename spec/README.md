@@ -10,7 +10,7 @@ For high-level documentation, see [doc/](../doc/).
 - [gateway-architecture.md](gateway-architecture.md) — Core gateway design,
   channel abstraction, data flow, container execution
 - [authentication.md](authentication.md) — Per-channel authentication and
-  authorization (DMARC for email, workspace/group/user rules for Slack)
+  authorization (DMARC and DKIM for email, workspace/group/user rules for Slack)
 - [repo-config.md](repo-config.md) — Per-repo schema in server config
 - [declarative-config.md](declarative-config.md) — Declarative config layer
   (schema metadata, migration, diffing, round-trip, config variables)

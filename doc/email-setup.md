@@ -15,6 +15,9 @@ simultaneously for the same repository.
 - [Step 3: Test the Setup](#step-3-test-the-setup)
 - [DMARC Requirements](#dmarc-requirements)
   - [Verifying DMARC](#verifying-dmarc)
+- [DKIM Requirements](#dkim-requirements)
+  - [Checking a Sender's Signature](#checking-a-senders-signature)
+  - [DNS for DKIM Keys](#dns-for-dkim-keys)
 - [Authorization](#authorization)
 - [IMAP Configuration](#imap-configuration)
 - [Attachment Size Limit](#attachment-size-limit)
@@ -22,6 +25,7 @@ simultaneously for the same repository.
 - [Troubleshooting](#troubleshooting)
   - [IMAP Connection Issues](#imap-connection-issues)
   - [DMARC Failures](#dmarc-failures)
+  - [DKIM Failures](#dkim-failures)
   - [Emails Not Being Processed](#emails-not-being-processed)
   - [Model Hint Not Working](#model-hint-not-working)
 
@@ -77,6 +81,9 @@ You need an email account that supports IMAP and SMTP with
 - See [m365-oauth2.md](m365-oauth2.md) for OAuth2 setup (required when Basic
   Authentication is disabled)
 - Password auth also works if your tenant allows it
+- Set `auth.dkim_verification: server`: Exchange changes messages after they are
+  signed, so Airut's own DKIM check would reject them (see
+  [DKIM Requirements](#dkim-requirements))
 
 **Option 4: Self-hosted mail server**
 
@@ -172,8 +179,8 @@ journalctl --user -u airut -f
 
 ## DMARC Requirements
 
-Airut authenticates senders using DMARC verification on incoming emails. This
-requires:
+Airut authenticates senders using DMARC verification on incoming emails (and a
+DKIM signature, see [DKIM Requirements](#dkim-requirements)). This requires:
 
 1. **Your mail server must add `Authentication-Results` headers** — Most mail
    providers (Gmail, Microsoft 365, Fastmail, etc.) do this automatically.
@@ -208,10 +215,67 @@ dig +short TXT _dmarc.example.com
 A valid response indicates DMARC is configured. No response means emails from
 that domain cannot be authenticated.
 
+## DKIM Requirements
+
+DMARC passes when either SPF or DKIM is aligned with the sender's domain. SPF
+depends only on the connecting IP address, which whoever runs the network in
+front of your mail server may be able to choose. So Airut also requires a valid
+DKIM signature by the sender's own domain (the `d=` of the signature must equal
+the From domain exactly). Only the domain's key holder can produce one.
+
+`auth.dkim_verification` says who must find the signature valid:
+
+| Value            | Requires                                                                                                               |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `both` (default) | The mail server records a `dkim=pass` for the domain in its `Authentication-Results` header, and Airut verifies it too |
+| `server`         | Only the mail server's recorded result                                                                                 |
+| `airut`          | Only Airut's own verification                                                                                          |
+| `none`           | No DKIM signature (DMARC alone, which SPF can satisfy)                                                                 |
+
+Airut verifies signatures over the message exactly as fetched, so a result the
+mail server got wrong, or an `Authentication-Results` header written by an
+account that submits its own mail over port 465/587, cannot stand in for a valid
+signature. Only `rsa-sha256` signatures with RSA keys of at least 1024 bits are
+accepted (not `rsa-sha1` or `ed25519-sha256`), and not with `l=` (covering only
+part of the body). A domain that signs only with Ed25519 needs `server`.
+
+Use `server` where messages are changed in transit after signing (for example by
+Microsoft 365 Safe Links or disclaimers), and `none` only for senders whose
+provider does not sign with their own domain.
+
+### Checking a Sender's Signature
+
+In Gmail, open a message from the sender and choose **Show original**. It should
+show `DKIM: 'PASS' with domain <the sender's domain>`. A pass with another
+domain (such as `gappssmtp.com` for a Google Workspace domain without its own
+DKIM key) is not enough: set up DKIM for the domain with its mail provider.
+
+### DNS for DKIM Keys
+
+With `both` or `airut`, Airut looks up signers' public keys in DNS through the
+host's resolver. Whoever can answer those lookups can make a forged signature
+verify, so the resolver must be one an attacker cannot answer for. That depends
+on the deployment: in particular, the lookups must not pass unprotected through
+a network operated by someone you do not trust (such as the one in front of your
+mail server).
+
+A secure setup runs a local resolver that validates DNSSEC and forwards queries
+over DNS-over-HTTPS (or DNS-over-TLS) to a trusted upstream resolver, and points
+the host at it. Note:
+
+- DNSSEC only protects domains whose zones are signed, and many senders' domains
+  are not. For those, what protects the lookups is the encrypted link to an
+  upstream resolver you trust.
+- Airut uses whatever resolver the host is configured with (`/etc/resolv.conf`),
+  read once when the service starts: restart Airut after changing it.
+- `network.upstream_dns` (see [network-sandbox.md](network-sandbox.md)) is the
+  resolver for sandboxed containers' traffic; it does not apply to these
+  lookups.
+
 ## Authorization
 
 The `auth.authorized_senders` list controls which email addresses can interact
-with Airut. Both DMARC verification and authorization must pass.
+with Airut. Authentication (DMARC and DKIM) and authorization must both pass.
 
 ```yaml
 auth:
@@ -299,7 +363,7 @@ openssl s_client -connect mail.example.com:993
 ### DMARC Failures
 
 ```bash
-# Symptom: Emails rejected with "DMARC verification failed"
+# Symptom: Emails rejected ("sender authentication failed"), log says DMARC
 
 # Check:
 # 1. auth.trusted_authserv_id matches your mail server's Authentication-Results header
@@ -309,6 +373,22 @@ openssl s_client -connect mail.example.com:993
 # 5. The header's dmarc entry has header.from=<sender's domain>
 # 6. The From header names a single address in valid RFC 5322 syntax
 # The log line explains which check failed.
+```
+
+### DKIM Failures
+
+```bash
+# Symptom: Emails rejected ("sender authentication failed"), log says DKIM
+
+# Check:
+# 1. The sender's mail carries a DKIM signature by their own domain (see
+#    "Checking a Sender's Signature")
+# 2. "the mail server recorded no passing signature": its
+#    Authentication-Results header has no dkim=pass with header.d (or
+#    header.i) of the sender's domain
+# 3. "no signature by ... verified": Airut's own check failed — the message
+#    may have been changed after signing (set dkim_verification: server), or
+#    the key lookup failed (check the host's DNS)
 ```
 
 ### Emails Not Being Processed

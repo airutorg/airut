@@ -854,6 +854,51 @@ def test_repo_server_config_internal_auth_fallback_enabled(
 
 
 # ---------------------------------------------------------------------------
+# DKIM verification mode
+# ---------------------------------------------------------------------------
+
+
+def test_dkim_verification_defaults_to_both(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """Both the mail server and Airut must verify DKIM by default."""
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+    email_ch = (
+        ServerConfig.from_yaml(yaml_path).value.repos["test"].channels["email"]
+    )
+    assert isinstance(email_ch, EmailChannelConfig)
+    assert email_ch.auth.dkim_verification == "both"
+
+
+@pytest.mark.parametrize("mode", ["both", "server", "airut", "none"])
+def test_dkim_verification_from_yaml(
+    master_repo: Path, tmp_path: Path, mode: str
+) -> None:
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        _MINIMAL_YAML.format(repo_url=master_repo).replace(
+            "        trusted_authserv_id: mx.test.com\n",
+            "        trusted_authserv_id: mx.test.com\n"
+            f"        dkim_verification: {mode}\n",
+        )
+    )
+    email_ch = (
+        ServerConfig.from_yaml(yaml_path).value.repos["test"].channels["email"]
+    )
+    assert isinstance(email_ch, EmailChannelConfig)
+    assert email_ch.auth.dkim_verification == mode
+
+
+def test_dkim_verification_unknown_mode_rejected() -> None:
+    with pytest.raises(ValueError, match="dkim_verification must be one of"):
+        EmailAuthConfig(
+            authorized_senders=["a@example.com"],
+            trusted_authserv_id="mx.example.com",
+            dkim_verification="yes",
+        )
+
+
 # ---------------------------------------------------------------------------
 # XDG path helpers
 # ---------------------------------------------------------------------------

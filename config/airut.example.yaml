@@ -122,6 +122,8 @@ repos:
         trusted_authserv_id: mail.example.com
         # Accept Microsoft 365 intra-org messages when DMARC headers are absent
         # microsoft_internal_fallback: false
+        # DKIM signature by the From domain, verified by: both, server, airut, or none
+        # dkim_verification: both
 
       # Microsoft 365 OAuth2 credentials
       # microsoft_oauth2:

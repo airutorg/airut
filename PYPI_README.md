@@ -26,8 +26,8 @@ You → Email/Slack → Airut → Claude Code (container) → PR → Reply → Y
 - **Task-to-PR foundation** — combined with proper repo configuration
   (`CLAUDE.md`, CI tooling, branch protection), enables end-to-end autonomous
   workflows where agents push PRs for human review.
-- **Email and Slack channels** — authenticate via DMARC (email) or workspace
-  membership (Slack), with sender authorization per repo.
+- **Email and Slack channels** — authenticate via DMARC and DKIM (email) or
+  workspace membership (Slack), with sender authorization per repo.
 - **Web dashboard** — monitor running tasks, view network activity logs, and
   configure the server.
 

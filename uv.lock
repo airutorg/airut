@@ -19,6 +19,8 @@ wheels = [
 name = "airut"
 source = { editable = "." }
 dependencies = [
+    { name = "dkimpy" },
+    { name = "dnspython" },
     { name = "inotify-simple" },
     { name = "jinja2" },
     { name = "mistune" },
@@ -53,6 +55,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dkimpy", specifier = ">=1.1.8" },
+    { name = "dnspython", specifier = ">=2.7" },
     { name = "inotify-simple", specifier = ">=2.0" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "mistune", specifier = ">=3.3.4" },
@@ -417,6 +421,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/a5/f6/1f7d315de23f39bbc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/6d/fe2c65b94a28ae0481dc254e8cd664b82390069003bea945076d8a445f2b/cvss-3.6-py2.py3-none-any.whl", hash = "sha256:e342c6ad9c7eb69d2aebbbc2768a03cabd57eb947c806e145de5b936219833ea", size = 31154, upload-time = "2025-08-04T10:50:12.328Z" },
 ]
+
+[[package]]
+name = "dkimpy"
+version = "1.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dnspython" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/6f/84e91828186bbfcedd7f9385ef5e0d369632444195c20e08951b7ffe0481/dkimpy-1.1.8.tar.gz", hash = "sha256:b5f60fb47bbf5d8d762f134bcea0c388eba6b498342a682a21f1686545094b77", size = 66979, upload-time = "2024-07-04T22:16:38.321Z" }
 
 [[package]]
 name = "dnspython"

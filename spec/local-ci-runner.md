@@ -100,7 +100,10 @@ time. Locally, all groups run sequentially by default (or selectively via
 The license check resolves the transitive closure of runtime dependencies (via
 `uv tree --no-dev`) and passes only those packages to `pip-licenses`. This
 ensures the license audit covers exactly what ships in a production install,
-without being affected by dev tooling licenses.
+without being affected by dev tooling licenses. Packages whose metadata names no
+license `pip-licenses` can match are reviewed by hand and listed, with the
+license found, in `REVIEWED_PACKAGES` in the script; they are left out of the
+automated check.
 
 The three `uv-secure` scans fetch package metadata from PyPI. `uv-secure` fires
 all requests concurrently with a short per-request timeout and no retry, so an

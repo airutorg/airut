@@ -333,9 +333,8 @@ def sample_email_message():
     Tests that need to manipulate email headers can access the
     underlying email via ``.content``.
     """
-    from email.parser import BytesParser
-
     from airut.gateway.channel import RawMessage
+    from airut.gateway.email.incoming import IncomingEmail
 
     sample_bytes = b"""From: user@example.com
 To: claude@example.com
@@ -349,9 +348,8 @@ Please fix the linting errors.
 > On Jan 12, 2026, Claude wrote:
 > > Can you review this code?
 """
-    email_msg = BytesParser().parsebytes(sample_bytes)
     return RawMessage(
         sender="user@example.com",
-        content=email_msg,
+        content=IncomingEmail.parse(sample_bytes),
         display_title="[ID:abc12345] Test request",
     )

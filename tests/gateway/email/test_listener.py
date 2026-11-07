@@ -234,8 +234,10 @@ def test_fetch_unread_uses_uid_commands(email_config, sample_email_bytes):
 
     assert len(messages) == 3
     assert all(
-        isinstance(msg_id, bytes) and isinstance(msg, Message)
-        for msg_id, msg in messages
+        isinstance(msg_id, bytes)
+        and email.raw == sample_email_bytes
+        and isinstance(email.message, Message)
+        for msg_id, email in messages
     )
 
     mock_conn.select.assert_called_once_with("INBOX")
@@ -266,8 +268,10 @@ def test_fetch_unread_success(email_config, sample_email_bytes):
 
     assert len(messages) == 3
     assert all(
-        isinstance(msg_id, bytes) and isinstance(msg, Message)
-        for msg_id, msg in messages
+        isinstance(msg_id, bytes)
+        and email.raw == sample_email_bytes
+        and isinstance(email.message, Message)
+        for msg_id, email in messages
     )
 
     mock_conn.select.assert_called_once_with("INBOX")

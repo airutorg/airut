@@ -1,8 +1,8 @@
 # Authentication and Authorization
 
 Each channel implements authentication and authorization appropriate to its
-transport. This spec covers the email channel's DMARC-based model. For Slack's
-authorization model (workspace membership, user groups, user IDs), see
+transport. This spec covers the email channel's DMARC- and DKIM-based model. For
+Slack's authorization model (workspace membership, user groups, user IDs), see
 [slack-channel.md](slack-channel.md#authorization-model).
 
 ## Email Channel
@@ -13,7 +13,8 @@ Both must pass before a message is processed.
 ## Authentication (`SenderAuthenticator`)
 
 Verifies the email actually came from who it claims. Uses DMARC validation on
-trusted `Authentication-Results` headers.
+trusted `Authentication-Results` headers, and requires a valid DKIM signature by
+the From domain.
 
 ### Configuration
 
@@ -21,11 +22,17 @@ trusted `Authentication-Results` headers.
   `Authentication-Results` headers are trusted (e.g., `mail.example.com`). Set
   to empty string (`""`) for Microsoft 365 / EOP, which omits the authserv-id
   from the header (see [Microsoft 365 Quirk](#microsoft-365-quirk) below).
+- `auth.dkim_verification` (default `both`): who must find a DKIM signature by
+  the From domain valid — `both` (the mail server and Airut), `server`, `airut`,
+  or `none` (see [DKIM Requirement](#dkim-requirement)).
 
 ### Verification Flow
 
-1. **Reject ambiguous sender**: If the message has zero or multiple `From`
-   headers, reject immediately (prevents attacker confusion attacks where DMARC
+1. **Reject ambiguous header sections**: If the header section holds a carriage
+   return not followed by a line feed, reject: parsers disagree on whether it
+   ends a line, and so on which header fields — which `From` — the message has.
+   No normalization by the mail server is assumed. If the message has zero or
+   multiple `From` headers, reject (prevents confusion attacks where DMARC
    validates one From but the application reads another).
 2. **Parse From header** as an RFC 5322 address list (see
    [From Header Parsing](#from-header-parsing)). It must hold exactly one
@@ -44,7 +51,12 @@ trusted `Authentication-Results` headers.
    equal the From address's domain (case-insensitive). Anything else fails
    authentication: no `dmarc` entry, two of them, another result (`fail`,
    `temperror`, ...), or a missing or different `header.from`.
-5. **Return authenticated sender address** (lowercase) on success, `None` on
+5. **Require a DKIM signature by the From domain**, as `dkim_verification` says
+   (see [DKIM Requirement](#dkim-requirement)). The server's recorded result is
+   checked here; Airut's own verification runs only after
+   [authorization](#authorization-senderauthorizer) has passed, so that messages
+   from senders who are not allowed cause no DNS lookups.
+6. **Return authenticated sender address** (lowercase) on success, `None` on
    failure. This address, not the raw From header, is the conversation's sender:
    replies go to it alone. The raw header is kept for display only.
 
@@ -73,8 +85,51 @@ would sit beside the MTA's own and the message would be rejected.
 
 These rules assume that the MTA writes its own `dmarc` entry into the first
 header for every message, and quotes or escapes the values a sender controls.
-Verifying DKIM in Airut itself would remove the dependence on the MTA's header
-format.
+With `dkim_verification` set to `both` or `airut`, a header that is not what it
+seems still cannot stand in for a valid signature by the From domain.
+
+### DKIM Requirement
+
+DMARC passes when either SPF or DKIM is aligned with the From domain. SPF
+depends only on the connecting IP address, which whoever runs the network in
+front of the MTA may be able to choose; no DMARC policy can require DKIM. So
+after DMARC, a DKIM signature whose signing domain is **exactly** the From
+domain must be valid. Signatures by other domains do not count.
+
+`dkim_verification` says who must find it valid:
+
+- **`server`**: the trusted header holds a `dkim` entry (not `dkim-atps`) with
+  result `pass` whose signing domain is the From domain. The signing domain is
+  `header.d`, or — when the MTA writes only the identity, as Stalwart does for a
+  signature with an `i=` tag — the domain after the last `@` of `header.i`. In
+  that case a signature by a parent domain whose identity is in the From domain
+  also counts (RFC 6376 has `i=` lie within `d=`).
+- **`airut`**: Airut verifies a signature itself, over the message's bytes as
+  fetched, looking up the key in DNS through the host's resolver. A signature
+  counts only if the single `From` field it covers is the authenticated sender,
+  read the same way. Only `rsa-sha256` signatures with RSA keys of at least 1024
+  bits count; a signature with `l=` (covering only part of the body) or one that
+  does not sign `From` does not. Work is bounded whatever the message: the
+  number of signatures tried, the size of signatures and key records used, and
+  the messages verified at all (by header count and whitespace) are limited (see
+  the constants in `airut/gateway/email/dkim.py`). Any error while verifying
+  means the signature does not verify. The DNS resolver must be one an attacker
+  cannot answer for; this is the deployment's responsibility
+  ([email-setup.md](../doc/email-setup.md#dns-for-dkim-keys)).
+- **`both`** (default): both. The server's result is checked first, so DNS is
+  only queried for messages it vouches for, from authorized senders.
+- **`none`**: no DKIM requirement; DMARC alone.
+
+Deployments whose mail server changes messages after they are signed — such as
+Microsoft 365, with Safe Links or disclaimers — cannot pass Airut's own
+verification and use `server`.
+
+Airut's own verification means that a result the MTA got wrong, or a header
+written by an account that submits mail without the MTA adding its own (finding
+the topmost header to be the sender's), cannot stand in for a valid signature.
+
+The [internal-auth fallback](#microsoft-365-internal-mail) involves no DKIM: it
+trusts Exchange's own authentication of internal senders.
 
 ### Why Not SPF Alone
 
@@ -140,7 +195,8 @@ When `auth.microsoft_internal_fallback` is set to `true` and the message has
 `Authentication-Results` header is present (even with a DMARC failure), the
 fallback does not apply — DMARC remains the authoritative mechanism.
 
-Authorization (sender allowlist) still applies after the internal auth fallback.
+Authorization (sender allowlist) still applies after the internal auth fallback;
+the DKIM requirement does not.
 
 Reference:
 [Demystifying Hybrid Mail Flow: When is a message Internal?](https://techcommunity.microsoft.com/blog/exchange/demystifying-and-troubleshooting-hybrid-mail-flow-when-is-a-message-internal/1420838)
@@ -171,7 +227,7 @@ succeeds if the sender matches any pattern:
 ### Example Configuration
 
 See [`config/airut.example.yaml`](../config/airut.example.yaml) for the full
-`email.auth` configuration with authorized senders and DMARC settings.
+`email.auth` configuration with authorized senders, DMARC and DKIM settings.
 
 ## From Header Parsing
 
@@ -215,11 +271,14 @@ recorded, so a From header that the two read differently is rejected.
 Incoming email
     |
     v
-SenderAuthenticator.authenticate(message)
+SenderAuthenticator.authenticate(email)
+    |-- Reject a bare CR in the header section
     |-- Parse From header (exactly one mailbox)
     |-- Parse first Authentication-Results header (RFC 8601)
     |-- Check its authserv-id
     |-- Require one dmarc entry: pass, header.from = From domain
+    |-- Require the server's DKIM result for the From domain
+    |     (dkim_verification: server or both)
     |-- If no Auth-Results and fallback enabled:
     |     check X-MS-Exchange-Organization-AuthAs: Internal
     |-- Return sender address or None
@@ -230,5 +289,9 @@ SenderAuthorizer.is_authorized(sender)
     |-- Return True/False
     |
     v (if authorized)
+SenderAuthenticator.verify_signature(email, sender)
+    |-- Airut's own DKIM verification (dkim_verification: airut or both)
+    |
+    v (if verified)
 Process message
 ```

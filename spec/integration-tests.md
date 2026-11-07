@@ -50,7 +50,7 @@ Gateway tests cover:
 - **Conversation flow**: Creation, threading headers, dashboard tracking
 - **Resumption**: Session persistence, --resume flag passing
 - **Attachments**: Single, multiple, binary content preservation
-- **Authorization**: Sender whitelist, DMARC/SPF verification
+- **Authorization**: Sender whitelist, DMARC/SPF and DKIM verification
 - **Errors**: Crash handling, invalid JSON, timeout
 - **Concurrency**: Parallel execution, duplicate rejection
 - **Git mirror updates**: Mirror creation, updates at service start and before

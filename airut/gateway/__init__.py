@@ -38,6 +38,7 @@ from airut.gateway.conversation import (
     ConversationManager,
     GitCloneError,
 )
+from airut.gateway.email.authorization import SenderAuthorizer
 from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
@@ -59,7 +60,6 @@ from airut.gateway.email.responder import (
 from airut.gateway.email.security import (
     SecurityValidationError,
     SenderAuthenticator,
-    SenderAuthorizer,
 )
 
 

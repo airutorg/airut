@@ -38,11 +38,12 @@ Airut organizes work around four concepts:
 - **Channel** — a messaging protocol through which users interact with the
   agent. A channel delivers authenticated and authorized messages, associates
   them with conversations using channel-native identifiers, and sends replies
-  back through the same protocol. Email uses DMARC for authentication, sender
-  allowlists for authorization, and message headers for conversation threading.
-  Slack uses platform-enforced identity via Socket Mode, authorization rules for
-  access control, and thread IDs for conversation mapping. Channels are
-  independent — a repository can have one or both active simultaneously.
+  back through the same protocol. Email uses DMARC and DKIM for authentication,
+  sender allowlists for authorization, and message headers for conversation
+  threading. Slack uses platform-enforced identity via Socket Mode,
+  authorization rules for access control, and thread IDs for conversation
+  mapping. Channels are independent — a repository can have one or both active
+  simultaneously.
 - **Conversation** — a message thread from a channel. One thread = one
   conversation, identified by an 8-character hex ID. A conversation owns a git
   workspace, persistent Claude session state, and a sandboxed execution
@@ -198,8 +199,9 @@ it only sees the result.
 Each channel implements authentication differently:
 
 - **Email** uses a two-layer approach (see [Email Channel](#email-channel)
-  below): `SenderAuthenticator` verifies identity via DMARC, then
-  `SenderAuthorizer` checks the sender against the repository's allowlist.
+  below): `SenderAuthenticator` verifies identity via DMARC and a DKIM signature
+  by the sender's domain, and `SenderAuthorizer` checks the sender against the
+  repository's allowlist.
 - **Slack** uses platform-enforced identity (see [Slack Channel](#slack-channel)
   below): Socket Mode guarantees sender identity, then `SlackAuthorizer` checks
   the user against authorization rules.
@@ -257,7 +259,8 @@ The email channel (`gateway/email/`) implements `ChannelAdapter` as
 `EmailChannelAdapter`, wrapping the email-specific components:
 
 - **EmailListener** — IMAP polling (or IDLE) for incoming messages
-- **SenderAuthenticator** — DMARC verification on trusted headers
+- **SenderAuthenticator** — DMARC and DKIM verification (trusted headers, and
+  Airut's own signature check)
 - **SenderAuthorizer** — Sender allowlist checking
 - **EmailResponder** — SMTP reply construction with threading headers
 
@@ -274,9 +277,11 @@ IMAP inbox
     ▼
 EmailListener (poll or IDLE)
     │
-    ├──▶ SenderAuthenticator (DMARC on trusted headers)
+    ├──▶ SenderAuthenticator (DMARC, server's DKIM result)
     │
     ├──▶ SenderAuthorizer (allowlist check)
+    │
+    ├──▶ SenderAuthenticator (Airut's own DKIM check)
     │
     ├──▶ Parse MIME body, strip quotes, decode attachments
     │
@@ -310,7 +315,7 @@ EmailListener
 ```
 
 See [email-setup.md](email-setup.md) for configuration and
-[spec/authentication.md](../spec/authentication.md) for the full DMARC
+[spec/authentication.md](../spec/authentication.md) for the full authentication
 specification.
 
 ### Slack Channel

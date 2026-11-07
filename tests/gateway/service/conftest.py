@@ -9,7 +9,6 @@ import threading
 from collections.abc import Generator, Iterable
 from concurrent.futures import Future
 from contextlib import contextmanager
-from email.parser import BytesParser
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, cast
@@ -19,6 +18,7 @@ import pytest
 
 from airut.gateway.channel import RawMessage
 from airut.gateway.config import RepoServerConfig
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.service import GatewayService
 from airut.gateway.service.repo_handler import RepoHandler
 from airut.sandbox.types import ResourceLimits
@@ -91,8 +91,11 @@ def make_message(
     if auth_results:
         raw += f"Authentication-Results: {auth_results}\r\n"
     raw += f"\r\n{body}"
-    email_msg = BytesParser().parsebytes(raw.encode())
-    return RawMessage(sender=sender, content=email_msg, display_title=subject)
+    return RawMessage(
+        sender=sender,
+        content=IncomingEmail.parse(raw.encode()),
+        display_title=subject,
+    )
 
 
 def update_global(
