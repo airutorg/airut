@@ -17,10 +17,9 @@ import select
 import socket
 import threading
 import time
-from email.message import Message
-from email.parser import BytesParser
 
 from airut.gateway.config import EmailChannelConfig
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
@@ -183,11 +182,11 @@ class EmailListener:
                         f"Failed to connect after {max_retries} attempts: {e}"
                     )
 
-    def fetch_unread(self) -> list[tuple[bytes, Message]]:
+    def fetch_unread(self) -> list[tuple[bytes, IncomingEmail]]:
         """Fetch unread messages from INBOX.
 
         Returns:
-            List of tuples (imap_uid, parsed_message).
+            List of tuples (imap_uid, email).
 
         Raises:
             IMAPConnectionError: If not connected or fetch fails.
@@ -207,7 +206,6 @@ class EmailListener:
                 raise IMAPConnectionError(f"IMAP search failed: {status}")
 
             messages = []
-            parser = BytesParser()
 
             for msg_id in message_ids[0].split():
                 status, data = self.connection.uid("fetch", msg_id, "(RFC822)")
@@ -217,8 +215,8 @@ class EmailListener:
                 if status == "OK" and data[0] and isinstance(data[0], tuple):
                     message_bytes = data[0][1]
                     if isinstance(message_bytes, bytes):
-                        message = parser.parsebytes(message_bytes)
-                        messages.append((msg_id, message))
+                        email = IncomingEmail.parse(message_bytes)
+                        messages.append((msg_id, email))
                     else:
                         logger.warning(
                             "Unexpected message body type for ID %s: %s",

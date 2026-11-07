@@ -757,9 +757,9 @@ above.
 
 | Concern                 | Email                           | Slack                                    |
 | ----------------------- | ------------------------------- | ---------------------------------------- |
-| Identity verification   | DMARC on trusted headers        | Pre-authenticated WebSocket (app token)  |
+| Identity verification   | DMARC and DKIM                  | Pre-authenticated WebSocket (app token)  |
 | Request authentication  | N/A (IMAP pull model)           | App-level token authenticates connection |
-| Sender spoofing risk    | High (DMARC mitigates)          | None (platform-enforced identity)        |
+| Sender spoofing risk    | High (DMARC, DKIM mitigate)     | None (platform-enforced identity)        |
 | Authorization           | `authorized_senders` patterns   | `authorized` rules                       |
 | Guest exclusion         | N/A                             | Platform-level + application-level       |
 | External user exclusion | N/A                             | `team_id` check                          |

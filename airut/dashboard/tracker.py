@@ -299,7 +299,7 @@ class TaskState:
         status: Current task lifecycle status.
         completion_reason: Why the task completed, or None if still active.
         completion_detail: Human-readable detail about the completion
-            (e.g. "DMARC verification failed", "timeout after 300s").
+            (e.g. "sender authentication failed", "timeout after 300s").
         queued_at: Unix timestamp when task was added to queue.
         started_at: Unix timestamp when execution (EXECUTING) began, or None.
         completed_at: Unix timestamp when execution finished, or None.

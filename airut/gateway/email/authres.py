@@ -212,6 +212,17 @@ def _tokenize(value: str) -> list[_Token]:
     return tokens
 
 
+def ascii_lower(value: str) -> str:
+    """Lowercase *value* if it is ASCII; leave it unchanged otherwise.
+
+    For comparing the hostnames in a header: they are case-insensitive,
+    but ``str.lower`` also folds some non-ASCII characters onto ASCII
+    ones (the Kelvin sign becomes ``k``), so such a value must never
+    match an ASCII one.
+    """
+    return value.lower() if value.isascii() else value
+
+
 def _split_segments(tokens: list[_Token]) -> list[list[_Token]]:
     """Split *tokens* at each ``;``."""
     segments: list[list[_Token]] = [[]]

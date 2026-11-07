@@ -31,6 +31,7 @@ from airut.gateway.email.adapter import (
     EmailChannelAdapter,
     EmailParsedMessage,
 )
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.email.responder import SMTPSendError
 
 
@@ -81,7 +82,11 @@ def _make_raw_message(**kwargs: str) -> RawMessage:
     sender = str(kwargs.get("sender", "user@example.com"))
     subject = str(kwargs.get("subject", "Hello"))
     email_msg = _make_email(**kwargs)
-    return RawMessage(sender=sender, content=email_msg, display_title=subject)
+    return RawMessage(
+        sender=sender,
+        content=IncomingEmail(email_msg.as_bytes(), email_msg),
+        display_title=subject,
+    )
 
 
 def _make_email_with_attachments(
@@ -109,7 +114,11 @@ def _make_email_with_attachments(
         part = MIMEText(content)
         part.add_header("Content-Disposition", "attachment", filename=filename)
         msg.attach(part)
-    return RawMessage(sender=sender, content=msg, display_title=subject)
+    return RawMessage(
+        sender=sender,
+        content=IncomingEmail(msg.as_bytes(), msg),
+        display_title=subject,
+    )
 
 
 def _make_adapter(
@@ -154,7 +163,7 @@ class TestAuthenticateAndParse:
         assert result.body == "Do something"
         assert result.conversation_id is None
         assert result.original_message_id == "<msg1@example.com>"
-        assert result._raw_messages == [msg.content]
+        assert result._raw_messages == [msg.content.message]
 
     def test_sender_display_preserves_from_display_name(self) -> None:
         adapter, auth, authz, _ = _make_adapter()
@@ -196,7 +205,7 @@ class TestAuthenticateAndParse:
         with pytest.raises(AuthenticationError) as exc_info:
             adapter.authenticate_and_parse(msg)
         assert exc_info.value.sender == "user@example.com"
-        assert "DMARC" in exc_info.value.reason
+        assert exc_info.value.reason == "sender authentication failed"
 
     def test_rejection_shows_start_of_long_headers(
         self, caplog: pytest.LogCaptureFixture
@@ -213,6 +222,35 @@ class TestAuthenticateAndParse:
             adapter.authenticate_and_parse(msg)
         assert exc_info.value.sender == "x" * 200
         assert max(len(r.getMessage()) for r in caplog.records) < 1000
+
+    def test_signature_verified_only_for_authorized_senders(self) -> None:
+        """Airut's own DKIM check (DNS, crypto) runs after authorization."""
+        from airut.gateway.channel import AuthenticationError
+
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = False
+
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(_make_raw_message())
+        assert exc_info.value.reason == "sender not authorized"
+        auth.verify_signature.assert_not_called()
+
+    def test_signature_failure_raises(self) -> None:
+        from airut.gateway.channel import AuthenticationError
+
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        auth.verify_signature.return_value = False
+        msg = _make_raw_message()
+
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(msg)
+        assert exc_info.value.reason == "sender authentication failed"
+        auth.verify_signature.assert_called_once_with(
+            msg.content, "user@example.com"
+        )
 
     def test_unauthorized_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError
@@ -1060,10 +1098,22 @@ class TestFromConfig:
                 "airut.gateway.email.adapter.EmailChannelListener"
             ) as mock_listener,
         ):
-            config = _make_config()
+            base = _make_config()
+            config = replace(
+                base,
+                auth=replace(
+                    base.auth,
+                    dkim_verification="server",
+                    microsoft_internal_fallback=True,
+                ),
+            )
             adapter = EmailChannelAdapter.from_config(config, repo_id="test")
 
-        mock_auth.assert_called_once()
+        mock_auth.assert_called_once_with(
+            "mx.example.com",
+            dkim_verification="server",
+            allow_internal_auth_fallback=True,
+        )
         mock_authz.assert_called_once()
         mock_resp.assert_called_once_with(config)
         mock_listener.assert_called_once_with(config, repo_id="test")

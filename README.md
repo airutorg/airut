@@ -41,8 +41,8 @@ Airut and reviewing the resulting PRs.
 - **Task-to-PR foundation**: Combined with repo configuration (`CLAUDE.md`, CI
   tooling, branch protection), enables end-to-end autonomous workflows where
   agents push PRs for human review.
-- **Email and Slack channels**: Authenticate via DMARC (email) or workspace
-  membership (Slack), with sender authorization per repo.
+- **Email and Slack channels**: Authenticate via DMARC and DKIM (email) or
+  workspace membership (Slack), with sender authorization per repo.
 - **Scheduled tasks**: Run Claude on a cron schedule — daily code reviews,
   nightly health checks, weekly summaries. Results are delivered via email, and
   recipients can reply to continue the conversation.
@@ -160,7 +160,7 @@ starting point for onboarding your own projects.
 ### Channel Setup
 
 - **[doc/email-setup.md](doc/email-setup.md)** — Email provider selection,
-  DMARC, and authorization
+  DMARC, DKIM, and authorization
 - **[doc/slack-setup.md](doc/slack-setup.md)** — Slack app creation, tokens, and
   authorization rules
 - **[doc/m365-oauth2.md](doc/m365-oauth2.md)** — Microsoft 365 OAuth2 for email

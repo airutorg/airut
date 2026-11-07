@@ -5,8 +5,8 @@
 
 """Email channel adapter.
 
-Implements the ChannelAdapter protocol for email, wrapping DMARC
-authentication, MIME parsing, and SMTP reply delivery.
+Implements the ChannelAdapter protocol for email, wrapping sender
+authentication (DMARC and DKIM), MIME parsing, and SMTP reply delivery.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass, field
 from email.message import Message
 from pathlib import Path
+from typing import NoReturn
 
 from airut.gateway.channel import (
     AuthenticationError,
@@ -27,8 +28,10 @@ from airut.gateway.channel import (
     UndeliveredFile,
 )
 from airut.gateway.config import EmailChannelConfig
+from airut.gateway.email.authorization import SenderAuthorizer
 from airut.gateway.email.channel_listener import EmailChannelListener
 from airut.gateway.email.composer import attachment_budget
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.email.parsing import (
     decode_subject,
     extract_attachments,
@@ -43,7 +46,7 @@ from airut.gateway.email.responder import (
     SMTPSendError,
     generate_message_id,
 )
-from airut.gateway.email.security import SenderAuthenticator, SenderAuthorizer
+from airut.gateway.email.security import SenderAuthenticator
 from airut.units import MB, format_size
 
 
@@ -136,6 +139,7 @@ class EmailChannelAdapter(ChannelAdapter):
             config=config,
             authenticator=SenderAuthenticator(
                 config.auth.trusted_authserv_id,
+                dkim_verification=config.auth.dkim_verification,
                 allow_internal_auth_fallback=(
                     config.auth.microsoft_internal_fallback
                 ),
@@ -191,58 +195,29 @@ class EmailChannelAdapter(ChannelAdapter):
         )
 
     def authenticate_and_parse(
-        self, raw_message: RawMessage[Message]
+        self, raw_message: RawMessage[IncomingEmail]
     ) -> EmailParsedMessage:
-        """Authenticate sender via DMARC and parse the email.
+        """Authenticate and authorize the sender, and parse the email.
+
+        Authentication's header checks run first, then authorization,
+        then Airut's own DKIM verification (which looks up keys in DNS).
 
         Args:
-            raw_message: RawMessage wrapping an email.message.Message.
+            raw_message: RawMessage wrapping the fetched email.
 
         Returns:
             EmailParsedMessage if authenticated and authorized.
 
         Raises:
-            AuthenticationError: If DMARC verification or sender
-                authorization fails.
+            AuthenticationError: If sender authentication (DMARC,
+                DKIM) or authorization fails.
         """
-        email_msg = raw_message.content
-        # The raw From header: for logs and display only.  Replies go to
-        # the authenticated address, since the header may name others.
+        email = raw_message.content
+        email_msg = email.message
+        # The raw From header: for display only.  Replies go to the
+        # authenticated address, since the header may name others.
         sender = str(email_msg.get("From", ""))
-        # A rejected message's headers may be arbitrarily long; logs and
-        # the dashboard show only their start.
-        shown_sender = sender[:_SHOWN_HEADER_LENGTH]
-        message_id = str(email_msg.get("Message-ID", ""))[:_SHOWN_HEADER_LENGTH]
-        repo_id = self._repo_id
-
-        # Authentication: verify DMARC from trusted server
-        authenticated_sender = self._authenticator.authenticate(email_msg)
-        if authenticated_sender is None:
-            logger.warning(
-                "Repo '%s': rejecting unauthenticated message from %s "
-                "(Message-ID: %s)",
-                repo_id,
-                shown_sender,
-                message_id,
-            )
-            raise AuthenticationError(
-                sender=shown_sender,
-                reason="DMARC verification failed",
-            )
-
-        # Authorization: check sender is allowed
-        if not self._authorizer.is_authorized(authenticated_sender):
-            logger.warning(
-                "Repo '%s': rejecting unauthorized message from %s "
-                "(Message-ID: %s)",
-                repo_id,
-                shown_sender,
-                message_id,
-            )
-            raise AuthenticationError(
-                sender=shown_sender,
-                reason="sender not authorized",
-            )
+        authenticated_sender = self._authenticate(email)
 
         # Extract conversation ID: headers first, then subject fallback
         subject = decode_subject(email_msg)
@@ -285,6 +260,47 @@ class EmailChannelAdapter(ChannelAdapter):
             decoded_subject=subject,
             _raw_messages=[email_msg],
         )
+
+    def _authenticate(self, email: IncomingEmail) -> str:
+        """Authenticate and authorize the sender of *email*.
+
+        Header checks first, then authorization, then Airut's own DKIM
+        verification, which looks up keys in DNS and so runs only for
+        senders who are allowed.
+
+        Returns:
+            The authenticated sender address.
+
+        Raises:
+            AuthenticationError: If any of the steps fails.
+        """
+        sender = self._authenticator.authenticate(email)
+        if sender is None:
+            self._reject(email, "sender authentication failed")
+        elif not self._authorizer.is_authorized(sender):
+            self._reject(email, "sender not authorized")
+        elif not self._authenticator.verify_signature(email, sender):
+            self._reject(email, "sender authentication failed")
+        else:
+            return sender
+
+    def _reject(self, email: IncomingEmail, reason: str) -> NoReturn:
+        """Log the rejection of *email* and raise ``AuthenticationError``.
+
+        A rejected message's headers may be arbitrarily long; the log and
+        the dashboard show only their start.
+        """
+        shown_sender = str(email.message.get("From", ""))
+        shown_sender = shown_sender[:_SHOWN_HEADER_LENGTH]
+        message_id = str(email.message.get("Message-ID", ""))
+        logger.warning(
+            "Repo '%s': rejecting message from %s (%s; Message-ID: %s)",
+            self._repo_id,
+            shown_sender,
+            reason,
+            message_id[:_SHOWN_HEADER_LENGTH],
+        )
+        raise AuthenticationError(sender=shown_sender, reason=reason)
 
     def save_attachments(
         self, parsed: ParsedMessage, inbox_dir: Path

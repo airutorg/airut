@@ -19,7 +19,7 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/ci-sandbox.md` — sandboxing GitHub Actions and CI pipelines
 - `doc/deployment.md` — installation and server configuration
 - `doc/github-app-setup.md` — GitHub App setup for agent identity
-- `doc/email-setup.md` — email channel setup (IMAP/SMTP, DMARC)
+- `doc/email-setup.md` — email channel setup (IMAP/SMTP, DMARC, DKIM)
 - `doc/slack-setup.md` — Slack channel setup (Socket Mode, authorization rules)
 - `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for email (IMAP/SMTP)
 - `doc/repo-onboarding.md` — onboarding new repositories
@@ -34,7 +34,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 
 - `spec/gateway-architecture.md` — core gateway design, channel abstraction,
   data flow, container execution
-- `spec/authentication.md` — DMARC verification and sender authorization
+- `spec/authentication.md` — DMARC and DKIM verification and sender
+  authorization
 - `spec/repo-config.md` — per-repo schema in server config
 - `spec/declarative-config.md` — declarative config layer (schema metadata,
   migration, diffing, round-trip, config variables)
@@ -107,7 +108,7 @@ See `spec/repo-config.md` for the full schema.
 ## Security Model
 
 - **Email authentication** — DMARC verification on trusted
-  `Authentication-Results` headers
+  `Authentication-Results` headers, and a DKIM signature by the sender's domain
 - **Sender authorization** — allowlist with exact addresses or `*@domain`
   wildcards
 - **Container isolation** — each conversation has isolated workspace, Claude

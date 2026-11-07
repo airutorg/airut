@@ -48,9 +48,21 @@ def resolve_runtime_packages() -> list[str]:
     return sorted(packages)
 
 
+#: Packages whose license was reviewed by hand because their metadata
+#: names no license pip-licenses can match, with the license found.
+#: They are left out of the automated check.
+REVIEWED_PACKAGES = {
+    # Metadata: "License :: DFSG approved" (a category that also covers
+    # copyleft licenses, so it is not allowed as such).  LICENSE: zlib.
+    "dkimpy": "zlib",
+}
+
+
 def main() -> int:
     """Resolve runtime deps and check their licenses."""
-    packages = resolve_runtime_packages()
+    packages = [
+        p for p in resolve_runtime_packages() if p not in REVIEWED_PACKAGES
+    ]
 
     if not packages:
         print("ERROR: No runtime packages resolved", file=sys.stderr)

@@ -573,8 +573,9 @@ enable dual-channel operation.
 
 ### Email
 
-Email uses IMAP/SMTP with DMARC-based sender verification. Each repository
-requires a dedicated email account (Airut deletes messages after processing).
+Email uses IMAP/SMTP with DMARC- and DKIM-based sender verification. Each
+repository requires a dedicated email account (Airut deletes messages after
+processing).
 
 See [email-setup.md](email-setup.md) for the complete setup guide covering
 provider selection, DMARC configuration, authorization, and troubleshooting.

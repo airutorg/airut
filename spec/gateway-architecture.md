@@ -53,7 +53,8 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
   `error_type` for structured health reporting.
 - **`RawMessage[T]`** — Generic dataclass wrapping a channel-specific payload
   (`T`) with sender identity and display_title. The email channel uses
-  `RawMessage[email.message.Message]`; the Slack channel uses
+  `RawMessage[IncomingEmail]` (the message's bytes as fetched, which DKIM
+  verification needs, and the parsed message); the Slack channel uses
   `RawMessage[dict[str, Any]]`; the core uses `RawMessage[Any]`.
 - **`ChannelConfig`** — `typing.Protocol` defining the configuration interface
   for channel implementations. Requires `channel_type` (e.g., `"email"`),
@@ -147,7 +148,8 @@ a `-N` suffix instead.
   health tracking. Wraps the low-level `EmailListener`.
 - **EmailListener** — Low-level IMAP operations (connect, fetch, IDLE, close)
 - **EmailResponder** — SMTP reply construction with threading support
-- **SenderAuthenticator** — DMARC verification on trusted headers
+- **SenderAuthenticator** — DMARC and DKIM verification (trusted headers, and
+  Airut's own signature check)
 - **SenderAuthorizer** — Sender allowlist checking
 
 **Slack channel** (`gateway/slack/`):
@@ -199,7 +201,7 @@ Each task is assigned a `CompletionReason` when it reaches COMPLETED:
 | Reason             | Meaning                                          |
 | ------------------ | ------------------------------------------------ |
 | `SUCCESS`          | Sandbox ran and produced a response              |
-| `AUTH_FAILED`      | DMARC verification failed                        |
+| `AUTH_FAILED`      | Sender authentication (DMARC, DKIM) failed       |
 | `UNAUTHORIZED`     | Sender not in allowlist                          |
 | `EXECUTION_FAILED` | Container/sandbox failure                        |
 | `TIMEOUT`          | Execution exceeded configured limit              |
@@ -288,7 +290,8 @@ ChannelListener thread:
 GatewayService._process_message_worker()  [worker thread]:
   -> tracker.set_authenticating(task_id)                 → AUTHENTICATING
   -> ChannelAdapter.authenticate_and_parse()
-    -> (email: DMARC + sender auth + MIME parsing)
+    -> (email: DMARC + server's DKIM result, sender auth, Airut's DKIM
+        check, MIME parsing)
     -> (slack: workspace/group/user authorization + event payload extraction)
     -> raises AuthenticationError on failure:
        tracker.complete_task(task_id, AUTH_FAILED/UNAUTHORIZED) → COMPLETED
@@ -669,8 +672,9 @@ flow.
 Each channel implements its own authentication and authorization model
 appropriate to the transport:
 
-- **Email**: DMARC verification on trusted `Authentication-Results` headers,
-  then sender allowlist matching. See [authentication.md](authentication.md).
+- **Email**: DMARC and the server's DKIM result on trusted
+  `Authentication-Results` headers, then sender allowlist matching, then Airut's
+  own DKIM verification. See [authentication.md](authentication.md).
 - **Slack**: Pre-authenticated via Socket Mode WebSocket (app-level token), then
   authorization via workspace membership, user group, or user ID rules. See
   [slack-channel.md](slack-channel.md#authorization-model).
@@ -704,14 +708,14 @@ full list.
 
 ### Attack Surface
 
-| Risk                  | Mitigation                                                                         |
-| --------------------- | ---------------------------------------------------------------------------------- |
-| Unauthorized access   | Per-channel auth: DMARC + sender allowlist (email), workspace/group rules (Slack)  |
-| Identity spoofing     | DMARC (email), platform-enforced identity via Socket Mode (Slack)                  |
-| Command injection     | Claude Code runs in isolated container                                             |
-| Data exfiltration     | Network allowlist via mitmproxy (see [network-sandbox](../doc/network-sandbox.md)) |
-| Resource exhaustion   | Execution timeout + conversation GC                                                |
-| Malicious attachments | Saved to `inbox/`, Claude decides how to handle                                    |
+| Risk                  | Mitigation                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| Unauthorized access   | Per-channel auth: DMARC + DKIM + sender allowlist (email), workspace/group rules (Slack) |
+| Identity spoofing     | DMARC + DKIM (email), platform-enforced identity via Socket Mode (Slack)                 |
+| Command injection     | Claude Code runs in isolated container                                                   |
+| Data exfiltration     | Network allowlist via mitmproxy (see [network-sandbox](../doc/network-sandbox.md))       |
+| Resource exhaustion   | Execution timeout + conversation GC                                                      |
+| Malicious attachments | Saved to `inbox/`, Claude decides how to handle                                          |
 
 ## Error Handling
 

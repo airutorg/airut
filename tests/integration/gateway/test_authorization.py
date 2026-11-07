@@ -312,6 +312,56 @@ class TestForgedSender:
             service.stop()
             service_thread.join(timeout=10.0)
 
+    @pytest.mark.parametrize(
+        ("dkim_signed", "authentication_results"),
+        [
+            pytest.param(
+                False,
+                "test.local; dkim=pass header.d=test.local;"
+                " dmarc=pass header.from=test.local",
+                id="server-says-pass-but-unsigned",
+            ),
+            pytest.param(
+                True,
+                "test.local; dmarc=pass header.from=test.local; spf=pass",
+                id="signed-but-server-records-no-dkim",
+            ),
+        ],
+    )
+    def test_dkim_required_by_default(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+        dkim_signed: bool,
+        authentication_results: str,
+    ) -> None:
+        """By default both the server and Airut must verify DKIM."""
+        msg = create_email(
+            subject="DKIM",
+            body="This should be rejected",
+            sender="user@test.local",
+            authentication_results=authentication_results,
+            dkim_signed=dkim_signed,
+        )
+        integration_env.email_server.inject_message(msg)
+
+        service = integration_env.create_service()
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            task = wait_for_task(
+                service.tracker,
+                lambda t: t.status == TaskStatus.COMPLETED,
+                timeout=10.0,
+            )
+            assert task is not None, "Service did not process message in time"
+            assert task.completion_reason == CompletionReason.AUTH_FAILED
+            assert integration_env.email_server.get_sent_messages() == []
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)
+
     def test_reply_goes_only_to_authenticated_address(
         self,
         integration_env: IntegrationEnvironment,

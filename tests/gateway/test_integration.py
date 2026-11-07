@@ -37,6 +37,7 @@ from airut.gateway.config import (
     RepoServerConfig,
     ServerConfig,
 )
+from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.email.parsing import (
     extract_attachments,
     extract_body,
@@ -66,20 +67,22 @@ class TestEndToEndFlow:
             storage_dir=email_config.storage_dir,
         )
         authenticator = SenderAuthenticator(
-            email_channel.auth.trusted_authserv_id
+            email_channel.auth.trusted_authserv_id, dkim_verification="none"
         )
         authorizer = SenderAuthorizer(email_channel.auth.authorized_senders)
         responder = EmailResponder(email_channel)
 
         # Extract underlying email from RawMessage
-        email_msg = sample_email_message.content
+        email_msg = sample_email_message.content.message
         email_msg.replace_header("Subject", "Please help with task")
         email_msg.replace_header(
             "From", email_channel.auth.authorized_senders[0]
         )
 
         # Validate authentication and authorization
-        sender = authenticator.authenticate(email_msg)
+        sender = authenticator.authenticate(
+            IncomingEmail(email_msg.as_bytes(), email_msg)
+        )
         assert sender is not None
         assert authorizer.is_authorized(sender) is True
 
@@ -137,7 +140,7 @@ class TestEndToEndFlow:
         conv_id, repo_path = conversation_manager.initialize_new()
 
         # Simulate follow-up message
-        email_msg = sample_email_message.content
+        email_msg = sample_email_message.content.message
         email_msg.replace_header(
             "Subject", f"Re: [ID:{conv_id}] Follow-up question"
         )
@@ -159,13 +162,13 @@ class TestEndToEndFlow:
     ):
         """Test that unauthorized senders are rejected."""
         authenticator = SenderAuthenticator(
-            email_channel.auth.trusted_authserv_id
+            email_channel.auth.trusted_authserv_id, dkim_verification="none"
         )
         authorizer = SenderAuthorizer(email_channel.auth.authorized_senders)
 
         # Modify message to have unauthorized sender, with the DMARC
         # pass the mail server would record for its domain
-        email_msg = sample_email_message.content
+        email_msg = sample_email_message.content.message
         email_msg.replace_header("From", "hacker@evil.com")
         email_msg.replace_header(
             "Authentication-Results",
@@ -173,7 +176,9 @@ class TestEndToEndFlow:
         )
 
         # Should authenticate (DMARC passes) but not authorize
-        sender = authenticator.authenticate(email_msg)
+        sender = authenticator.authenticate(
+            IncomingEmail(email_msg.as_bytes(), email_msg)
+        )
         assert sender is not None
         assert authorizer.is_authorized(sender) is False
 
@@ -241,12 +246,12 @@ class TestEndToEndFlow:
             storage_dir=email_config.storage_dir,
         )
         authenticator = SenderAuthenticator(
-            email_channel.auth.trusted_authserv_id
+            email_channel.auth.trusted_authserv_id, dkim_verification="none"
         )
         authorizer = SenderAuthorizer(email_channel.auth.authorized_senders)
 
         # Validate authentication and authorization
-        sender = authenticator.authenticate(msg)
+        sender = authenticator.authenticate(IncomingEmail(msg.as_bytes(), msg))
         assert sender is not None
         assert authorizer.is_authorized(sender) is True
 
@@ -387,7 +392,7 @@ class TestComponentIntegration:
         listener = EmailListener(email_channel)
         responder = EmailResponder(email_channel)
         authenticator = SenderAuthenticator(
-            email_channel.auth.trusted_authserv_id
+            email_channel.auth.trusted_authserv_id, dkim_verification="none"
         )
         authorizer = SenderAuthorizer(email_channel.auth.authorized_senders)
         conversation_manager = ConversationManager(
@@ -501,8 +506,6 @@ Follow-up question.
         Uses the real adapter and listener created by from_config, with
         only the low-level EmailListener mocked for IMAP control.
         """
-        from email.parser import BytesParser
-
         from airut.gateway.email.adapter import EmailChannelAdapter
         from airut.gateway.email.channel_listener import (
             EmailChannelListener,
@@ -545,7 +548,7 @@ Follow-up question.
             b"Message-ID: <chain@example.com>\r\n"
             b"\r\nHello"
         )
-        msg = BytesParser().parsebytes(raw_bytes)
+        msg = IncomingEmail.parse(raw_bytes)
 
         call_count = 0
 
@@ -2076,8 +2079,6 @@ class TestUnauthorizedSenderTracking:
         email_channel: EmailChannelConfig,
     ) -> None:
         """Unauthorized email records the sender address for visibility."""
-        from email.parser import BytesParser
-
         from airut.gateway.email.adapter import EmailChannelAdapter
         from airut.gateway.service import GatewayService
 
@@ -2099,7 +2100,7 @@ class TestUnauthorizedSenderTracking:
             b"\r\n"
             b"I want access.\r\n"
         )
-        email_msg = BytesParser().parsebytes(raw_bytes)
+        email_msg = IncomingEmail.parse(raw_bytes)
 
         # Auth passes DMARC but fails authorization
         mock_authenticator = MagicMock()
@@ -2140,8 +2141,6 @@ class TestUnauthorizedSenderTracking:
         email_channel: EmailChannelConfig,
     ) -> None:
         """Failed DMARC authentication still records sender for visibility."""
-        from email.parser import BytesParser
-
         from airut.gateway.email.adapter import EmailChannelAdapter
         from airut.gateway.service import GatewayService
 
@@ -2161,7 +2160,7 @@ class TestUnauthorizedSenderTracking:
             b"\r\n"
             b"Spoofed content.\r\n"
         )
-        email_msg = BytesParser().parsebytes(raw_bytes)
+        email_msg = IncomingEmail.parse(raw_bytes)
 
         # DMARC fails
         mock_authenticator = MagicMock()

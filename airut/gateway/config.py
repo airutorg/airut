@@ -1034,6 +1034,13 @@ class SmtpConfig:
             )
 
 
+#: Values of ``email.auth.dkim_verification``: who must find a DKIM
+#: signature by the From domain valid — the mail server (in its
+#: ``Authentication-Results`` header) and Airut (verifying it itself),
+#: either one alone, or nobody.
+DKIM_VERIFICATION_MODES = ("both", "server", "airut", "none")
+
+
 @dataclass(frozen=True)
 class EmailAuthConfig:
     """Email sender authorization configuration.
@@ -1045,6 +1052,9 @@ class EmailAuthConfig:
             Set to empty string for Microsoft 365 / EOP.
         microsoft_internal_fallback: Accept Microsoft 365 intra-org
             messages when DMARC headers are absent.
+        dkim_verification: Who must find a DKIM signature by the From
+            domain valid: ``both`` (default), ``server``, ``airut``, or
+            ``none`` (see ``DKIM_VERIFICATION_MODES``).
     """
 
     authorized_senders: list[str] = field(
@@ -1068,6 +1078,23 @@ class EmailAuthConfig:
             Scope.REPO,
         ),
     )
+    dkim_verification: str = field(
+        default="both",
+        metadata=meta(
+            "DKIM signature by the From domain, verified by:"
+            " both, server, airut, or none",
+            Scope.REPO,
+        ),
+    )
+
+    def __post_init__(self) -> None:
+        """Validate the DKIM verification mode."""
+        if self.dkim_verification not in DKIM_VERIFICATION_MODES:
+            raise ValueError(
+                "dkim_verification must be one of "
+                f"{', '.join(DKIM_VERIFICATION_MODES)}: "
+                f"{self.dkim_verification!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -1987,6 +2014,9 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
     )
     if ms_internal_auth is not None:
         auth_overrides["microsoft_internal_fallback"] = ms_internal_auth
+    dkim_verification = _resolve(raw_auth.get("dkim_verification"), str)
+    if dkim_verification is not None:
+        auth_overrides["dkim_verification"] = dkim_verification
     auth = EmailAuthConfig(
         authorized_senders=_resolve_string_list(
             raw_auth.get("authorized_senders"),

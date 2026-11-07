@@ -3,15 +3,12 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Email authentication and authorization.
+"""Email sender authentication.
 
-Provides two logically separate layers:
-
-- **Authentication** (``SenderAuthenticator``): Verifies the email actually
-  came from who it claims via DMARC validation on trusted
-  Authentication-Results headers.
-- **Authorization** (``SenderAuthorizer``): Checks whether the authenticated
-  sender is allowed to use the gateway.
+``SenderAuthenticator`` verifies the email actually came from who it
+claims, via DMARC on trusted Authentication-Results headers and a DKIM
+signature by the From domain.  Whether that sender may use the gateway
+is the separate authorization layer (``authorization``).
 
 Security model:
 - Only the **first** (topmost) ``Authentication-Results`` header is
@@ -40,25 +37,19 @@ Security model:
 import logging
 from email.message import Message
 
+from airut.gateway.config import DKIM_VERIFICATION_MODES
 from airut.gateway.email.authres import (
     AuthResults,
     AuthResultsParseError,
+    ascii_lower,
     parse_authentication_results,
 )
+from airut.gateway.email.dkim import DkimVerifier, server_dkim_passes
 from airut.gateway.email.from_header import parse_from_mailbox
+from airut.gateway.email.incoming import IncomingEmail
 
 
 logger = logging.getLogger(__name__)
-
-
-def _ascii_lower(value: str) -> str:
-    """Lowercase *value* if it is ASCII; leave it unchanged otherwise.
-
-    Hostnames are compared case-insensitively, but ``str.lower`` also
-    folds some non-ASCII characters onto ASCII ones (the Kelvin sign
-    becomes ``k``), so such a value must never match an ASCII one.
-    """
-    return value.lower() if value.isascii() else value
 
 
 class SecurityValidationError(Exception):
@@ -66,7 +57,7 @@ class SecurityValidationError(Exception):
 
 
 class SenderAuthenticator:
-    """Verifies email authenticity via DMARC.
+    """Verifies email authenticity via DMARC and DKIM.
 
     Checks only the **first** (topmost) ``Authentication-Results`` header.
     If it is not from the configured trusted mail server, the message is
@@ -80,9 +71,28 @@ class SenderAuthenticator:
     where Exchange Online Protection skips external authentication
     entirely for messages sent within the same tenant.
 
+    After DMARC, a DKIM signature by the From domain must be valid, as
+    ``dkim_verification`` says: in the server's recorded results
+    (``server``), by Airut's own verification (``airut``), by both
+    (``both``), or not required (``none``).  The internal-auth fallback
+    involves no DKIM: it trusts Exchange.
+
+    Authentication takes two steps, both of which must pass:
+    ``authenticate`` reads the message's headers, including the server's
+    recorded results, and needs no network; ``verify_signature`` is
+    Airut's own DKIM verification, which looks up keys in DNS.  Callers
+    check authorization between the two, so that messages from senders
+    who are not allowed anyway cause no lookups.
+
+    A message whose header section holds a carriage return not followed
+    by a line feed is rejected: parsers disagree on whether it ends a
+    line, and so on which header fields the message has.
+
     Attributes:
         trusted_authserv_id: Hostname of the trusted mail server whose
             Authentication-Results headers are accepted.
+        dkim_verification: Who must find a DKIM signature by the From
+            domain valid (one of ``DKIM_VERIFICATION_MODES``).
         allow_internal_auth_fallback: Accept
             ``X-MS-Exchange-Organization-AuthAs: Internal`` when no
             ``Authentication-Results`` header is present.
@@ -92,6 +102,8 @@ class SenderAuthenticator:
         self,
         trusted_authserv_id: str,
         *,
+        dkim_verification: str,
+        dkim_verifier: DkimVerifier | None = None,
         allow_internal_auth_fallback: bool = False,
     ) -> None:
         """Initialize authenticator.
@@ -99,38 +111,74 @@ class SenderAuthenticator:
         Args:
             trusted_authserv_id: The authserv-id to trust in
                 Authentication-Results headers.
+            dkim_verification: ``both``, ``server``, ``airut`` or
+                ``none``.
+            dkim_verifier: Verifies signatures for ``airut`` and
+                ``both`` (by default, with the host's resolver).
             allow_internal_auth_fallback: When True, accept messages
                 with ``X-MS-Exchange-Organization-AuthAs: Internal``
                 as authenticated when no ``Authentication-Results``
                 header is present.
+
+        Raises:
+            ValueError: If *dkim_verification* is not a known mode.
         """
+        if dkim_verification not in DKIM_VERIFICATION_MODES:
+            raise ValueError(
+                f"Unknown dkim_verification: {dkim_verification!r}"
+            )
         self.trusted_authserv_id = trusted_authserv_id
+        self.dkim_verification = dkim_verification
+        self._dkim_verifier = dkim_verifier or DkimVerifier()
         self.allow_internal_auth_fallback = allow_internal_auth_fallback
         logger.debug(
             "Initialized sender authenticator (authserv-id: %s, "
-            "internal_auth_fallback: %s)",
+            "dkim_verification: %s, internal_auth_fallback: %s)",
             trusted_authserv_id,
+            dkim_verification,
             allow_internal_auth_fallback,
         )
 
-    def authenticate(self, message: Message) -> str | None:
-        """Authenticate the sender via DMARC and return the From address.
+    @property
+    def _server_dkim_required(self) -> bool:
+        """Whether the server's recorded DKIM result must pass."""
+        return self.dkim_verification in ("server", "both")
 
-        Extracts the From address using strict parsing, then verifies
-        a DMARC pass for its domain in the trusted Authentication-Results
-        header.
+    @property
+    def _own_dkim_required(self) -> bool:
+        """Whether Airut must verify the DKIM signature itself."""
+        return self.dkim_verification in ("airut", "both")
+
+    def authenticate(self, email: IncomingEmail) -> str | None:
+        """Check the message's headers; return the From address if they pass.
+
+        The first step of authentication, needing no network: rejects a
+        bare carriage return in the header section, extracts the From
+        address using strict parsing, and verifies a DMARC pass for its
+        domain in the trusted Authentication-Results header, and — when
+        ``dkim_verification`` is ``server`` or ``both`` — the server's
+        recorded DKIM pass.  Airut's own DKIM verification is the second
+        step, ``verify_signature``: a message is authenticated only when
+        both pass.
 
         When ``allow_internal_auth_fallback`` is enabled and there is no
         ``Authentication-Results`` header at all, the message is accepted
         if ``X-MS-Exchange-Organization-AuthAs: Internal`` is present.
 
         Args:
-            message: Email message to authenticate.
+            email: The email to authenticate.
 
         Returns:
-            Lowercase email address if authentication succeeds, None
+            Lowercase email address if the header checks pass, None
             otherwise.
         """
+        if email.has_bare_cr_in_header():
+            logger.warning(
+                "Rejecting message with a bare carriage return in its header"
+            )
+            return None
+
+        message = email.message
         from_values = [str(v) for v in message.get_all("From", [])]
         if len(from_values) != 1:
             logger.warning(
@@ -150,18 +198,49 @@ class SenderAuthenticator:
             return None
 
         domain = sender.rpartition("@")[2]
-        if not self._verify_dmarc(message, domain):
+        results = self._trusted_results(message)
+        if results is None:
             if not self._verify_internal_auth(message):
                 return None
+        elif not self._verify_dmarc(results, domain):
+            return None
+        elif self._server_dkim_required and not server_dkim_passes(
+            results, domain
+        ):
+            return None
 
         logger.debug("Sender authenticated: %s", sender)
         return sender
 
-    def _verify_dmarc(self, message: Message, from_domain: str) -> bool:
+    def verify_signature(self, email: IncomingEmail, sender: str) -> bool:
+        """Verify, in Airut, a DKIM signature vouching for *sender*.
+
+        The second step of authentication, for a message ``authenticate``
+        accepted as from *sender*.  Passes without checking when
+        ``dkim_verification`` needs no verification by Airut, and for
+        messages accepted through the internal-auth fallback (which have
+        no ``Authentication-Results`` header).
+
+        Args:
+            email: The email ``authenticate`` accepted.
+            sender: The address it returned.
+
+        Returns:
+            True if the signature verifies, or none is needed.
+        """
+        if not self._own_dkim_required:
+            return True
+        if self.allow_internal_auth_fallback and not email.message.get_all(
+            "Authentication-Results"
+        ):
+            return True
+        return self._dkim_verifier.verify(email.raw, sender)
+
+    def _verify_dmarc(self, results: AuthResults, from_domain: str) -> bool:
         """Verify DMARC pass for *from_domain* in the trusted header.
 
-        Reads the first ``Authentication-Results`` header (see
-        ``_trusted_results``) and requires exactly one ``dmarc`` entry,
+        Requires exactly one ``dmarc`` entry in the first
+        ``Authentication-Results`` header (see ``_trusted_results``),
         with result ``pass`` and a ``header.from`` equal to
         *from_domain*.  A second ``dmarc`` entry means the header is not
         what it seems (one may have been injected through a value the
@@ -172,17 +251,13 @@ class SenderAuthenticator:
         SPF with their own domain while spoofing the From header.
 
         Args:
-            message: Email message.
+            results: The trusted header, parsed.
             from_domain: Lowercase domain of the From address.
 
         Returns:
             True if the trusted header records a DMARC pass for
             *from_domain*.
         """
-        results = self._trusted_results(message)
-        if results is None:
-            return False
-
         authserv_id = results.authserv_id or "(not checked)"
         dmarc = [r for r in results.results if r.method == "dmarc"]
         if len(dmarc) != 1:
@@ -195,7 +270,7 @@ class SenderAuthenticator:
             return False
 
         entry = dmarc[0]
-        header_from = [_ascii_lower(d) for d in entry.values("header.from")]
+        header_from = [ascii_lower(d) for d in entry.values("header.from")]
         if entry.result != "pass" or header_from != [from_domain]:
             logger.warning(
                 "DMARC verification failed (authserv-id: %.100s): "
@@ -259,14 +334,14 @@ class SenderAuthenticator:
         # When trusted_authserv_id is empty, skip the authserv-id check.
         # This supports Microsoft 365 / EOP which omits the authserv-id
         # from Authentication-Results headers (non-standard).
-        trusted_id = _ascii_lower(self.trusted_authserv_id)
+        trusted_id = ascii_lower(self.trusted_authserv_id)
         if not trusted_id:
             logger.debug(
                 "Skipping authserv-id check (trusted_authserv_id is empty)"
             )
             return results
 
-        authserv_id = _ascii_lower(results.authserv_id or "")
+        authserv_id = ascii_lower(results.authserv_id or "")
         if authserv_id != trusted_id:
             logger.warning(
                 "First Authentication-Results header is from untrusted "
@@ -336,69 +411,4 @@ class SenderAuthenticator:
             "X-MS-Exchange-Organization-AuthAs is %.100r (expected Internal)",
             auth_as,
         )
-        return False
-
-
-class SenderAuthorizer:
-    """Checks whether an authenticated sender is allowed.
-
-    Supports a list of authorized sender patterns:
-    - Exact email addresses: ``user@example.com``
-    - Domain wildcards: ``*@example.com`` (matches any user at that domain)
-
-    All comparisons are case-insensitive.
-
-    Attributes:
-        patterns: List of lowercase (pattern, is_wildcard) tuples; a
-            wildcard's pattern is its domain.
-    """
-
-    def __init__(self, authorized_senders: list[str]) -> None:
-        """Initialize authorizer.
-
-        Args:
-            authorized_senders: List of email patterns allowed to send
-                commands.  Supports wildcards like ``*@domain.com``.
-        """
-        self.patterns: list[tuple[str, bool]] = []
-        for pattern in authorized_senders:
-            lower = pattern.lower()
-            if lower.startswith("*@"):
-                # Domain wildcard: store the domain (e.g., "example.com")
-                self.patterns.append((lower[2:], True))
-            else:
-                # Exact match
-                self.patterns.append((lower, False))
-        logger.debug(
-            "Initialized sender authorizer for %d patterns: %s",
-            len(self.patterns),
-            authorized_senders,
-        )
-
-    def is_authorized(self, sender: str) -> bool:
-        """Check if sender is authorized.
-
-        Args:
-            sender: Lowercase email address (as returned by
-                ``SenderAuthenticator.authenticate``).
-
-        Returns:
-            True if sender matches any authorized pattern.
-        """
-        domain = sender.rpartition("@")[2]
-        for pattern, is_wildcard in self.patterns:
-            if is_wildcard:
-                # Domain wildcard: the sender's domain must be exactly it
-                if domain == pattern:
-                    logger.debug(
-                        "Sender %s authorized (pattern: *@%s)", sender, pattern
-                    )
-                    return True
-            else:
-                # Exact match
-                if sender == pattern:
-                    logger.debug("Sender %s authorized (exact match)", sender)
-                    return True
-
-        logger.warning("Unauthorized sender: %s", sender)
         return False

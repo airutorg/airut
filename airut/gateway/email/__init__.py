@@ -9,11 +9,12 @@ Provides email-specific protocol handling:
 - EmailChannelAdapter: ChannelAdapter implementation for email
 - EmailListener: IMAP polling/IDLE listener
 - EmailResponder: SMTP reply construction
-- SenderAuthenticator: DMARC verification
+- SenderAuthenticator: DMARC and DKIM verification
 - SenderAuthorizer: Sender allowlist checking
 - Email MIME parsing and attachment extraction
 """
 
+from airut.gateway.email.authorization import SenderAuthorizer
 from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
@@ -38,7 +39,6 @@ from airut.gateway.email.responder import (
 from airut.gateway.email.security import (
     SecurityValidationError,
     SenderAuthenticator,
-    SenderAuthorizer,
 )
 
 

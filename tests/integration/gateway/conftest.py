@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.request
 from collections.abc import Callable, Generator
+from email import message_from_bytes
 from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -32,6 +33,8 @@ import pytest
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+
+from tests import dkim_signing
 
 from .environment import IntegrationEnvironment
 
@@ -135,7 +138,7 @@ def integration_env(tmp_path: Path) -> Generator[IntegrationEnvironment]:
 
 
 @pytest.fixture
-def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
+def create_email() -> Callable[..., Message]:
     """Factory fixture for creating test email messages.
 
     Returns a function that creates email messages with the specified
@@ -161,7 +164,8 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
         references: list[str] | None = None,
         attachments: list[tuple[str, bytes, str]] | None = None,
         authentication_results: str | None = None,
-    ) -> MIMEMultipart | MIMEText:
+        dkim_signed: bool = True,
+    ) -> Message:
         """Create a test email message.
 
         Args:
@@ -174,8 +178,10 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
             references: References header values for threading.
             attachments: List of (filename, content, mimetype) tuples.
             authentication_results: Authentication-Results header value
-                (empty for none).  Defaults to the DMARC pass the mail
-                server would record for the sender's domain.
+                (empty for none).  Defaults to the DKIM and DMARC passes
+                the mail server would record for the sender's domain.
+            dkim_signed: Sign the message as the sender's domain with
+                the test key (see ``tests/dkim_signing.py``).
 
         Returns:
             Email message ready for injection into test server.
@@ -203,21 +209,27 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
         msg["Message-ID"] = (
             message_id or f"<test-{int(time.time() * 1000)}@test.local>"
         )
-        if authentication_results is None:
-            domain = parseaddr(sender)[1].rpartition("@")[2]
-            authentication_results = (
-                f"test.local; dmarc=pass header.from={domain}; spf=pass"
-            )
-        if authentication_results:
-            msg["Authentication-Results"] = authentication_results
-
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
 
         if references:
             msg["References"] = " ".join(references)
 
-        return msg
+        # As delivered: signed by the sender's domain, then with the
+        # receiving server's Authentication-Results on top.
+        domain = parseaddr(sender)[1].rpartition("@")[2]
+        raw = msg.as_bytes()
+        if dkim_signed:
+            raw = dkim_signing.sign(raw, domain)
+        if authentication_results is None:
+            authentication_results = (
+                f"test.local; dkim=pass header.d={domain};"
+                f" dmarc=pass header.from={domain}; spf=pass"
+            )
+        if authentication_results:
+            header = f"Authentication-Results: {authentication_results}\n"
+            raw = header.encode() + raw
+        return message_from_bytes(raw)
 
     return _create
 
