@@ -18,6 +18,7 @@ simultaneously for the same repository.
 - [DKIM Requirements](#dkim-requirements)
   - [Checking a Sender's Signature](#checking-a-senders-signature)
   - [DNS for DKIM Keys](#dns-for-dkim-keys)
+- [Channel Recipient](#channel-recipient)
 - [Authorization](#authorization)
 - [IMAP Configuration](#imap-configuration)
 - [Attachment Size Limit](#attachment-size-limit)
@@ -26,6 +27,7 @@ simultaneously for the same repository.
   - [IMAP Connection Issues](#imap-connection-issues)
   - [DMARC Failures](#dmarc-failures)
   - [DKIM Failures](#dkim-failures)
+  - [Messages Rejected as Not Addressed to the Channel](#messages-rejected-as-not-addressed-to-the-channel)
   - [Replies Start a New Conversation](#replies-start-a-new-conversation)
   - [Emails Not Being Processed](#emails-not-being-processed)
   - [Model Hint Not Working](#model-hint-not-working)
@@ -251,11 +253,11 @@ Microsoft 365 Safe Links or disclaimers), and `none` only for senders whose
 provider does not sign with their own domain.
 
 With `both` or `airut`, Airut acts only on the header fields the signature
-covers, and treats an unsigned `Subject`, `To`, `Message-ID`, `In-Reply-To` or
-`References` as absent. Gmail signs all of these. Microsoft 365 and Outlook.com
-sign `Subject` and `Message-ID` but not `To` or the threading fields: their
-senders' replies continue a conversation through the `[ID:...]` tag in the
-subject, and a `+model` address gives them no model hint.
+covers, and treats an unsigned `Subject`, `To`, `Cc`, `Message-ID`,
+`In-Reply-To` or `References` as absent. Gmail signs all of these. Microsoft 365
+and Outlook.com sign `Subject` and `Message-ID` but not `To` or the threading
+fields: their senders' replies continue a conversation through the `[ID:...]`
+tag in the subject, and a `+model` address gives them no model hint.
 
 ### Checking a Sender's Signature
 
@@ -285,6 +287,18 @@ the host at it. Note:
 - `network.upstream_dns` (see [network-sandbox.md](network-sandbox.md)) is the
   resolver for sandboxed containers' traffic; it does not apply to these
   lookups.
+
+## Channel Recipient
+
+By default (`auth.require_channel_recipient: true`) Airut acts on a message only
+if its `To` or `Cc` names the channel — the `account.from` address, or the
+`account.username` when that is an address, with any `+tag` ignored. This keeps
+a signed message its sender addressed to someone else from being taken as a
+request. With `both` or `airut`, `To` and `Cc` count only if the sender's
+signature covers them; with `server` or `none` they are read as received. Set
+the option to `false` if senders reach the channel by `Bcc`, an alias, a group
+address or forwarding, or, with `both` or `airut`, if their provider does not
+sign `To` (Microsoft 365 and Outlook.com do not).
 
 ## Authorization
 
@@ -406,6 +420,19 @@ openssl s_client -connect mail.example.com:993
 #    the key lookup failed (check the host's DNS)
 ```
 
+### Messages Rejected as Not Addressed to the Channel
+
+```bash
+# Symptom: Emails rejected ("not addressed to this channel")
+
+# Check:
+# 1. The message's To or Cc names the account.from address (or the username)
+# 2. With dkim_verification both or airut: the sender's DKIM-Signature h= tag
+#    lists To (and Cc, if the channel is in Cc)
+# 3. Senders who Bcc the channel or use an alias: set
+#    auth.require_channel_recipient: false
+```
+
 ### Replies Start a New Conversation
 
 ```bash
@@ -435,4 +462,6 @@ journalctl --user -u airut | grep -i "imap\|email"
 Model hints via subaddressing (`airut+opus@`) require that your email provider
 delivers subaddressed mail to the base address. Most providers support this by
 default (Gmail, Fastmail, M365). Some self-hosted servers need explicit
-configuration.
+configuration. With `dkim_verification` `both` or `airut`, the hint is read from
+`To` only if the sender's signature covers it (see
+[DKIM Requirements](#dkim-requirements)).

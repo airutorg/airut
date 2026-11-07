@@ -284,6 +284,8 @@ EmailListener (poll or IDLE)
     ├──▶ SenderAuthenticator (Airut's own DKIM check; keeps only the
     │      header fields the signature covers)
     │
+    ├──▶ Recipient check (To or Cc names the channel)
+    │
     ├──▶ Parse MIME body, strip quotes, decode attachments
     │
     ├──▶ Extract conversation ID from headers or subject [ID:...]

@@ -5,6 +5,7 @@
 
 """Tests for EmailChannelAdapter."""
 
+import logging
 from dataclasses import replace
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -258,8 +259,13 @@ class TestAuthenticateAndParse:
         )
 
     def test_reads_only_the_verified_header_fields(self) -> None:
-        """Fields the signature does not cover are as if absent."""
-        adapter, auth, authz, _ = _make_adapter()
+        """Fields the signature does not cover are as if absent.
+
+        (An absent To is accepted only without the recipient check.)
+        """
+        cfg = _make_config()
+        auth_cfg = replace(cfg.auth, require_channel_recipient=False)
+        adapter, auth, authz, _ = _make_adapter(replace(cfg, auth=auth_cfg))
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
         msg = _make_raw_message(
@@ -284,6 +290,80 @@ class TestAuthenticateAndParse:
         assert result.original_references == []
         assert result.body == "Do something"
         assert result._raw_messages == [msg.content.message]
+
+    @pytest.mark.parametrize(
+        "to",
+        ["bot@example.com", "Bot <bot+opus@example.com>", "test@example.com"],
+    )
+    def test_addressed_to_channel_accepted(self, to: str) -> None:
+        """To names the from_address (any +tag) or the username."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+
+        result = adapter.authenticate_and_parse(_make_raw_message(to=to))
+
+        assert result.sender == "user@example.com"
+
+    def test_not_addressed_to_channel_raises(self) -> None:
+        from airut.gateway.channel import AuthenticationError
+
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(to="someone@example.org")
+
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(msg)
+        assert exc_info.value.reason == "not addressed to this channel"
+
+    def test_recipient_read_from_verified_fields(self) -> None:
+        """A To the signature does not cover does not count."""
+        from airut.gateway.channel import AuthenticationError
+
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message()
+        auth.verified_headers.side_effect = None
+        auth.verified_headers.return_value = msg.content.signed_headers(
+            ["from"]
+        )
+
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(msg)
+        assert exc_info.value.reason == "not addressed to this channel"
+
+    def test_no_channel_address_warned_at_start(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg = _make_config()
+        account = replace(cfg.account, username="bot", from_address="Bot")
+        with caplog.at_level(logging.WARNING):
+            _make_adapter(replace(cfg, account=account))
+        assert "hold no address to look for in To and Cc" in caplog.text
+
+    def test_no_warning_with_the_check_off(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg = _make_config()
+        account = replace(cfg.account, username="bot", from_address="Bot")
+        auth_cfg = replace(cfg.auth, require_channel_recipient=False)
+        with caplog.at_level(logging.WARNING):
+            _make_adapter(replace(cfg, account=account, auth=auth_cfg))
+        assert caplog.text == ""
+
+    def test_recipient_check_can_be_turned_off(self) -> None:
+        cfg = _make_config()
+        auth_cfg = replace(cfg.auth, require_channel_recipient=False)
+        adapter, auth, authz, _ = _make_adapter(replace(cfg, auth=auth_cfg))
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+
+        msg = _make_raw_message(to="someone@example.org")
+        result = adapter.authenticate_and_parse(msg)
+
+        assert result.sender == "user@example.com"
 
     def test_unauthorized_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError

@@ -899,6 +899,36 @@ def test_dkim_verification_unknown_mode_rejected() -> None:
         )
 
 
+def test_require_channel_recipient_defaults_to_on(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+    email_ch = (
+        ServerConfig.from_yaml(yaml_path).value.repos["test"].channels["email"]
+    )
+    assert isinstance(email_ch, EmailChannelConfig)
+    assert email_ch.auth.require_channel_recipient is True
+
+
+def test_require_channel_recipient_from_yaml(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        _MINIMAL_YAML.format(repo_url=master_repo).replace(
+            "        trusted_authserv_id: mx.test.com\n",
+            "        trusted_authserv_id: mx.test.com\n"
+            "        require_channel_recipient: false\n",
+        )
+    )
+    email_ch = (
+        ServerConfig.from_yaml(yaml_path).value.repos["test"].channels["email"]
+    )
+    assert isinstance(email_ch, EmailChannelConfig)
+    assert email_ch.auth.require_channel_recipient is False
+
+
 # ---------------------------------------------------------------------------
 # XDG path helpers
 # ---------------------------------------------------------------------------
