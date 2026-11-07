@@ -18,6 +18,7 @@ from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
@@ -159,7 +160,7 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
         in_reply_to: str | None = None,
         references: list[str] | None = None,
         attachments: list[tuple[str, bytes, str]] | None = None,
-        authentication_results: str = "test.local; dmarc=pass; spf=pass",
+        authentication_results: str | None = None,
     ) -> MIMEMultipart | MIMEText:
         """Create a test email message.
 
@@ -172,7 +173,9 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
             in_reply_to: In-Reply-To header for threading.
             references: References header values for threading.
             attachments: List of (filename, content, mimetype) tuples.
-            authentication_results: Authentication-Results header value.
+            authentication_results: Authentication-Results header value
+                (empty for none).  Defaults to the DMARC pass the mail
+                server would record for the sender's domain.
 
         Returns:
             Email message ready for injection into test server.
@@ -200,6 +203,11 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
         msg["Message-ID"] = (
             message_id or f"<test-{int(time.time() * 1000)}@test.local>"
         )
+        if authentication_results is None:
+            domain = parseaddr(sender)[1].rpartition("@")[2]
+            authentication_results = (
+                f"test.local; dmarc=pass header.from={domain}; spf=pass"
+            )
         if authentication_results:
             msg["Authentication-Results"] = authentication_results
 

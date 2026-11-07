@@ -163,9 +163,14 @@ class TestEndToEndFlow:
         )
         authorizer = SenderAuthorizer(email_channel.auth.authorized_senders)
 
-        # Modify message to have unauthorized sender
+        # Modify message to have unauthorized sender, with the DMARC
+        # pass the mail server would record for its domain
         email_msg = sample_email_message.content
         email_msg.replace_header("From", "hacker@evil.com")
+        email_msg.replace_header(
+            "Authentication-Results",
+            "mx.example.com; dmarc=pass header.from=evil.com",
+        )
 
         # Should authenticate (DMARC passes) but not authorize
         sender = authenticator.authenticate(email_msg)
@@ -211,7 +216,9 @@ class TestEndToEndFlow:
         msg["To"] = "claude@example.com"
         msg["Subject"] = "Please process this file"
         msg["Message-ID"] = "<attach123@example.com>"
-        msg["Authentication-Results"] = "mx.example.com; dmarc=pass; spf=pass"
+        msg["Authentication-Results"] = (
+            "mx.example.com; dmarc=pass header.from=example.com; spf=pass"
+        )
 
         # Add body
         body = MIMEText("Please review the attached document.", "plain")
@@ -2087,7 +2094,8 @@ class TestUnauthorizedSenderTracking:
             b"To: claude@example.com\r\n"
             b"Subject: Please do something\r\n"
             b"Message-ID: <unauth@example.com>\r\n"
-            b"Authentication-Results: mx.example.com; dmarc=pass\r\n"
+            b"Authentication-Results: mx.example.com; dmarc=pass"
+            b" header.from=malicious.com\r\n"
             b"\r\n"
             b"I want access.\r\n"
         )

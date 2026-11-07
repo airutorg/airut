@@ -128,8 +128,12 @@ prevents spoofed emails from triggering code execution.
 The authentication flow validates the `From` header against
 `Authentication-Results` headers from the configured `auth.trusted_authserv_id`
 (your mail server). Only the first (topmost) header is examined — lower headers
-may be attacker-injected. After authentication, the sender is checked against
-the per-repo `auth.authorized_senders` allowlist.
+may be attacker-injected. That header is parsed as RFC 8601 defines it, never
+searched: values in it come from the sender and may contain any text. It must
+hold exactly one `dmarc` entry, with result `pass` for the From address's
+domain. The `From` header must name exactly one mailbox, and replies go only to
+that address. After authentication, the sender is checked against the per-repo
+`auth.authorized_senders` allowlist.
 
 Both layers must pass. A valid DMARC pass from an unauthorized sender is
 rejected.

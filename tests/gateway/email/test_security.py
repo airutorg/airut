@@ -18,12 +18,11 @@ from airut.gateway.email.security import (
 )
 
 
-# ---------------------------------------------------------------------------
-# _extract_email unit tests
-# ---------------------------------------------------------------------------
-
 TRUSTED = "mx.example.com"
 AUTHORIZED = "authorized@example.com"
+
+#: A DMARC pass for AUTHORIZED's domain.
+DMARC_PASS = "dmarc=pass header.from=example.com"
 
 
 def _msg(
@@ -40,6 +39,11 @@ def _msg(
         else:
             msg["Authentication-Results"] = auth_results
     return msg
+
+
+# ---------------------------------------------------------------------------
+# _extract_email unit tests
+# ---------------------------------------------------------------------------
 
 
 class TestExtractEmail:
@@ -73,9 +77,13 @@ class TestExtractEmail:
         """Multiple angle brackets are rejected (injection attempt)."""
         assert _extract_email("Evil <evil@x.com> <good@x.com>") is None
 
-    def test_display_name_contains_email(self):
-        """Display name with email should extract angle bracket content."""
-        assert _extract_email("good@x.com <evil@x.com>") == "evil@x.com"
+    def test_unquoted_address_as_display_name_rejected(self):
+        """An unquoted address is not a valid display name."""
+        assert _extract_email("good@x.com <evil@x.com>") is None
+
+    def test_quoted_address_as_display_name(self):
+        """A quoted display name may look like an address."""
+        assert _extract_email('"good@x.com" <evil@x.com>') == "evil@x.com"
 
     def test_gt_before_lt(self):
         assert _extract_email(">user@x.com<") is None
@@ -95,7 +103,7 @@ class TestAuthenticate:
 
     def test_valid_dmarc(self):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass; spf=fail")
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}; spf=fail")
         assert auth.authenticate(msg) == AUTHORIZED
 
     def test_dmarc_fail(self):
@@ -111,14 +119,14 @@ class TestAuthenticate:
     def test_missing_from_header(self):
         auth = SenderAuthenticator(TRUSTED)
         msg = Message()
-        msg["Authentication-Results"] = f"{TRUSTED}; dmarc=pass"
+        msg["Authentication-Results"] = f"{TRUSTED}; {DMARC_PASS}"
         assert auth.authenticate(msg) is None
 
     def test_returns_lowercase_email(self):
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             from_addr="USER@EXAMPLE.COM",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) == "user@example.com"
 
@@ -126,7 +134,7 @@ class TestAuthenticate:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             from_addr="User <authorized@example.com>",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) == AUTHORIZED
 
@@ -134,7 +142,7 @@ class TestAuthenticate:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             from_addr="Evil <a@x.com> <b@x.com>",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) is None
 
@@ -142,7 +150,7 @@ class TestAuthenticate:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             from_addr="User <>",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) is None
 
@@ -164,7 +172,7 @@ class TestSPFAloneInsufficient:
     def test_dmarc_pass_spf_fail_accepted(self):
         """DMARC pass is sufficient even when SPF fails."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass; spf=fail")
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}; spf=fail")
         assert auth.authenticate(msg) == AUTHORIZED
 
 
@@ -178,12 +186,12 @@ class TestFirstHeaderAuthservId:
     def test_untrusted_first_header_rejects(self):
         """First header from untrusted server — reject immediately."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results="fake.server.com; dmarc=pass")
+        msg = _msg(auth_results=f"fake.server.com; {DMARC_PASS}")
         assert auth.authenticate(msg) is None
 
     def test_trusted_first_header_accepted(self):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass")
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}")
         assert auth.authenticate(msg) == AUTHORIZED
 
     def test_untrusted_first_then_trusted_second_rejected(self):
@@ -192,7 +200,7 @@ class TestFirstHeaderAuthservId:
         msg = _msg(
             auth_results=[
                 "untrusted.com; dmarc=fail",
-                f"{TRUSTED}; dmarc=pass",
+                f"{TRUSTED}; {DMARC_PASS}",
             ]
         )
         assert auth.authenticate(msg) is None
@@ -202,8 +210,8 @@ class TestFirstHeaderAuthservId:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             auth_results=[
-                "untrusted.com; dmarc=pass",
-                f"{TRUSTED}; dmarc=pass",
+                f"untrusted.com; {DMARC_PASS}",
+                f"{TRUSTED}; {DMARC_PASS}",
             ]
         )
         assert auth.authenticate(msg) is None
@@ -211,13 +219,13 @@ class TestFirstHeaderAuthservId:
     def test_authserv_id_case_insensitive(self):
         """Authserv-id comparison is case-insensitive."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results="MX.EXAMPLE.COM; dmarc=pass")
+        msg = _msg(auth_results=f"MX.EXAMPLE.COM; {DMARC_PASS}")
         assert auth.authenticate(msg) == AUTHORIZED
 
     def test_no_semicolon_in_header(self):
         """Malformed first header without semicolon is rejected."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results="mx.example.com dmarc=pass")
+        msg = _msg(auth_results=f"mx.example.com {DMARC_PASS}")
         assert auth.authenticate(msg) is None
 
     def test_trusted_first_fails_second_trusted_passes_rejected(self):
@@ -232,7 +240,7 @@ class TestFirstHeaderAuthservId:
         msg = _msg(
             auth_results=[
                 f"{TRUSTED}; dmarc=fail",
-                f"{TRUSTED}; dmarc=pass",
+                f"{TRUSTED}; {DMARC_PASS}",
             ]
         )
         assert auth.authenticate(msg) is None
@@ -242,7 +250,7 @@ class TestFirstHeaderAuthservId:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             auth_results=[
-                f"{TRUSTED}; dmarc=pass",
+                f"{TRUSTED}; {DMARC_PASS}",
                 f"{TRUSTED}; dmarc=fail",
             ]
         )
@@ -254,7 +262,7 @@ class TestFirstHeaderAuthservId:
         msg = _msg(
             auth_results=[
                 f"{TRUSTED}; spf=pass",
-                f"{TRUSTED}; dmarc=pass",
+                f"{TRUSTED}; {DMARC_PASS}",
             ]
         )
         assert auth.authenticate(msg) is None
@@ -265,7 +273,7 @@ class TestAuthservIdMismatchLogging:
 
     def test_logs_header_on_mismatch(self, caplog: pytest.LogCaptureFixture):
         """Warning includes actual header so misconfigurations are obvious."""
-        header = "wrong.server.com; dmarc=pass; spf=pass"
+        header = f"wrong.server.com; {DMARC_PASS}; spf=pass"
         msg = _msg(auth_results=header)
         with caplog.at_level(
             logging.WARNING, logger="airut.gateway.email.security"
@@ -330,8 +338,14 @@ class TestEmptyAuthservId:
         )
         assert auth.authenticate(msg) is None
 
-    def test_empty_authserv_id_no_semicolon(self):
-        """Malformed header without semicolon is still rejected."""
+    def test_empty_authserv_id_single_entry(self):
+        """A header that is a single entry needs no semicolon."""
+        auth = SenderAuthenticator("")
+        msg = _msg(auth_results=DMARC_PASS)
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_empty_authserv_id_missing_header_from(self):
+        """Microsoft mode still requires header.from."""
         auth = SenderAuthenticator("")
         msg = _msg(auth_results="dmarc=pass")
         assert auth.authenticate(msg) is None
@@ -392,7 +406,7 @@ class TestInternalAuthFallback:
     def test_auth_results_present_dmarc_pass(self):
         """DMARC pass takes precedence over internal fallback."""
         auth = SenderAuthenticator(TRUSTED, allow_internal_auth_fallback=True)
-        msg = self._internal_msg(auth_results=f"{TRUSTED}; dmarc=pass")
+        msg = self._internal_msg(auth_results=f"{TRUSTED}; {DMARC_PASS}")
         assert auth.authenticate(msg) == AUTHORIZED
 
     def test_auth_as_anonymous_rejected(self):
@@ -436,12 +450,12 @@ class TestSubstringMatchBypass:
 
     def test_prefix_dmarc_should_not_match(self):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; notdmarc=pass")
+        msg = _msg(auth_results=f"{TRUSTED}; not{DMARC_PASS}")
         assert auth.authenticate(msg) is None
 
     def test_dmarc_pass_with_parenthetical(self):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass (p=NONE); spf=fail")
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS} (p=NONE); spf=fail")
         assert auth.authenticate(msg) == AUTHORIZED
 
 
@@ -450,7 +464,9 @@ class TestDmarcCaseInsensitive:
 
     def test_uppercase_dmarc_pass(self):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; DMARC=PASS; SPF=FAIL")
+        msg = _msg(
+            auth_results=f"{TRUSTED}; DMARC=Pass Header.From=EXAMPLE.com"
+        )
         assert auth.authenticate(msg) == AUTHORIZED
 
 
@@ -481,16 +497,31 @@ class TestComplexAuthHeader:
 class TestHeaderObfuscation:
     """RFC comment injection and folding edge cases."""
 
-    def test_dmarc_pass_with_rfc_comment_rejected(self):
-        """RFC comments in header values must not bypass strict matching."""
+    def test_comment_between_tokens_is_whitespace(self):
+        """RFC 8601 allows comments between any two tokens."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=(checking)pass")
+        msg = _msg(
+            auth_results=(
+                f"{TRUSTED}; dmarc=(checking)pass (p=reject)"
+                " header.from=(x)example.com"
+            )
+        )
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_dmarc_pass_inside_comment_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=(
+                f"{TRUSTED}; spf=pass (dmarc=pass header.from=example.com)"
+                " smtp.mailfrom=example.com; dmarc=fail header.from=example.com"
+            )
+        )
         assert auth.authenticate(msg) is None
 
     def test_folded_auth_results_header(self):
-        """Folded (multi-line) headers are unfolded by Python's email lib."""
+        """A folded (multi-line) header parses like an unfolded one."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED};\r\n dmarc=pass")
+        msg = _msg(auth_results=f"{TRUSTED};\r\n {DMARC_PASS}")
         assert auth.authenticate(msg) == AUTHORIZED
 
 
@@ -502,7 +533,7 @@ class TestEncodedHeaders:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             from_addr="=?UTF-8?q?SAFE?= <authorized@example.com>",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) == AUTHORIZED
 
@@ -511,7 +542,7 @@ class TestEncodedHeaders:
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             from_addr="=?UTF-8?q?authorized=40example=2Ecom?=",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
         assert auth.authenticate(msg) is None
 
@@ -522,7 +553,7 @@ class TestDuplicateFromHeaders:
     def test_multiple_from_headers_rejected(self):
         """Ambiguous sender identity must be rejected."""
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass")
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}")
         msg["From"] = "attacker@evil.com"  # adds second From header
         assert auth.authenticate(msg) is None
 
@@ -530,7 +561,7 @@ class TestDuplicateFromHeaders:
         """Missing From header must be rejected."""
         auth = SenderAuthenticator(TRUSTED)
         msg = Message()
-        msg["Authentication-Results"] = f"{TRUSTED}; dmarc=pass"
+        msg["Authentication-Results"] = f"{TRUSTED}; {DMARC_PASS}"
         assert auth.authenticate(msg) is None
 
 
@@ -543,7 +574,8 @@ class TestBodyHeaderInjection:
             b"To: gateway@example.com\r\n"
             b"Authentication-Results: mx.example.com; dmarc=fail\r\n"
             b"\r\n"
-            b"Authentication-Results: mx.example.com; dmarc=pass\r\n"
+            b"Authentication-Results: mx.example.com; dmarc=pass"
+            b" header.from=hacker.com\r\n"
             b"Please process this.\r\n"
         )
         msg = BytesParser().parsebytes(raw)
@@ -555,7 +587,8 @@ class TestBodyHeaderInjection:
             b"From: authorized@example.com\r\n"
             b"Authentication-Results: mx.example.com; dmarc=fail\r\n"
             b"\r\n"
-            b"Authentication-Results: mx.example.com; dmarc=pass\r\n"
+            b"Authentication-Results: mx.example.com; dmarc=pass"
+            b" header.from=example.com\r\n"
         )
         msg = BytesParser().parsebytes(raw)
         auth = SenderAuthenticator(TRUSTED)
@@ -564,7 +597,8 @@ class TestBodyHeaderInjection:
     def test_from_header_in_body_does_not_override(self):
         raw = (
             b"From: evil@hacker.com\r\n"
-            b"Authentication-Results: mx.example.com; dmarc=pass\r\n"
+            b"Authentication-Results: mx.example.com; dmarc=pass"
+            b" header.from=hacker.com\r\n"
             b"\r\n"
             b"From: authorized@example.com\r\n"
         )
@@ -572,6 +606,251 @@ class TestBodyHeaderInjection:
         auth = SenderAuthenticator(TRUSTED)
         # Authenticates as evil@hacker.com (from the real header)
         assert auth.authenticate(msg) == "evil@hacker.com"
+
+
+class TestDmarcEntry:
+    """Exactly one dmarc entry, a pass for the From domain, is required."""
+
+    def test_header_from_must_match_from_domain(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass header.from=other.com")
+        assert auth.authenticate(msg) is None
+
+    def test_header_from_parent_domain_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            from_addr="user@sub.example.com",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_header_from_missing_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass")
+        assert auth.authenticate(msg) is None
+
+    def test_two_header_from_values_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=f"{TRUSTED}; {DMARC_PASS} header.from=example.com"
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_two_dmarc_entries_rejected(self):
+        """A second entry means one was injected; neither is trusted."""
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}; {DMARC_PASS}")
+        assert auth.authenticate(msg) is None
+
+    def test_injected_pass_beside_real_fail_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=(
+                f"{TRUSTED}; {DMARC_PASS}; dmarc=fail header.from=example.com"
+            )
+        )
+        assert auth.authenticate(msg) is None
+
+    @pytest.mark.parametrize(
+        "result", ["fail", "none", "temperror", "permerror", "bestguesspass"]
+    )
+    def test_other_results_rejected(self, result: str):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=f"{TRUSTED}; dmarc={result} header.from=example.com"
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_authserv_id_with_version(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=f"{TRUSTED} 1; {DMARC_PASS}")
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_malformed_header_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=f'{TRUSTED}; {DMARC_PASS} reason="unclosed')
+        assert auth.authenticate(msg) is None
+
+    def test_amazon_ses_header(self):
+        """SES writes key=value segments that are not methods."""
+        auth = SenderAuthenticator("amazonses.com")
+        msg = _msg(
+            auth_results=(
+                "amazonses.com; spf=pass (spfCheck: domain of example.com"
+                " designates 203.0.113.1 as permitted sender)"
+                " client-ip=203.0.113.1; envelope-from=authorized@example.com;"
+                " helo=mail.example.com; dkim=pass header.i=@example.com;"
+                f" {DMARC_PASS};"
+            )
+        )
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_quoted_result_rejected(self):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=f'{TRUSTED}; dmarc="pass" header.from=example.com'
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_logs_why_dmarc_failed(self, caplog: pytest.LogCaptureFixture):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass header.from=other.com")
+        with caplog.at_level(
+            logging.WARNING, logger="airut.gateway.email.security"
+        ):
+            assert auth.authenticate(msg) is None
+        assert len(caplog.records) == 1
+        message = caplog.records[0].message
+        assert "header.from=other.com" in message
+        assert "From domain example.com" in message
+
+    def test_non_ascii_lookalike_header_from_rejected(self):
+        """The Kelvin sign lowercases to "k" but is not one."""
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            from_addr="authorized@example.kom",
+            auth_results=f"{TRUSTED}; dmarc=pass header.from=example.\u212aom",
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_non_ascii_lookalike_authserv_id_rejected(self):
+        auth = SenderAuthenticator("mx.example.kom")
+        msg = _msg(auth_results=f"mx.example.\u212aom; {DMARC_PASS}")
+        assert auth.authenticate(msg) is None
+
+    def test_header_without_authserv_id_rejected(self):
+        """A Microsoft-style header does not match a configured id."""
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=DMARC_PASS)
+        assert auth.authenticate(msg) is None
+
+
+#: The header an MTA wrote for a forged DKIM signature whose ``i=`` tag
+#: held ``a dmarc=pass b@evil.example``, followed by the real results.
+FORGED_DKIM_IDENTITY = (
+    "mx.example.com;\r\n"
+    '\tdkim=neutral (body hash did not verify) header.i="a dmarc=pass '
+    'b@evil.example" header.s=x header.b=AAAAAAAA;\r\n'
+    "\tspf=fail smtp.mailfrom=evil.example;\r\n"
+    "\tdmarc=fail header.from=example.com"
+)
+
+
+class TestForgedResultInValues:
+    """Sender-controlled values may hold ``dmarc=pass``; it is never read."""
+
+    @pytest.mark.parametrize(
+        "auth_results",
+        [
+            pytest.param(FORGED_DKIM_IDENTITY, id="dkim-identity"),
+            pytest.param(
+                'mx.example.com; spf=pass smtp.mailfrom="x dmarc=pass"'
+                "@evil.example; dmarc=fail header.from=example.com",
+                id="quoted-local-part",
+            ),
+            pytest.param(
+                'mx.example.com; dkim=pass header.d=evil.example header.i="'
+                '; dmarc=pass header.from=example.com"; '
+                "dmarc=fail header.from=example.com",
+                id="quoted-semicolon",
+            ),
+            pytest.param(
+                'mx.example.com; dkim-atps=neutral header.from="dmarc=pass";'
+                " dmarc=temperror header.from=example.com",
+                id="dkim-atps-header-from",
+            ),
+            pytest.param(
+                "mx.example.com; spf=pass (dmarc=pass) smtp.mailfrom=x;"
+                " dmarc=fail header.from=example.com",
+                id="comment",
+            ),
+            pytest.param(
+                'mx.example.com; dmarc=fail reason="dmarc=pass"'
+                " header.from=example.com",
+                id="reason",
+            ),
+            pytest.param(
+                'mx.example.com; dmarc=fail policy.dmarc="pass"'
+                " header.from=example.com",
+                id="property",
+            ),
+        ],
+    )
+    def test_rejected(self, auth_results: str):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(auth_results=auth_results)
+        assert auth.authenticate(msg) is None
+
+
+class TestFromAddressList:
+    """From must hold exactly one mailbox: replies go to every address."""
+
+    @pytest.mark.parametrize(
+        "from_addr",
+        [
+            "<authorized@example.com>, x@",
+            "<authorized@example.com>, attacker@evil.example",
+            "attacker@evil.example, <authorized@example.com>",
+            "Authorized <authorized@example.com>, attacker@evil.example",
+            "group: authorized@example.com;",
+            "group: authorized@example.com, attacker@evil.example;",
+            "undisclosed-recipients:;",
+            "authorized",
+            "<authorized>",
+            "authorized@example.com <attacker@evil.example>",
+            '"authorized@example.com"@evil.example',
+            "authorized@[192.0.2.1]",
+            "Authorized <authorized@example.com",
+            "authorized..x@example.com",
+            "Doe, John <authorized@example.com>",
+            "Authorized [Company] <authorized@example.com>",
+            "(c):",
+            "(c): authorized@example.com;",
+        ],
+    )
+    def test_rejected(self, from_addr: str):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(from_addr=from_addr, auth_results=f"{TRUSTED}; {DMARC_PASS}")
+        assert auth.authenticate(msg) is None
+
+    @pytest.mark.parametrize(
+        "from_addr",
+        [
+            "authorized@example.com",
+            "Authorized <authorized@example.com>",
+            '"Authorized, User" <authorized@example.com>',
+            "John Q. Public <authorized@example.com>",
+            "authorized@example.com (Authorized)",
+            "Authorized\r\n <authorized@example.com>",
+            "=?utf-8?q?P=C3=BCry?= <authorized@example.com>",
+        ],
+    )
+    def test_accepted(self, from_addr: str):
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(from_addr=from_addr, auth_results=f"{TRUSTED}; {DMARC_PASS}")
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    @pytest.mark.parametrize(
+        "from_header",
+        [
+            "authorized@example.com\nBcc: x@y.com",
+            "Authorized\r\n<authorized@example.com>",
+            "<authorized@example.com\n>",
+        ],
+    )
+    def test_bare_line_break_rejected(self, from_header: str):
+        assert _extract_email(from_header) is None
+
+    def test_raw_8bit_headers(self):
+        """Undecodable 8-bit headers arrive as Header objects."""
+        raw = (
+            "From: Pyry H\u00e4ulos <authorized@example.com>\r\n"
+            f"Authentication-Results: {TRUSTED}; {DMARC_PASS}"
+            " (\u00e4)\r\n\r\n"
+        ).encode()
+        msg = BytesParser().parsebytes(raw)
+        auth = SenderAuthenticator(TRUSTED)
+        assert auth.authenticate(msg) == AUTHORIZED
 
 
 # ---------------------------------------------------------------------------
@@ -635,8 +914,7 @@ class TestAuthorizerMultipleSenders:
 
     def test_wildcard_does_not_match_subdomain(self):
         authz = SenderAuthorizer(["*@company.com"])
-        # "user@sub.company.com" ends with @company.com? No, it ends with .com
-        # Actually @sub.company.com does not end with @company.com
+        # The domain must be exactly company.com
         assert authz.is_authorized("user@sub.company.com") is False
 
     def test_empty_list_rejects_all(self):
@@ -661,7 +939,7 @@ class TestEndToEnd:
     def test_valid_sender_authenticated_and_authorized(self):
         auth = SenderAuthenticator(TRUSTED)
         authz = SenderAuthorizer([AUTHORIZED])
-        msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass")
+        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}")
 
         sender = auth.authenticate(msg)
         assert sender is not None
@@ -672,7 +950,7 @@ class TestEndToEnd:
         authz = SenderAuthorizer([AUTHORIZED])
         msg = _msg(
             from_addr="other@example.com",
-            auth_results=f"{TRUSTED}; dmarc=pass",
+            auth_results=f"{TRUSTED}; {DMARC_PASS}",
         )
 
         sender = auth.authenticate(msg)
@@ -681,7 +959,7 @@ class TestEndToEnd:
 
     def test_unauthenticated_skips_authorization(self):
         auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results="fake.server.com; dmarc=pass")
+        msg = _msg(auth_results=f"fake.server.com; {DMARC_PASS}")
 
         sender = auth.authenticate(msg)
         assert sender is None

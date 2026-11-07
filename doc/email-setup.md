@@ -185,6 +185,14 @@ requires:
 3. **Sender domains must have DMARC configured** — Emails from domains without
    DMARC records will be rejected.
 
+4. **The header's DMARC result must name the From domain** — Airut requires a
+   single `dmarc=pass` entry whose `header.from` is the sender's domain, as
+   Gmail, Microsoft 365 and other common servers write it.
+
+5. **Messages must come from a single, valid address** — A `From` header naming
+   more than one address, a group, or one that is not valid RFC 5322 syntax
+   (such as an unquoted comma or `[ ]` in the display name) is rejected.
+
 ### Verifying DMARC
 
 To check if a sender's domain has DMARC configured:
@@ -291,8 +299,12 @@ openssl s_client -connect mail.example.com:993
 
 # Check:
 # 1. auth.trusted_authserv_id matches your mail server's Authentication-Results header
-# 2. Sender's domain has a DMARC record (dig +short TXT _dmarc.sender.com)
+# 2. Sender's domain has a DMARC record (dig +short TXT _dmarc.example.com)
 # 3. If using M365, set auth.trusted_authserv_id to "" (empty string)
+# 4. The header parses as RFC 8601 defines it (log: "... is malformed")
+# 5. The header's dmarc entry has header.from=<sender's domain>
+# 6. The From header names a single address in valid RFC 5322 syntax
+# The log line explains which check failed.
 ```
 
 ### Emails Not Being Processed

@@ -10,6 +10,7 @@ from collections.abc import Generator, Iterable
 from concurrent.futures import Future
 from contextlib import contextmanager
 from email.parser import BytesParser
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -67,9 +68,18 @@ def make_message(
     body: str = "Hello",
     message_id: str = "<msg1@example.com>",
     references: str = "",
-    auth_results: str = "mx.google.com; dmarc=pass; spf=pass",
+    auth_results: str | None = None,
 ) -> RawMessage:
-    """Build a RawMessage wrapping an email Message for testing."""
+    """Build a RawMessage wrapping an email Message for testing.
+
+    By default the message carries the DMARC pass a mail server would
+    record for the sender's domain.
+    """
+    if auth_results is None:
+        domain = parseaddr(sender)[1].rpartition("@")[2]
+        auth_results = (
+            f"mx.google.com; dmarc=pass header.from={domain}; spf=pass"
+        )
     raw = (
         f"From: {sender}\r\n"
         f"To: {to}\r\n"

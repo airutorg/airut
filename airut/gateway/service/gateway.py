@@ -1393,8 +1393,8 @@ class GatewayService:
             # human-readable identity (e.g. Slack "Name <U123>", or the
             # email From header) — which is more scannable than a bare
             # Slack user ID.  It falls back to sender when no display form
-            # exists, so email behavior is unchanged.  authenticated_sender
-            # keeps the canonical trust anchor.
+            # exists.  authenticated_sender keeps the canonical trust
+            # anchor.
             self.tracker.update_task_display_title(
                 task_id,
                 parsed.display_title or "(no subject)",
