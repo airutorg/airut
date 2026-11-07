@@ -79,10 +79,12 @@ class SenderAuthenticator:
 
     Authentication takes two steps, both of which must pass:
     ``authenticate`` reads the message's headers, including the server's
-    recorded results, and needs no network; ``verify_signature`` is
-    Airut's own DKIM verification, which looks up keys in DNS.  Callers
-    check authorization between the two, so that messages from senders
-    who are not allowed anyway cause no lookups.
+    recorded results, and needs no network; ``verified_headers`` is
+    Airut's own DKIM verification, which looks up keys in DNS, and
+    returns the header fields the signature covers: callers act on
+    those alone.  Callers check authorization between the two steps,
+    so that messages from senders who are not allowed anyway cause no
+    lookups.
 
     A message whose header section parsers may read differently is
     rejected (see ``IncomingEmail.header_section_problem``): they could
@@ -158,7 +160,7 @@ class SenderAuthenticator:
         domain in the trusted Authentication-Results header, and — when
         ``dkim_verification`` is ``server`` or ``both`` — the server's
         recorded DKIM pass.  Airut's own DKIM verification is the second
-        step, ``verify_signature``: a message is authenticated only when
+        step, ``verified_headers``: a message is authenticated only when
         both pass.
 
         When ``allow_internal_auth_fallback`` is enabled and there is no
@@ -213,29 +215,47 @@ class SenderAuthenticator:
         logger.debug("Sender authenticated: %s", sender)
         return sender
 
-    def verify_signature(self, email: IncomingEmail, sender: str) -> bool:
+    def verified_headers(
+        self, email: IncomingEmail, sender: str
+    ) -> Message | None:
         """Verify, in Airut, a DKIM signature vouching for *sender*.
 
         The second step of authentication, for a message ``authenticate``
-        accepted as from *sender*.  Passes without checking when
-        ``dkim_verification`` needs no verification by Airut, and for
-        messages accepted through the internal-auth fallback (which have
-        no ``Authentication-Results`` header).
+        accepted as from *sender*.  Returns the header fields Airut may
+        act on: those the verified signature covers, since the others
+        may have been added or changed after signing.  Passes without
+        checking, returning every field, when ``dkim_verification`` needs
+        no verification by Airut, and for messages accepted through the
+        internal-auth fallback (which have no ``Authentication-Results``
+        header).  Either way the fields come without the body, which
+        callers read from the message itself.
 
         Args:
             email: The email ``authenticate`` accepted.
             sender: The address it returned.
 
         Returns:
-            True if the signature verifies, or none is needed.
+            The header fields to act on (a message with no body), or None
+            if no signature verifies.
         """
         if not self._own_dkim_required:
-            return True
+            return email.headers()
         if self.allow_internal_auth_fallback and not email.message.get_all(
             "Authentication-Results"
         ):
-            return True
-        return self._dkim_verifier.verify(email.raw, sender)
+            return email.headers()
+        fields = self._dkim_verifier.verify(email.raw, sender)
+        if fields is None:
+            return None
+        headers = email.signed_headers(fields)
+        unsigned = {name.lower() for name in email.message.keys()} - {
+            name.lower() for name in headers.keys()
+        }
+        logger.debug(
+            "DKIM: acting only on signed header fields; not signed: %s",
+            ", ".join(sorted(unsigned)) or "(none)",
+        )
+        return headers
 
     def _verify_dmarc(self, results: AuthResults, from_domain: str) -> bool:
         """Verify DMARC pass for *from_domain* in the trusted header.

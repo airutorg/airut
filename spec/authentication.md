@@ -64,7 +64,9 @@ the From domain.
    (see [DKIM Requirement](#dkim-requirement)). The server's recorded result is
    checked here; Airut's own verification runs only after
    [authorization](#authorization-senderauthorizer) has passed, so that messages
-   from senders who are not allowed cause no DNS lookups.
+   from senders who are not allowed cause no DNS lookups. After it, Airut acts
+   only on the header fields the signature covers (see
+   [Signed Header Fields](#signed-header-fields)).
 6. **Return authenticated sender address** (lowercase) on success, `None` on
    failure. This address, not the raw From header, is the conversation's sender:
    replies go to it alone. The raw header is kept for display only.
@@ -139,6 +141,25 @@ the topmost header to be the sender's), cannot stand in for a valid signature.
 
 The [internal-auth fallback](#microsoft-365-internal-mail) involves no DKIM: it
 trusts Exchange's own authentication of internal senders.
+
+### Signed Header Fields
+
+A DKIM signature covers only the header fields its `h=` tag lists — for a name
+listed _n_ times, the last _n_ fields of that name (RFC 6376 §5.4.2). Fields it
+does not cover may have been added or changed after signing. So with `airut` or
+`both`, Airut acts only on the header fields covered by the signature it
+verified: `Subject`, `To`, `Message-ID`, `In-Reply-To` and `References` that the
+signature does not cover are treated as absent. A message whose threading fields
+are not signed starts a new conversation unless its signed `Subject` names one;
+an unsigned `To` gives no model hint; an unsigned `Subject` gives no subject.
+
+The body is read as the message's MIME fields (`MIME-Version`, `Content-Type`,
+`Content-Transfer-Encoding`) say. Signers often leave `Content-Type` unsigned,
+so these need not be signed; the body itself must be, and each MIME field may
+appear only once (see [Verification Flow](#verification-flow)).
+
+With `server` or `none`, and for the internal-auth fallback, Airut verifies no
+signature itself and reads every field.
 
 ### Why Not SPF Alone
 
@@ -300,9 +321,11 @@ SenderAuthorizer.is_authorized(sender)
     |-- Return True/False
     |
     v (if authorized)
-SenderAuthenticator.verify_signature(email, sender)
+SenderAuthenticator.verified_headers(email, sender)
     |-- Airut's own DKIM verification (dkim_verification: airut or both)
+    |-- Return the header fields the signature covers (every field
+    |     without Airut's own verification), or None
     |
     v (if verified)
-Process message
+Process message, reading header fields from those returned
 ```

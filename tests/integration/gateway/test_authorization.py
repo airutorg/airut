@@ -10,6 +10,7 @@ Tests that unauthorized senders are rejected:
 2. No conversation directory created for rejected messages
 3. No response sent for rejected messages
 4. Forged DMARC results and From headers naming others are rejected
+5. Header fields the DKIM signature does not cover are not acted on
 """
 
 import sys
@@ -24,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.dashboard.tracker import CompletionReason, TaskStatus
 
-from .conftest import wait_for_task
+from .conftest import get_message_text, wait_for_task
 from .environment import IntegrationEnvironment
 
 
@@ -383,6 +384,61 @@ class TestForgedSender:
             assert response is not None
             assert response["To"] == "user@test.local"
             assert response["X-RcptTo"] == "user@test.local"
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)
+
+
+class TestUnsignedHeaderFields:
+    """Header fields the DKIM signature does not cover are not acted on."""
+
+    def test_unsigned_in_reply_to_does_not_resume(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+        extract_conversation_id,
+    ) -> None:
+        """A follow-up threaded only by an unsigned field starts anew."""
+        first = create_email(subject="First task", body="Hello")
+        integration_env.email_server.inject_message(first)
+
+        service = integration_env.create_service()
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            ack = integration_env.email_server.wait_for_sent(
+                lambda m: "started working" in get_message_text(m).lower(),
+                timeout=15.0,
+            )
+            assert ack is not None
+            first_id = extract_conversation_id(ack["Subject"])
+            assert first_id is not None
+            assert integration_env.email_server.wait_for_sent(
+                lambda m: (
+                    m is not ack
+                    and "started working" not in get_message_text(m).lower()
+                ),
+                timeout=30.0,
+            )
+            integration_env.email_server.clear_outbox()
+
+            follow_up = create_email(
+                subject="Unrelated subject",
+                body="Hello again",
+                in_reply_to=ack["Message-ID"],
+                references=[ack["Message-ID"]],
+                dkim_headers=("from", "to", "subject", "date", "message-id"),
+            )
+            integration_env.email_server.inject_message(follow_up)
+
+            ack2 = integration_env.email_server.wait_for_sent(
+                lambda m: "started working" in get_message_text(m).lower(),
+                timeout=15.0,
+            )
+            assert ack2 is not None, "Follow-up was not started anew"
+            second_id = extract_conversation_id(ack2["Subject"])
+            assert second_id not in (None, first_id)
         finally:
             service.stop()
             service_thread.join(timeout=10.0)

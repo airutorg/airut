@@ -55,7 +55,7 @@ def lookup() -> _Lookup:
 def _verify(
     raw: bytes, lookup: _Lookup, sender: str = "authorized@example.com"
 ) -> bool:
-    return DkimVerifier(lookup).verify(raw, sender)
+    return DkimVerifier(lookup).verify(raw, sender) is not None
 
 
 class TestVerifier:
@@ -63,6 +63,24 @@ class TestVerifier:
         signed = dkim_signing.sign(MESSAGE, "example.com")
         assert _verify(signed, lookup) is True
         assert lookup.names == [b"test._domainkey.example.com."]
+
+    def test_returns_the_fields_the_signature_covers(self, lookup: _Lookup):
+        """As ``h=`` lists them: lowercase, in order, repeats kept."""
+        signed = dkim_signing.sign(
+            MESSAGE, "example.com", headers=("From", "subject", "from")
+        )
+        fields = DkimVerifier(lookup).verify(signed, "authorized@example.com")
+        assert fields == ("from", "subject", "from")
+
+    def test_returns_the_verifying_signatures_fields(self, lookup: _Lookup):
+        """Not those of a signature that does not verify."""
+        signed = dkim_signing.sign(MESSAGE, "example.com", headers=("from",))
+        broken = dkim_signing.sign(
+            MESSAGE, "example.com", selector="missing", headers=("from", "to")
+        )
+        raw = broken[: broken.index(MESSAGE)] + signed
+        fields = DkimVerifier(lookup).verify(raw, "authorized@example.com")
+        assert fields == ("from",)
 
     def test_signing_domain_case_insensitive(self, lookup: _Lookup):
         signed = dkim_signing.sign(MESSAGE, "Example.COM")
@@ -202,7 +220,7 @@ class TestVerifier:
         record = dkim_signing.public_record() + b"; n=" + b"a" * 1024
         assert len(record) > MAX_KEY_RECORD_BYTES
         verifier = DkimVerifier(lambda name, timeout=5: record)
-        assert verifier.verify(signed, "authorized@example.com") is False
+        assert verifier.verify(signed, "authorized@example.com") is None
 
     def test_key_shorter_than_minimum_refused(self):
         signed = dkim_signing.sign(
@@ -210,7 +228,7 @@ class TestVerifier:
         )
         record = dkim_signing.public_record(dkim_signing.small_key())
         verifier = DkimVerifier(lambda name, timeout=5: record)
-        assert verifier.verify(signed, "authorized@example.com") is False
+        assert verifier.verify(signed, "authorized@example.com") is None
 
     def test_costly_whitespace_in_body_refused(self, lookup: _Lookup):
         body = b"x" + b" " * 20_000 + b"x\r\n"
@@ -227,7 +245,7 @@ class TestVerifier:
         signed = dkim_signing.sign(MESSAGE, "example.com")
         failing = MagicMock(side_effect=RuntimeError("unexpected"))
         verifier = DkimVerifier(failing)
-        assert verifier.verify(signed, "authorized@example.com") is False
+        assert verifier.verify(signed, "authorized@example.com") is None
 
     def test_unreadable_message(self, lookup: _Lookup):
         assert _verify(b"garbage", lookup) is False
@@ -235,7 +253,7 @@ class TestVerifier:
     def test_unusable_key(self):
         signed = dkim_signing.sign(MESSAGE, "example.com")
         verifier = DkimVerifier(lambda name, timeout=5: b"v=DKIM1; p=!!!!")
-        assert verifier.verify(signed, "authorized@example.com") is False
+        assert verifier.verify(signed, "authorized@example.com") is None
 
 
 class TestLookupTxt:

@@ -842,7 +842,7 @@ _SERVER_PASS = "dkim=pass header.d=example.com header.s=test"
 def _accepts(auth: SenderAuthenticator, email: IncomingEmail) -> str | None:
     """Run both steps, as the adapter does (authorization in between)."""
     sender = auth.authenticate(email)
-    if sender is None or not auth.verify_signature(email, sender):
+    if sender is None or auth.verified_headers(email, sender) is None:
         return None
     return sender
 
@@ -923,7 +923,11 @@ class TestDkimVerification:
             "", dkim_verification="both", allow_internal_auth_fallback=True
         )
         raw = b"X-MS-Exchange-Organization-AuthAs: Internal\r\n" + _UNSIGNED
-        assert _accepts(auth, _parse(raw)) == AUTHORIZED
+        email = _parse(raw)
+        assert _accepts(auth, email) == AUTHORIZED
+        headers = auth.verified_headers(email, AUTHORIZED)
+        assert headers is not None
+        assert headers.items() == email.message.items()
 
     def test_fallback_enabled_still_verifies_external_mail(self):
         """With the Microsoft 365 fallback on, Airut still verifies mail.
@@ -931,7 +935,7 @@ class TestDkimVerification:
         That is, mail that has an Authentication-Results header.
         """
         verifier = MagicMock(spec=DkimVerifier)
-        verifier.verify.return_value = False
+        verifier.verify.return_value = None
         auth = SenderAuthenticator(
             "",
             dkim_verification="both",
@@ -939,7 +943,7 @@ class TestDkimVerification:
             dkim_verifier=verifier,
         )
         email = _received(signed=True, server_dkim=_SERVER_PASS)
-        assert auth.verify_signature(email, AUTHORIZED) is False
+        assert auth.verified_headers(email, AUTHORIZED) is None
         verifier.verify.assert_called_once_with(email.raw, AUTHORIZED)
 
     def test_default_verifier_uses_dns(self):
@@ -959,22 +963,70 @@ class TestDkimVerification:
             TRUSTED, dkim_verification=mode, dkim_verifier=verifier
         )
         email = _received(signed=False, server_dkim=_SERVER_PASS)
-        assert auth.verify_signature(email, AUTHORIZED) is True
+        headers = auth.verified_headers(email, AUTHORIZED)
+        assert headers is not None
+        assert headers.items() == email.message.items()
+        assert headers.get_payload() is None
         verifier.verify.assert_not_called()
 
     def test_own_verification_binds_the_sender(self):
         verifier = MagicMock(spec=DkimVerifier)
-        verifier.verify.return_value = True
+        verifier.verify.return_value = ("from",)
         auth = SenderAuthenticator(
             TRUSTED, dkim_verification="airut", dkim_verifier=verifier
         )
         email = _received(signed=True, server_dkim=None)
-        assert auth.verify_signature(email, AUTHORIZED) is True
+        headers = auth.verified_headers(email, AUTHORIZED)
+        assert headers is not None
+        assert headers.items() == [("From", f"Authorized <{AUTHORIZED}>")]
         verifier.verify.assert_called_once_with(email.raw, AUTHORIZED)
 
     def test_unknown_mode_rejected(self):
         with pytest.raises(ValueError, match="dkim_verification"):
             SenderAuthenticator(TRUSTED, dkim_verification="maybe")
+
+
+class TestVerifiedHeaders:
+    """Airut acts only on the header fields its verified signature covers."""
+
+    def _verified(self, raw: bytes, mode: str = "both"):
+        email = _received_raw(raw, server_dkim=_SERVER_PASS)
+        auth = _authenticator(mode)
+        sender = auth.authenticate(email)
+        assert sender == AUTHORIZED
+        return auth.verified_headers(email, sender)
+
+    def test_fields_added_after_signing_left_out(self):
+        signed = dkim_signing.sign(
+            _UNSIGNED, "example.com", headers=("from", "subject")
+        )
+        raw = b"In-Reply-To: <airut.aabbccdd.1@example.org>\r\n" + signed
+        headers = self._verified(raw)
+        assert headers is not None
+        assert headers.items() == [
+            ("From", f"Authorized <{AUTHORIZED}>"),
+            ("Subject", "Hello"),
+        ]
+
+    def test_unsigned_fields_left_out(self):
+        """Such as To, here, and the server's Authentication-Results."""
+        signed = dkim_signing.sign(_UNSIGNED, "example.com", headers=("from",))
+        headers = self._verified(signed)
+        assert headers is not None
+        assert headers.keys() == ["From"]
+
+    @pytest.mark.parametrize("mode", ["server", "none"])
+    def test_every_field_without_own_verification(self, mode: str):
+        signed = dkim_signing.sign(_UNSIGNED, "example.com", headers=("from",))
+        headers = self._verified(signed, mode)
+        assert headers is not None
+        assert headers["To"] == "airut@example.org"
+        assert headers["Authentication-Results"] is not None
+
+    def test_none_when_no_signature_verifies(self):
+        email = _received(signed=False, server_dkim=_SERVER_PASS)
+        auth = _authenticator("both")
+        assert auth.verified_headers(email, AUTHORIZED) is None
 
 
 class TestAmbiguousHeaderSection:

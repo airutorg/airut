@@ -24,7 +24,8 @@ resolver must be one an attacker cannot answer for: see the DNS section
 of ``doc/email-setup.md``.
 
 A signature counts only if the From field it covers is the sender
-Airut authenticated, read the same way.
+Airut authenticated, read the same way.  The verifier reports which
+header fields the signature covers, so that Airut acts on those alone.
 
 Work is bounded whatever the message: at most ``MAX_SIGNATURES``
 signatures by the From domain are tried, and none is verified for a
@@ -181,12 +182,20 @@ def _unsuitable(signature: bytes, domain: str) -> str | None:
         return "algorithm not accepted"
     if b"l" in tags:
         return "covers only part of the body (l=)"
-    signed = [h.strip().lower() for h in tags.get(b"h", b"").split(b":")]
-    if b"from" not in signed:
+    signed = _signed_fields(tags)
+    if "from" not in signed:
         return "does not sign From"
     if len(signed) > MAX_SIGNED_HEADERS:
         return "signs too many header fields"
     return None
+
+
+def _signed_fields(tags: dict[bytes, bytes]) -> tuple[str, ...]:
+    """Return the field names a signature's ``h=`` tag lists, lowercase."""
+    return tuple(
+        name.strip().lower().decode("ascii", "replace")
+        for name in tags.get(b"h", b"").split(b":")
+    )
 
 
 def _whitespace_cost(raw: bytes) -> int:
@@ -236,8 +245,8 @@ class DkimVerifier:
             return None
         return record
 
-    def verify(self, raw: bytes, sender: str) -> bool:
-        """Whether a DKIM signature on *raw* vouches for *sender*.
+    def verify(self, raw: bytes, sender: str) -> tuple[str, ...] | None:
+        """Verify a DKIM signature on *raw* vouching for *sender*.
 
         Only signatures whose ``d=`` is exactly the sender's domain count,
         and only if the From field they cover is *sender*.
@@ -247,7 +256,9 @@ class DkimVerifier:
             sender: The authenticated, lowercase From address.
 
         Returns:
-            True if one of those signatures verifies.
+            The names of the header fields the first of those signatures
+            that verifies covers, lowercase, as its ``h=`` tag lists them
+            (a name may repeat), or None if none verifies.
         """
         domain = sender.rpartition("@")[2]
         # dkimpy parses the sender's message and the signer's key: any
@@ -261,15 +272,15 @@ class DkimVerifier:
             )
         except Exception as e:
             logger.warning("DKIM: cannot read message: %.200s", e)
-            return False
+            return None
         if not self._within_bounds(raw, checker):
-            return False
+            return None
         # The same for every signature, and needs no DNS.
         if _signed_sender(checker.headers) != sender:
             logger.warning(
                 "DKIM: the message's From is not %s as dkimpy reads it", sender
             )
-            return False
+            return None
 
         signatures = [
             value
@@ -292,7 +303,7 @@ class DkimVerifier:
                 continue
             if verified:
                 logger.debug("DKIM: signature %d by %s verified", index, domain)
-                return True
+                return _signed_fields(parse_tag_value(signature))
         logger.warning(
             "DKIM: no signature by %s for %s verified (%d of %d tried)",
             domain,
@@ -300,7 +311,7 @@ class DkimVerifier:
             tried,
             len(signatures),
         )
-        return False
+        return None
 
     @staticmethod
     def _within_bounds(raw: bytes, checker: dkim.DKIM) -> bool:

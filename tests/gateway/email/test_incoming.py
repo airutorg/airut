@@ -154,3 +154,70 @@ class TestRepeatedFields:
             b"--b--\r\n"
         )
         assert _problem(raw) is None
+
+
+class TestSignedHeaders:
+    """The fields a signature's ``h=`` covers: the last of each name."""
+
+    RAW = (
+        b"Received: first\r\n"
+        b"From: a@example.com\r\n"
+        b"Received: second\r\n"
+        b"Subject: s\r\n"
+        b"In-Reply-To: <x@example.com>\r\n"
+        b"\r\nbody\r\n"
+    )
+
+    def _signed(self, *fields: str) -> list[tuple[str, str]]:
+        email = IncomingEmail.parse(self.RAW)
+        return email.signed_headers(fields).items()
+
+    def test_only_listed_fields_in_order(self):
+        assert self._signed("subject", "from") == [
+            ("From", "a@example.com"),
+            ("Subject", "s"),
+        ]
+
+    def test_names_compared_case_insensitively(self):
+        assert self._signed("FROM") == [("From", "a@example.com")]
+
+    def test_a_name_listed_once_covers_the_last_field(self):
+        assert self._signed("received") == [("Received", "second")]
+
+    def test_a_name_listed_twice_covers_the_last_two(self):
+        assert self._signed("received", "received") == [
+            ("Received", "first"),
+            ("Received", "second"),
+        ]
+
+    def test_a_name_listed_more_often_than_present(self):
+        """Signing a field's absence covers nothing more."""
+        assert self._signed("subject", "subject", "cc") == [("Subject", "s")]
+
+    def test_no_body(self):
+        email = IncomingEmail.parse(self.RAW)
+        assert email.signed_headers(["from"]).get_payload() is None
+
+    @pytest.mark.parametrize(
+        ("raw", "value"),
+        [
+            (b"Subject: \xff\r\n\r\n", "\udcff"),
+            (b"Subject: a\r\n\tb\r\n\r\n", "a\r\n\tb"),
+        ],
+        ids=["undecodable", "folded"],
+    )
+    def test_value_kept_as_received(self, raw: bytes, value: str):
+        email = IncomingEmail.parse(raw)
+        headers = email.signed_headers(["subject"])
+        assert list(headers.raw_items()) == [("Subject", value)]
+
+
+class TestHeaders:
+    """All the header fields, as received, without the body."""
+
+    def test_every_field_in_order(self):
+        raw = b"Received: a\r\nFrom: b@example.com\r\nReceived: c\r\n\r\nx\r\n"
+        email = IncomingEmail.parse(raw)
+        headers = email.headers()
+        assert list(headers.raw_items()) == list(email.message.raw_items())
+        assert headers.get_payload() is None

@@ -22,8 +22,18 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 #: Selector the test key is published under.
 SELECTOR = "test"
 
-#: Header fields signed by default.
-SIGNED_HEADERS = ("from", "to", "subject", "date", "message-id")
+#: Header fields signed by default: those a signer such as Gmail covers.
+SIGNED_HEADERS = (
+    "from",
+    "to",
+    "cc",
+    "subject",
+    "date",
+    "message-id",
+    "in-reply-to",
+    "references",
+    "mime-version",
+)
 
 
 @functools.cache

@@ -132,6 +132,10 @@ def _make_adapter(
     """Create adapter with mocked auth/responder components."""
     cfg = config or _make_config()
     authenticator = MagicMock()
+    # Every header field verified, unless a test says otherwise.
+    authenticator.verified_headers.side_effect = lambda email, sender: (
+        email.headers()
+    )
     authorizer = MagicMock()
     responder = MagicMock()
     # Nothing left out of the email unless a test says otherwise.
@@ -234,7 +238,7 @@ class TestAuthenticateAndParse:
         with pytest.raises(AuthenticationError) as exc_info:
             adapter.authenticate_and_parse(_make_raw_message())
         assert exc_info.value.reason == "sender not authorized"
-        auth.verify_signature.assert_not_called()
+        auth.verified_headers.assert_not_called()
 
     def test_signature_failure_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError
@@ -242,15 +246,44 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        auth.verify_signature.return_value = False
+        auth.verified_headers.side_effect = None
+        auth.verified_headers.return_value = None
         msg = _make_raw_message()
 
         with pytest.raises(AuthenticationError) as exc_info:
             adapter.authenticate_and_parse(msg)
         assert exc_info.value.reason == "sender authentication failed"
-        auth.verify_signature.assert_called_once_with(
+        auth.verified_headers.assert_called_once_with(
             msg.content, "user@example.com"
         )
+
+    def test_reads_only_the_verified_header_fields(self) -> None:
+        """Fields the signature does not cover are as if absent."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(
+            sender="User <user@example.com>",
+            to="bot+opus@example.com",
+            subject="Re: [ID:aabb1122] Hello",
+            references="<airut.ccdd3344.1@example.com>",
+            body="Do something",
+        )
+        auth.verified_headers.side_effect = None
+        auth.verified_headers.return_value = msg.content.signed_headers(
+            ["from"]
+        )
+
+        result = adapter.authenticate_and_parse(msg)
+
+        assert result.sender_display == "User <user@example.com>"
+        assert result.conversation_id is None
+        assert result.model_hint is None
+        assert result.display_title == "(no subject)"
+        assert result.original_message_id is None
+        assert result.original_references == []
+        assert result.body == "Do something"
+        assert result._raw_messages == [msg.content.message]
 
     def test_unauthorized_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError

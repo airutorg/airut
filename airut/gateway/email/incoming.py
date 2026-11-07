@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from email.message import Message
 from email.parser import BytesParser
@@ -114,3 +114,34 @@ class IncomingEmail:
             if counts[name.lower()] > 1:
                 return f"more than one {name} field"
         return None
+
+    def signed_headers(self, fields: Sequence[str]) -> Message:
+        """Return just the header fields a DKIM signature covers.
+
+        A signature whose ``h=`` tag lists a name *n* times covers the
+        last *n* fields of that name (RFC 6376 §5.4.2).
+
+        Args:
+            fields: The names the signature's ``h=`` tag lists.
+
+        Returns:
+            A message holding those fields, in their order, and no body.
+        """
+        wanted = Counter(name.lower() for name in fields)
+        covered: list[tuple[str, str]] = []
+        for name, value in reversed(list(self.message.raw_items())):
+            if wanted[name.lower()] > 0:
+                wanted[name.lower()] -= 1
+                covered.append((name, value))
+        return self._header_message(reversed(covered))
+
+    def headers(self) -> Message:
+        """Return all the message's header fields, without its body."""
+        return self._header_message(self.message.raw_items())
+
+    def _header_message(self, fields: Iterable[tuple[str, str]]) -> Message:
+        """Return a message holding *fields*, as received, and no body."""
+        headers = Message(policy=self.message.policy)
+        for name, value in fields:
+            headers[name] = value
+        return headers

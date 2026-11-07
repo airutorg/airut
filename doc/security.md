@@ -137,9 +137,12 @@ recorded by the mail server and as verified by Airut itself (DMARC alone can
 pass through SPF, which depends only on the connecting IP address). Airut's own
 verification looks up keys through the host's DNS resolver, which must be one an
 attacker cannot answer for (see
-[email-setup.md](email-setup.md#dns-for-dkim-keys)). The `From` header must name
-exactly one mailbox, and replies go only to that address. After authentication,
-the sender is checked against the per-repo `auth.authorized_senders` allowlist.
+[email-setup.md](email-setup.md#dns-for-dkim-keys)). With Airut's own
+verification, Airut acts only on the header fields the signature covers (such as
+`Subject` and the threading fields), since others may have been added after
+signing. The `From` header must name exactly one mailbox, and replies go only to
+that address. After authentication, the sender is checked against the per-repo
+`auth.authorized_senders` allowlist.
 
 Both layers must pass. A valid DMARC pass from an unauthorized sender is
 rejected.
