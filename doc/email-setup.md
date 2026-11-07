@@ -26,6 +26,7 @@ simultaneously for the same repository.
   - [IMAP Connection Issues](#imap-connection-issues)
   - [DMARC Failures](#dmarc-failures)
   - [DKIM Failures](#dkim-failures)
+  - [Replies Start a New Conversation](#replies-start-a-new-conversation)
   - [Emails Not Being Processed](#emails-not-being-processed)
   - [Model Hint Not Working](#model-hint-not-working)
 
@@ -249,6 +250,13 @@ Use `server` where messages are changed in transit after signing (for example by
 Microsoft 365 Safe Links or disclaimers), and `none` only for senders whose
 provider does not sign with their own domain.
 
+With `both` or `airut`, Airut acts only on the header fields the signature
+covers, and treats an unsigned `Subject`, `To`, `Message-ID`, `In-Reply-To` or
+`References` as absent. Gmail signs all of these. Microsoft 365 and Outlook.com
+sign `Subject` and `Message-ID` but not `To` or the threading fields: their
+senders' replies continue a conversation through the `[ID:...]` tag in the
+subject, and a `+model` address gives them no model hint.
+
 ### Checking a Sender's Signature
 
 In Gmail, open a message from the sender and choose **Show original**. It should
@@ -396,6 +404,18 @@ openssl s_client -connect mail.example.com:993
 # 3. "no signature by ... verified": Airut's own check failed — the message
 #    may have been changed after signing (set dkim_verification: server), or
 #    the key lookup failed (check the host's DNS)
+```
+
+### Replies Start a New Conversation
+
+```bash
+# Symptom: a reply is processed as a new conversation, or a +model address
+# is ignored, with dkim_verification both or airut
+
+# Check:
+# 1. The reply's subject still holds the [ID:...] tag
+# 2. The sender's DKIM-Signature h= tag lists In-Reply-To, References and To:
+#    Airut acts only on fields the signature covers (debug log: "not signed:")
 ```
 
 ### Emails Not Being Processed

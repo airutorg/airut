@@ -165,6 +165,7 @@ def create_email() -> Callable[..., Message]:
         attachments: list[tuple[str, bytes, str]] | None = None,
         authentication_results: str | None = None,
         dkim_signed: bool = True,
+        dkim_headers: tuple[str, ...] = dkim_signing.SIGNED_HEADERS,
     ) -> Message:
         """Create a test email message.
 
@@ -182,6 +183,7 @@ def create_email() -> Callable[..., Message]:
                 the mail server would record for the sender's domain.
             dkim_signed: Sign the message as the sender's domain with
                 the test key (see ``tests/dkim_signing.py``).
+            dkim_headers: The header fields the signature covers.
 
         Returns:
             Email message ready for injection into test server.
@@ -220,7 +222,7 @@ def create_email() -> Callable[..., Message]:
         domain = parseaddr(sender)[1].rpartition("@")[2]
         raw = msg.as_bytes()
         if dkim_signed:
-            raw = dkim_signing.sign(raw, domain)
+            raw = dkim_signing.sign(raw, domain, headers=dkim_headers)
         if authentication_results is None:
             authentication_results = (
                 f"test.local; dkim=pass header.d={domain};"

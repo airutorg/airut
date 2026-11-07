@@ -201,6 +201,10 @@ class EmailChannelAdapter(ChannelAdapter):
 
         Authentication's header checks run first, then authorization,
         then Airut's own DKIM verification (which looks up keys in DNS).
+        The message's header fields are then read from those
+        ``SenderAuthenticator.verified_headers`` returns (with Airut's
+        own verification, those the signature covers); its body, as its
+        MIME fields say.
 
         Args:
             raw_message: RawMessage wrapping the fetched email.
@@ -214,21 +218,21 @@ class EmailChannelAdapter(ChannelAdapter):
         """
         email = raw_message.content
         email_msg = email.message
+        authenticated_sender, headers = self._authenticate(email)
         # The raw From header: for display only.  Replies go to the
         # authenticated address, since the header may name others.
-        sender = str(email_msg.get("From", ""))
-        authenticated_sender = self._authenticate(email)
+        sender = str(headers.get("From", ""))
 
         # Extract conversation ID: headers first, then subject fallback
-        subject = decode_subject(email_msg)
-        references = email_msg.get("References", "").split()
-        in_reply_to = email_msg.get("In-Reply-To")
+        subject = decode_subject(headers)
+        references = headers.get("References", "").split()
+        in_reply_to = headers.get("In-Reply-To")
         conv_id = extract_conversation_id_from_headers(
             references, in_reply_to
         ) or extract_conversation_id(subject)
 
         # Extract model from To address (e.g., airut+opus@domain.com)
-        to_address = email_msg.get("To", "")
+        to_address = headers.get("To", "")
         model_hint = extract_model_from_address(to_address)
 
         # Extract body (HTML quotes stripped)
@@ -255,13 +259,13 @@ class EmailChannelAdapter(ChannelAdapter):
             display_title=subject or "(no subject)",
             channel_context=ctx,
             subject=msg_subject,
-            original_message_id=email_msg.get("Message-ID"),
+            original_message_id=headers.get("Message-ID"),
             original_references=references,
             decoded_subject=subject,
             _raw_messages=[email_msg],
         )
 
-    def _authenticate(self, email: IncomingEmail) -> str:
+    def _authenticate(self, email: IncomingEmail) -> tuple[str, Message]:
         """Authenticate and authorize the sender of *email*.
 
         Header checks first, then authorization, then Airut's own DKIM
@@ -269,7 +273,8 @@ class EmailChannelAdapter(ChannelAdapter):
         senders who are allowed.
 
         Returns:
-            The authenticated sender address.
+            The authenticated sender address, and the header fields to
+            act on (see ``SenderAuthenticator.verified_headers``).
 
         Raises:
             AuthenticationError: If any of the steps fails.
@@ -277,12 +282,12 @@ class EmailChannelAdapter(ChannelAdapter):
         sender = self._authenticator.authenticate(email)
         if sender is None:
             self._reject(email, "sender authentication failed")
-        elif not self._authorizer.is_authorized(sender):
+        if not self._authorizer.is_authorized(sender):
             self._reject(email, "sender not authorized")
-        elif not self._authenticator.verify_signature(email, sender):
+        headers = self._authenticator.verified_headers(email, sender)
+        if headers is None:
             self._reject(email, "sender authentication failed")
-        else:
-            return sender
+        return sender, headers
 
     def _reject(self, email: IncomingEmail, reason: str) -> NoReturn:
         """Log the rejection of *email* and raise ``AuthenticationError``.

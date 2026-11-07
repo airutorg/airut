@@ -281,7 +281,8 @@ EmailListener (poll or IDLE)
     │
     ├──▶ SenderAuthorizer (allowlist check)
     │
-    ├──▶ SenderAuthenticator (Airut's own DKIM check)
+    ├──▶ SenderAuthenticator (Airut's own DKIM check; keeps only the
+    │      header fields the signature covers)
     │
     ├──▶ Parse MIME body, strip quotes, decode attachments
     │
