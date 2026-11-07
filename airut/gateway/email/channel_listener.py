@@ -39,6 +39,19 @@ class _ReconnectFailedError(Exception):
     """Sentinel raised when IMAP reconnection attempts are exhausted."""
 
 
+def _raw_message(message: Message) -> RawMessage[Message]:
+    """Wrap a fetched email for submission to the gateway.
+
+    Header values are converted to text: a header with undecodable 8-bit
+    bytes comes back from the email library as a ``Header`` object.
+    """
+    return RawMessage(
+        sender=str(message.get("From", "")),
+        content=message,
+        display_title=str(message.get("Subject", "")),
+    )
+
+
 class EmailChannelListener(ChannelListener):
     """ChannelListener implementation for email (IMAP).
 
@@ -248,12 +261,7 @@ class EmailChannelListener(ChannelListener):
                 for msg_id, message in messages:
                     try:
                         el.delete_message(msg_id)
-                        raw = RawMessage(
-                            sender=message.get("From", ""),
-                            content=message,
-                            display_title=message.get("Subject", ""),
-                        )
-                        self._submit(raw)
+                        self._submit(_raw_message(message))
                     except IMAPConnectionError:
                         raise  # Bubble up for reconnection
                     except Exception as e:
@@ -311,12 +319,7 @@ class EmailChannelListener(ChannelListener):
                 for msg_id, message in messages:
                     try:
                         el.delete_message(msg_id)
-                        raw = RawMessage(
-                            sender=message.get("From", ""),
-                            content=message,
-                            display_title=message.get("Subject", ""),
-                        )
-                        self._submit(raw)
+                        self._submit(_raw_message(message))
                     except IMAPConnectionError:
                         raise  # Bubble up for reconnection
                     except Exception as e:

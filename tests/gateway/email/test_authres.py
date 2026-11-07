@@ -8,6 +8,7 @@
 import pytest
 
 from airut.gateway.email.authres import (
+    MAX_LENGTH,
     AuthResult,
     AuthResults,
     AuthResultsParseError,
@@ -208,4 +209,16 @@ class TestMalformed:
     )
     def test_rejected(self, value: str):
         with pytest.raises(AuthResultsParseError):
+            parse(value)
+
+
+class TestLength:
+    def test_at_limit_parsed(self):
+        value = "mx; dmarc=pass reason=" + "x" * (MAX_LENGTH - 22)
+        assert len(value) == MAX_LENGTH
+        assert parse(value).results[0].method == "dmarc"
+
+    def test_over_limit_rejected(self):
+        value = "mx; dmarc=pass reason=" + "x" * (MAX_LENGTH - 21)
+        with pytest.raises(AuthResultsParseError, match="longer than"):
             parse(value)

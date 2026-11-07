@@ -27,7 +27,9 @@ Microsoft 365 omits the authserv-id, so a header whose first segment is
 itself a ``method=result`` entry is read as having none.
 
 Input this module cannot read raises ``AuthResultsParseError``; the
-caller treats the header as unusable rather than guessing at it.
+caller treats the header as unusable rather than guessing at it.  So
+does a header longer than ``MAX_LENGTH``: real ones are a few hundred
+characters, and a bound keeps parsing cheap whatever the input.
 """
 
 from __future__ import annotations
@@ -36,6 +38,9 @@ import enum
 import re
 from dataclasses import dataclass
 
+
+#: Longest header value parsed.
+MAX_LENGTH = 16 * 1024
 
 #: Characters that end an unquoted word.
 _SPECIALS = frozenset(' \t\r\n();="')
@@ -307,8 +312,11 @@ def parse_authentication_results(value: str) -> AuthResults:
         The authserv-id and the entries.
 
     Raises:
-        AuthResultsParseError: If *value* does not follow the grammar.
+        AuthResultsParseError: If *value* does not follow the grammar,
+            or is longer than ``MAX_LENGTH``.
     """
+    if len(value) > MAX_LENGTH:
+        raise AuthResultsParseError(f"longer than {MAX_LENGTH} characters")
     segments = _split_segments(_tokenize(value))
     first = segments[0]
     if any(token.kind is _Kind.EQUALS for token in first):

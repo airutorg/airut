@@ -49,6 +49,9 @@ from airut.units import MB, format_size
 
 logger = logging.getLogger(__name__)
 
+#: How much of a rejected message's From and Message-ID is shown.
+_SHOWN_HEADER_LENGTH = 200
+
 
 @dataclass
 class EmailParsedMessage(ParsedMessage):
@@ -206,7 +209,10 @@ class EmailChannelAdapter(ChannelAdapter):
         # The raw From header: for logs and display only.  Replies go to
         # the authenticated address, since the header may name others.
         sender = str(email_msg.get("From", ""))
-        message_id = email_msg.get("Message-ID", "")
+        # A rejected message's headers may be arbitrarily long; logs and
+        # the dashboard show only their start.
+        shown_sender = sender[:_SHOWN_HEADER_LENGTH]
+        message_id = str(email_msg.get("Message-ID", ""))[:_SHOWN_HEADER_LENGTH]
         repo_id = self._repo_id
 
         # Authentication: verify DMARC from trusted server
@@ -216,11 +222,11 @@ class EmailChannelAdapter(ChannelAdapter):
                 "Repo '%s': rejecting unauthenticated message from %s "
                 "(Message-ID: %s)",
                 repo_id,
-                sender,
+                shown_sender,
                 message_id,
             )
             raise AuthenticationError(
-                sender=sender,
+                sender=shown_sender,
                 reason="DMARC verification failed",
             )
 
@@ -230,11 +236,11 @@ class EmailChannelAdapter(ChannelAdapter):
                 "Repo '%s': rejecting unauthorized message from %s "
                 "(Message-ID: %s)",
                 repo_id,
-                sender,
+                shown_sender,
                 message_id,
             )
             raise AuthenticationError(
-                sender=sender,
+                sender=shown_sender,
                 reason="sender not authorized",
             )
 

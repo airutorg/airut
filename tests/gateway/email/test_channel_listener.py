@@ -281,6 +281,33 @@ class TestPollingLoop:
         assert raw_msg.sender == "user@example.com"
         assert raw_msg.display_title == "Test"
 
+    def test_raw_8bit_headers_submitted_as_text(self) -> None:
+        """Undecodable 8-bit headers are Header objects; text is submitted.
+
+        The gateway slices the sender for the dashboard title, which a
+        Header object does not support.
+        """
+        cl, mock_el = _make_polling_listener()
+        msg = BytesParser().parsebytes(
+            "From: P\u00e4ivi <user@example.com>\r\n"
+            "Subject: Hyv\u00e4\r\n\r\nHello".encode()
+        )
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+
+        def fake_fetch():
+            cl._running = False
+            return [("1", msg)]
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        raw_msg = submit.call_args[0][0]
+        assert isinstance(raw_msg.sender, str)
+        assert raw_msg.sender.endswith("<user@example.com>")
+        assert isinstance(raw_msg.display_title, str)
+
     def test_no_reconnect_during_shutdown(self) -> None:
         """Polling loop skips reconnection when _running is False.
 

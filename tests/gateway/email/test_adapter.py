@@ -198,6 +198,22 @@ class TestAuthenticateAndParse:
         assert exc_info.value.sender == "user@example.com"
         assert "DMARC" in exc_info.value.reason
 
+    def test_rejection_shows_start_of_long_headers(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from airut.gateway.channel import AuthenticationError
+
+        adapter, auth, _, _ = _make_adapter()
+        auth.authenticate.return_value = None
+        msg = _make_raw_message(
+            sender="x" * 100_000, message_id="<" + "y" * 100_000 + ">"
+        )
+
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(msg)
+        assert exc_info.value.sender == "x" * 200
+        assert max(len(r.getMessage()) for r in caplog.records) < 1000
+
     def test_unauthorized_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError
 
