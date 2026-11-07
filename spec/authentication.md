@@ -35,13 +35,17 @@ the From domain.
    Otherwise, reject: parsers treat other lines inconsistently (as the start of
    the body, as lines to skip, or as errors) and disagree on whether a bare
    carriage return ends a line, so they could read different header fields (a
-   different `From`), or a different body from the one a signature covers. No
-   normalization by the mail server is assumed. If the message has zero or
-   multiple `From` headers, reject (prevents confusion attacks where DMARC
-   validates one From but the application reads another).
+   different `From`), or a different body from the one a signature covers. Nor
+   may a field that RFC 5322 §3.6 allows at most once (`Date`, `From`, `Sender`,
+   `Reply-To`, `To`, `Cc`, `Bcc`, `Message-ID`, `In-Reply-To`, `References`,
+   `Subject`), or a MIME field saying how the body is read (`MIME-Version`,
+   `Content-Type`, `Content-Transfer-Encoding`), appear more than once: parsers
+   disagree on which copy counts (Python's email parser reads the first, while a
+   DKIM signature covers the last). No normalization by the mail server is
+   assumed.
 2. **Parse From header** as an RFC 5322 address list (see
    [From Header Parsing](#from-header-parsing)). It must hold exactly one
-   mailbox.
+   mailbox. A message without a `From` header is rejected.
 3. **Check the first Authentication-Results header only**: Take the **first**
    (topmost) `Authentication-Results` header. The receiving MTA prepends its
    header at the top (RFC 8601 §5), so this is always the authoritative one.
@@ -278,7 +282,8 @@ Incoming email
     v
 SenderAuthenticator.authenticate(email)
     |-- Reject an ambiguous header section (a line that is not a
-    |     field or a continuation, or a bare CR)
+    |     field or a continuation, a bare CR, or a repeated field
+    |     allowed once)
     |-- Parse From header (exactly one mailbox)
     |-- Parse first Authentication-Results header (RFC 8601)
     |-- Check its authserv-id

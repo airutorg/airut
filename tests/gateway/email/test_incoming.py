@@ -87,3 +87,70 @@ class TestHeaderSectionProblem:
 
     def test_last_line_without_line_break_checked(self):
         assert _problem(b"From: a@example.com\r\nFrom x") is not None
+
+
+class TestRepeatedFields:
+    """A field RFC 5322 or MIME allows once may not appear twice.
+
+    Parsers disagree on which one counts: Python's reads the first, and a
+    DKIM signature covers the last.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Date",
+            "From",
+            "Sender",
+            "Reply-To",
+            "To",
+            "Cc",
+            "Bcc",
+            "Message-ID",
+            "In-Reply-To",
+            "References",
+            "Subject",
+            "MIME-Version",
+            "Content-Type",
+            "Content-Transfer-Encoding",
+        ],
+    )
+    def test_repeated(self, name: str):
+        raw = (
+            f"{name}: one\r\nX-Other: x\r\n{name.upper()}: two\r\n\r\nbody\r\n"
+        ).encode()
+        assert _problem(raw) == f"more than one {name} field"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Received",
+            "DKIM-Signature",
+            "ARC-Seal",
+            "Authentication-Results",
+            "Resent-From",
+            "Comments",
+            "Keywords",
+        ],
+    )
+    def test_other_fields_may_repeat(self, name: str):
+        raw = (
+            f"{name}: one\r\n{name}: two\r\nFrom: a@example.com\r\n"
+            "Subject: s\r\n\r\n"
+        ).encode()
+        assert _problem(raw) is None
+
+    def test_fields_in_the_body_not_counted(self):
+        raw = b"Subject: s\r\n\r\nSubject: t\r\n"
+        assert _problem(raw) is None
+
+    def test_fields_of_mime_parts_not_counted(self):
+        raw = (
+            b"From: a@example.com\r\nMIME-Version: 1.0\r\n"
+            b'Content-Type: multipart/mixed; boundary="b"\r\n\r\n'
+            b"--b\r\nContent-Type: text/plain\r\n\r\none\r\n"
+            b"--b\r\nContent-Type: message/rfc822\r\n\r\n"
+            b"From: c@example.org\r\nSubject: inner\r\n\r\nthree\r\n"
+            b"--b--\r\n"
+        )
+        assert _problem(raw) is None

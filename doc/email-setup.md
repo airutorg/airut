@@ -204,6 +204,12 @@ DKIM signature, see [DKIM Requirements](#dkim-requirements)). This requires:
    in the display name, or with `,`, `:`, `;` or `@` in it outside quotes and
    comments. Mail clients write `Name <user@example.com>`, which is accepted.
 
+6. **The header section must be well-formed** — A message is rejected if a line
+   of its header section is neither a header field (`Name: value`) nor a folded
+   continuation of one, if it holds a carriage return without a line feed, or if
+   a field allowed only once (such as `Subject`, `To` or `Content-Type`) appears
+   more than once. Mail clients do not write these.
+
 ### Verifying DMARC
 
 To check if a sender's domain has DMARC configured:
@@ -372,6 +378,7 @@ openssl s_client -connect mail.example.com:993
 # 4. The header parses as RFC 8601 defines it (log: "... is malformed")
 # 5. The header's dmarc entry has header.from=<sender's domain>
 # 6. The From header names a single address in valid RFC 5322 syntax
+# 7. The header section is well-formed (log: "... header section holds ...")
 # The log line explains which check failed.
 ```
 
