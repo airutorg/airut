@@ -124,6 +124,8 @@ repos:
         # microsoft_internal_fallback: false
         # DKIM signature by the From domain, verified by: both, server, airut, or none
         # dkim_verification: both
+        # Act on a message only if its To or Cc names one of this channel's addresses
+        # require_channel_recipient: true
 
       # Microsoft 365 OAuth2 credentials
       # microsoft_oauth2:

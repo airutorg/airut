@@ -7,8 +7,10 @@ Slack's authorization model (workspace membership, user groups, user IDs), see
 
 ## Email Channel
 
-Two logically separate layers protect the email channel from unauthorized use.
-Both must pass before a message is processed.
+Two logically separate layers protect the email channel from unauthorized use,
+authentication and authorization, and a recipient check follows them (see
+[Channel Recipient](#channel-recipient)). All must pass before a message is
+processed.
 
 ## Authentication (`SenderAuthenticator`)
 
@@ -25,6 +27,9 @@ the From domain.
 - `auth.dkim_verification` (default `both`): who must find a DKIM signature by
   the From domain valid — `both` (the mail server and Airut), `server`, `airut`,
   or `none` (see [DKIM Requirement](#dkim-requirement)).
+- `auth.require_channel_recipient` (default `true`): act on a message only if
+  its `To` or `Cc` names the channel (see
+  [Channel Recipient](#channel-recipient)).
 
 ### Verification Flow
 
@@ -70,6 +75,10 @@ the From domain.
 6. **Return authenticated sender address** (lowercase) on success, `None` on
    failure. This address, not the raw From header, is the conversation's sender:
    replies go to it alone. The raw header is kept for display only.
+
+After Airut's own verification, the channel adapter requires the channel as a
+recipient (unless `require_channel_recipient` is off): the verified `To` or `Cc`
+must name the channel (see [Channel Recipient](#channel-recipient)).
 
 ### Parsing Authentication-Results
 
@@ -148,10 +157,11 @@ A DKIM signature covers only the header fields its `h=` tag lists — for a name
 listed _n_ times, the last _n_ fields of that name (RFC 6376 §5.4.2). Fields it
 does not cover may have been added or changed after signing. So with `airut` or
 `both`, Airut acts only on the header fields covered by the signature it
-verified: `Subject`, `To`, `Message-ID`, `In-Reply-To` and `References` that the
-signature does not cover are treated as absent. A message whose threading fields
-are not signed starts a new conversation unless its signed `Subject` names one;
-an unsigned `To` gives no model hint; an unsigned `Subject` gives no subject.
+verified: `Subject`, `To`, `Cc`, `Message-ID`, `In-Reply-To` and `References`
+that the signature does not cover are treated as absent. A message whose
+threading fields are not signed starts a new conversation unless its signed
+`Subject` names one; an unsigned `To` gives no model hint; an unsigned `Subject`
+gives no subject.
 
 The body is read as the message's MIME fields (`MIME-Version`, `Content-Type`,
 `Content-Transfer-Encoding`) say. Signers often leave `Content-Type` unsigned,
@@ -160,6 +170,23 @@ appear only once (see [Verification Flow](#verification-flow)).
 
 With `server` or `none`, and for the internal-auth fallback, Airut verifies no
 signature itself and reads every field.
+
+### Channel Recipient
+
+A signed message stays valid for anyone holding a copy, including one its sender
+addressed to someone else. So, with `require_channel_recipient` (the default), a
+message is acted on only if its `To` or `Cc`, read from the verified header
+fields, names the channel: its `account.from` address, or its `account.username`
+when that is an address. Addresses compare case-insensitively, ignoring a `+tag`
+in the local part (so `bot+opus@...` names `bot@...`). Otherwise the message is
+rejected as "not addressed to this channel".
+
+With `airut` or `both`, `To` and `Cc` count only if the signature covers them,
+so senders whose signatures do not (Microsoft 365 and Outlook.com sign neither)
+need the option off. With `server` they are read as received, protected only as
+far as the signature the mail server verified covers them; with `none`, not at
+all. Senders who reach the channel by `Bcc`, an alias, a group address or
+forwarding need the option off in any mode.
 
 ### Why Not SPF Alone
 
@@ -225,8 +252,9 @@ When `auth.microsoft_internal_fallback` is set to `true` and the message has
 `Authentication-Results` header is present (even with a DMARC failure), the
 fallback does not apply — DMARC remains the authoritative mechanism.
 
-Authorization (sender allowlist) still applies after the internal auth fallback;
-the DKIM requirement does not.
+Authorization (sender allowlist) and the [recipient check](#channel-recipient)
+(with `To` and `Cc` read as received) still apply after the internal auth
+fallback; the DKIM requirement does not.
 
 Reference:
 [Demystifying Hybrid Mail Flow: When is a message Internal?](https://techcommunity.microsoft.com/blog/exchange/demystifying-and-troubleshooting-hybrid-mail-flow-when-is-a-message-internal/1420838)
@@ -327,5 +355,9 @@ SenderAuthenticator.verified_headers(email, sender)
     |     without Airut's own verification), or None
     |
     v (if verified)
+Recipient check (require_channel_recipient)
+    |-- The returned To or Cc must name the channel
+    |
+    v (if addressed to the channel)
 Process message, reading header fields from those returned
 ```

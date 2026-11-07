@@ -138,14 +138,16 @@ pass through SPF, which depends only on the connecting IP address). Airut's own
 verification looks up keys through the host's DNS resolver, which must be one an
 attacker cannot answer for (see
 [email-setup.md](email-setup.md#dns-for-dkim-keys)). With Airut's own
-verification, Airut acts only on the header fields the signature covers (such as
-`Subject` and the threading fields), since others may have been added after
-signing. The `From` header must name exactly one mailbox, and replies go only to
-that address. After authentication, the sender is checked against the per-repo
+verification, Airut treats header fields the signature does not cover, such as
+an unsigned `Subject` or threading field, as absent, since they may have been
+added after signing. By default the message's `To` or `Cc` must name the
+channel, so a signed message addressed to someone else is not acted on. The
+`From` header must name exactly one mailbox, and replies go only to that
+address. After authentication, the sender is checked against the per-repo
 `auth.authorized_senders` allowlist.
 
-Both layers must pass. A valid DMARC pass from an unauthorized sender is
-rejected.
+Authentication, authorization and the recipient check must all pass. A valid
+DMARC pass from an unauthorized sender is rejected.
 
 See [email-setup.md](email-setup.md#dmarc-requirements) for DMARC setup and
 [spec/authentication.md](../spec/authentication.md) for the full verification
@@ -440,6 +442,8 @@ build sandbox disabled (see [nix-images.md](nix-images.md#trust)).
 - DMARC check failure: Message rejected (no processing)
 - DKIM check failure, including a failed key lookup: Message rejected (no
   processing)
+- `To` or `Cc` not naming the channel (with `auth.require_channel_recipient`,
+  the default): Message rejected (no processing)
 
 **Slack:**
 

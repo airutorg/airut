@@ -11,6 +11,7 @@ Tests that unauthorized senders are rejected:
 3. No response sent for rejected messages
 4. Forged DMARC results and From headers naming others are rejected
 5. Header fields the DKIM signature does not cover are not acted on
+6. Messages not addressed to the channel are rejected
 """
 
 import sys
@@ -24,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
 from airut.dashboard.tracker import CompletionReason, TaskStatus
+from tests import dkim_signing
 
 from .conftest import get_message_text, wait_for_task
 from .environment import IntegrationEnvironment
@@ -439,6 +441,58 @@ class TestUnsignedHeaderFields:
             assert ack2 is not None, "Follow-up was not started anew"
             second_id = extract_conversation_id(ack2["Subject"])
             assert second_id not in (None, first_id)
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)
+
+
+class TestChannelRecipient:
+    """Messages whose To and Cc do not name the channel are rejected."""
+
+    @pytest.mark.parametrize(
+        ("recipient", "dkim_headers"),
+        [
+            pytest.param(
+                "friend@example.org",
+                dkim_signing.SIGNED_HEADERS,
+                id="to-someone-else",
+            ),
+            pytest.param(
+                "claude@test.local",
+                ("from", "subject", "date", "message-id"),
+                id="to-not-signed",
+            ),
+        ],
+    )
+    def test_rejected(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+        recipient: str,
+        dkim_headers: tuple[str, ...],
+    ) -> None:
+        msg = create_email(
+            subject="Lunch",
+            body="See you at noon",
+            recipient=recipient,
+            dkim_headers=dkim_headers,
+        )
+        integration_env.email_server.inject_message(msg)
+
+        service = integration_env.create_service()
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            task = wait_for_task(
+                service.tracker,
+                lambda t: t.status == TaskStatus.COMPLETED,
+                timeout=10.0,
+            )
+            assert task is not None, "Service did not process message in time"
+            assert task.completion_reason == CompletionReason.AUTH_FAILED
+            assert task.completion_detail == "not addressed to this channel"
+            assert integration_env.email_server.get_sent_messages() == []
         finally:
             service.stop()
             service_thread.join(timeout=10.0)

@@ -198,16 +198,16 @@ AUTHENTICATING or PENDING. Invalid transitions return False.
 
 Each task is assigned a `CompletionReason` when it reaches COMPLETED:
 
-| Reason             | Meaning                                          |
-| ------------------ | ------------------------------------------------ |
-| `SUCCESS`          | Sandbox ran and produced a response              |
-| `AUTH_FAILED`      | Sender authentication (DMARC, DKIM) failed       |
-| `UNAUTHORIZED`     | Sender not in allowlist                          |
-| `EXECUTION_FAILED` | Container/sandbox failure                        |
-| `TIMEOUT`          | Execution exceeded configured limit              |
-| `CHANNEL_ERROR`    | Reply delivery failed (e.g. SMTP rate limit)     |
-| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone)            |
-| `COALESCED`        | Message merged into an already-pending follow-up |
+| Reason             | Meaning                                                                 |
+| ------------------ | ----------------------------------------------------------------------- |
+| `SUCCESS`          | Sandbox ran and produced a response                                     |
+| `AUTH_FAILED`      | Sender authentication (DMARC, DKIM) or the email recipient check failed |
+| `UNAUTHORIZED`     | Sender not in allowlist                                                 |
+| `EXECUTION_FAILED` | Container/sandbox failure                                               |
+| `TIMEOUT`          | Execution exceeded configured limit                                     |
+| `CHANNEL_ERROR`    | Reply delivery failed (e.g. SMTP rate limit)                            |
+| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone)                                   |
+| `COALESCED`        | Message merged into an already-pending follow-up                        |
 
 ### Per-Conversation Message Queuing
 
@@ -291,7 +291,7 @@ GatewayService._process_message_worker()  [worker thread]:
   -> tracker.set_authenticating(task_id)                 → AUTHENTICATING
   -> ChannelAdapter.authenticate_and_parse()
     -> (email: DMARC + server's DKIM result, sender auth, Airut's DKIM
-        check, MIME parsing)
+        check, recipient check, MIME parsing)
     -> (slack: workspace/group/user authorization + event payload extraction)
     -> raises AuthenticationError on failure:
        tracker.complete_task(task_id, AUTH_FAILED/UNAUTHORIZED) → COMPLETED
@@ -674,7 +674,8 @@ appropriate to the transport:
 
 - **Email**: DMARC and the server's DKIM result on trusted
   `Authentication-Results` headers, then sender allowlist matching, then Airut's
-  own DKIM verification. See [authentication.md](authentication.md).
+  own DKIM verification, then (by default) the check that the message's `To` or
+  `Cc` names the channel. See [authentication.md](authentication.md).
 - **Slack**: Pre-authenticated via Socket Mode WebSocket (app-level token), then
   authorization via workspace membership, user group, or user ID rules. See
   [slack-channel.md](slack-channel.md#authorization-model).

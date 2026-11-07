@@ -41,6 +41,7 @@ from airut.gateway.email.parsing import (
     extract_model_from_address,
     read_outbox_files,
 )
+from airut.gateway.email.recipient import addressed_to, channel_addresses
 from airut.gateway.email.responder import (
     EmailResponder,
     SMTPSendError,
@@ -118,6 +119,17 @@ class EmailChannelAdapter(ChannelAdapter):
         self._authorizer = authorizer
         self._responder = responder
         self._listener = listener
+        self._channel_addresses = channel_addresses(config.account)
+        if config.auth.require_channel_recipient and not (
+            self._channel_addresses
+        ):
+            logger.warning(
+                "Repo '%s': email.account.from (%r) and username hold no "
+                "address to look for in To and Cc, so every message will "
+                "be rejected as not addressed to this channel",
+                repo_id,
+                config.account.from_address,
+            )
 
     @classmethod
     def from_config(
@@ -214,7 +226,8 @@ class EmailChannelAdapter(ChannelAdapter):
 
         Raises:
             AuthenticationError: If sender authentication (DMARC,
-                DKIM) or authorization fails.
+                DKIM) or authorization fails, or the message is not
+                addressed to the channel.
         """
         email = raw_message.content
         email_msg = email.message
@@ -270,7 +283,9 @@ class EmailChannelAdapter(ChannelAdapter):
 
         Header checks first, then authorization, then Airut's own DKIM
         verification, which looks up keys in DNS and so runs only for
-        senders who are allowed.
+        senders who are allowed, then — with
+        ``require_channel_recipient`` — the check that the verified To
+        or Cc names the channel.
 
         Returns:
             The authenticated sender address, and the header fields to
@@ -287,6 +302,10 @@ class EmailChannelAdapter(ChannelAdapter):
         headers = self._authenticator.verified_headers(email, sender)
         if headers is None:
             self._reject(email, "sender authentication failed")
+        if self._config.auth.require_channel_recipient and not addressed_to(
+            headers, self._channel_addresses
+        ):
+            self._reject(email, "not addressed to this channel")
         return sender, headers
 
     def _reject(self, email: IncomingEmail, reason: str) -> NoReturn:

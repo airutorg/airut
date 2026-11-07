@@ -845,7 +845,11 @@ class TestEditorAddRepoLifecycle:
 
             # --- Send a message to the new repo and verify processing ---
             mock_body = _standard_mock()
-            msg = create_email(subject="Project B task", body=mock_body)
+            msg = create_email(
+                subject="Project B task",
+                body=mock_body,
+                recipient="project-b@test.local",
+            )
             integration_env.email_server.inject_message_to("project-b", msg)
 
             ack = integration_env.email_server.wait_for_sent(

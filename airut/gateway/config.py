@@ -1055,6 +1055,8 @@ class EmailAuthConfig:
         dkim_verification: Who must find a DKIM signature by the From
             domain valid: ``both`` (default), ``server``, ``airut``, or
             ``none`` (see ``DKIM_VERIFICATION_MODES``).
+        require_channel_recipient: Act on a message only if its To or
+            Cc names the channel's address.
     """
 
     authorized_senders: list[str] = field(
@@ -1083,6 +1085,14 @@ class EmailAuthConfig:
         metadata=meta(
             "DKIM signature by the From domain, verified by:"
             " both, server, airut, or none",
+            Scope.REPO,
+        ),
+    )
+    require_channel_recipient: bool = field(
+        default=True,
+        metadata=meta(
+            "Act on a message only if its To or Cc names one of this"
+            " channel's addresses",
             Scope.REPO,
         ),
     )
@@ -2017,6 +2027,11 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
     dkim_verification = _resolve(raw_auth.get("dkim_verification"), str)
     if dkim_verification is not None:
         auth_overrides["dkim_verification"] = dkim_verification
+    require_recipient = _resolve(
+        raw_auth.get("require_channel_recipient"), bool
+    )
+    if require_recipient is not None:
+        auth_overrides["require_channel_recipient"] = require_recipient
     auth = EmailAuthConfig(
         authorized_senders=_resolve_string_list(
             raw_auth.get("authorized_senders"),

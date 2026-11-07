@@ -677,7 +677,11 @@ class TestRepoScopeReload:
             wait_for_repo_status(service, "project-b", "live")
 
             # Send to project-b
-            msg = create_email(subject="Repo B test", body=_standard_mock())
+            msg = create_email(
+                subject="Repo B test",
+                body=_standard_mock(),
+                recipient="project-b@test.local",
+            )
             integration_env.email_server.inject_message_to("project-b", msg)
             ack = integration_env.email_server.wait_for_sent(
                 lambda m: (
@@ -716,7 +720,11 @@ class TestRepoScopeReload:
                 wait_for_reload(service, gen)
 
                 # alpha still works
-                msg = create_email(subject="Alpha test", body=_standard_mock())
+                msg = create_email(
+                    subject="Alpha test",
+                    body=_standard_mock(),
+                    recipient="alpha@test.local",
+                )
                 env.email_server.inject_message_to("alpha", msg)
                 ack = env.email_server.wait_for_sent(
                     lambda m: "started working" in get_message_text(m).lower(),

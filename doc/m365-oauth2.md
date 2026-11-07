@@ -221,7 +221,11 @@ instead of password authentication. The `password` field can be omitted.
 > records it as `dkim=pass header.d=...` in its header. It often modifies
 > messages after they are signed, which breaks Airut's own verification, so set
 > `auth.dkim_verification: server` unless you have checked that the default
-> (`both`) works for your tenant.
+> (`both`) works for your tenant. Microsoft's signatures do not cover `To`, so
+> under `both` the [recipient check](email-setup.md#channel-recipient) rejects
+> mail from external Microsoft 365 senders unless
+> `auth.require_channel_recipient` is `false`. (Intra-org mail, accepted through
+> the internal fallback, is not a test of this.)
 
 ## Step 8: Verify
 
