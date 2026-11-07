@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from email.message import Message
@@ -23,6 +24,25 @@ _FIELD_RE = re.compile(rb"[\x21-\x39\x3b-\x7e]+:")
 
 #: How much of a refused header-section line is shown.
 _SHOWN_LINE_LENGTH = 100
+
+#: Header fields a message may hold at most once: those of RFC 5322
+#: §3.6, and MIME's fields saying how the body is read (RFC 2045).
+_SINGLE_FIELDS = (
+    "Date",
+    "From",
+    "Sender",
+    "Reply-To",
+    "To",
+    "Cc",
+    "Bcc",
+    "Message-ID",
+    "In-Reply-To",
+    "References",
+    "Subject",
+    "MIME-Version",
+    "Content-Type",
+    "Content-Transfer-Encoding",
+)
 
 
 def _header_lines(raw: bytes) -> Iterator[bytes]:
@@ -73,6 +93,10 @@ class IncomingEmail:
         bare carriage return ends a line, so they could read different
         header fields, or a different body.
 
+        Nor may a field in ``_SINGLE_FIELDS`` appear more than once:
+        parsers disagree on which one counts (the standard library's
+        reads the first, while a DKIM signature covers the last).
+
         Returns:
             What is wrong, or None if the section is unambiguous.
         """
@@ -85,4 +109,8 @@ class IncomingEmail:
             elif not _FIELD_RE.match(line):
                 shown = line[:_SHOWN_LINE_LENGTH]
                 return f"a line that is not a header field: {shown!r}"
+        counts = Counter(name.lower() for name in self.message.keys())
+        for name in _SINGLE_FIELDS:
+            if counts[name.lower()] > 1:
+                return f"more than one {name} field"
         return None

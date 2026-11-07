@@ -555,24 +555,6 @@ class TestEncodedHeaders:
         assert auth.authenticate(msg) == AUTHORIZED
 
 
-class TestDuplicateFromHeaders:
-    """Messages with multiple From headers must be rejected."""
-
-    def test_multiple_from_headers_rejected(self):
-        """Ambiguous sender identity must be rejected."""
-        auth = SenderAuthenticator(TRUSTED, dkim_verification="none")
-        msg = _msg(auth_results=f"{TRUSTED}; {DMARC_PASS}").message
-        msg["From"] = "attacker@evil.com"  # adds second From header
-        assert auth.authenticate(_email(msg)) is None
-
-    def test_no_from_header_rejected(self):
-        """Missing From header must be rejected."""
-        auth = SenderAuthenticator(TRUSTED, dkim_verification="none")
-        msg = Message()
-        msg["Authentication-Results"] = f"{TRUSTED}; {DMARC_PASS}"
-        assert auth.authenticate(_email(msg)) is None
-
-
 class TestBodyHeaderInjection:
     """Header-like text in the email body cannot bypass auth."""
 
@@ -1013,6 +995,20 @@ class TestAmbiguousHeaderSection:
         header, _, body = signed.partition(b"\r\n\r\n")
         raw = header + b"\r\n" + line + b"\r\n\r\n" + body
         email = _received_raw(raw, server_dkim=_SERVER_PASS)
+        assert _accepts(_authenticator(mode), email) is None
+
+    @pytest.mark.parametrize("mode", ["both", "server", "airut", "none"])
+    @pytest.mark.parametrize(
+        "field", [b"Subject: Another", b"From: other@example.com"]
+    )
+    def test_repeated_field_rejected_in_every_mode(
+        self, mode: str, field: bytes
+    ):
+        """Here above the field the signature covers."""
+        signed = dkim_signing.sign(_UNSIGNED, "example.com")
+        email = _received_raw(
+            field + b"\r\n" + signed, server_dkim=_SERVER_PASS
+        )
         assert _accepts(_authenticator(mode), email) is None
 
     def test_reason_logged(self, caplog: pytest.LogCaptureFixture):

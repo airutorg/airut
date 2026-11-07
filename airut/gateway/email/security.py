@@ -180,21 +180,21 @@ class SenderAuthenticator:
             return None
 
         message = email.message
-        from_values = [str(v) for v in message.get_all("From", [])]
-        if len(from_values) != 1:
-            logger.warning(
-                "Rejecting message with %d From headers (expected 1)",
-                len(from_values),
-            )
+        # A second From field is an ambiguous header section (above).
+        field = message.get("From")
+        if field is None:
+            logger.warning("Rejecting message with no From header")
             return None
 
-        sender = parse_from_mailbox(from_values[0])
+        # str(): an undecodable 8-bit header is a Header object.
+        from_value = str(field)
+        sender = parse_from_mailbox(from_value)
 
         if sender is None:
             logger.warning(
                 "Rejecting From header that is not a single valid "
                 "mailbox: %.100s",
-                from_values[0],
+                from_value,
             )
             return None
 
