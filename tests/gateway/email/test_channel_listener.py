@@ -815,6 +815,234 @@ class TestIdleLoop:
 
         cl._idle_loop()
 
+        mock_el.connect.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "fails_in", ["idle_start", "idle_wait", "idle_done"]
+    )
+    def test_repeated_idle_errors_back_off(self, fails_in: str) -> None:
+        """A server that keeps failing IDLE is reconnected with backoff.
+
+        Regression: every IDLE error forced an immediate reconnect, so a
+        server rejecting IDLE (or closing the connection right after
+        accepting it) got back-to-back logins with no delay.
+        """
+        cl, mock_el = _make_idle_listener()
+        mock_el.fetch_unread.return_value = []
+        mock_el.idle_start.return_value = False
+        getattr(mock_el, fails_in).side_effect = IMAPIdleError("IDLE failed")
+        waits: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            waits.append(timeout)
+            return True
+
+        def fake_connect(
+            max_retries: int = 3, stop_event: threading.Event | None = None
+        ) -> None:
+            if mock_el.connect.call_count == 5:
+                cl._running = False
+
+        mock_el.connect.side_effect = fake_connect
+
+        with (
+            patch.object(cl._stop_event, "wait", record_wait),
+            patch.object(cl._log, "error") as log_error,
+        ):
+            cl._idle_loop()
+
+        assert waits == [10, 30, 90, 270, 300]
+        assert cl.status.health == ChannelHealth.CONNECTED
+        # An IDLE error is expected, so it is logged without a traceback.
+        assert log_error.call_args.kwargs["exc_info"] is None
+
+    @staticmethod
+    def _idle_for(clock: list[float], seconds: float, error: str):
+        """idle_wait side effect: spend *seconds* in IDLE, then fail."""
+
+        def idle_wait(timeout: float) -> bool:
+            clock[0] += seconds
+            raise IMAPIdleError(error)
+
+        return idle_wait
+
+    def test_idle_error_after_long_idle_reconnects_at_once(self) -> None:
+        """An IDLE error after IDLE ran a while is a one-off.
+
+        E.g. the server dropped a long-idle connection: reconnect right
+        away, without a backoff delay, an error log or a DEGRADED status.
+        """
+        cl, mock_el = _make_idle_listener()
+        clock = [0.0]
+        fetches = 0
+
+        def fake_fetch() -> list[tuple[bytes, IncomingEmail]]:
+            nonlocal fetches
+            fetches += 1
+            if fetches == 2:
+                cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+        mock_el.idle_start.return_value = False
+        mock_el.idle_wait.side_effect = self._idle_for(
+            clock, 1200, "Server closed the connection in IDLE"
+        )
+        stop_wait = MagicMock(return_value=True)
+
+        with (
+            patch("time.monotonic", side_effect=lambda: clock[0]),
+            patch.object(cl._stop_event, "wait", stop_wait),
+            patch.object(cl._log, "error") as log_error,
+        ):
+            cl._idle_loop()
+
+        stop_wait.assert_not_called()
+        log_error.assert_not_called()
+        # The forced periodic reconnect.
+        mock_el.disconnect.assert_called_once()
+        mock_el.connect.assert_called_once()
+        assert cl.status.health == ChannelHealth.STARTING
+
+    @pytest.mark.parametrize(
+        ("idle_seconds", "expected_waits"), [(59, [10]), (60, [])]
+    )
+    def test_one_off_threshold(
+        self, idle_seconds: float, expected_waits: list[float]
+    ) -> None:
+        """IDLE errors before a minute in IDLE back off; later ones don't."""
+        cl, mock_el = _make_idle_listener()
+        clock = [0.0]
+        mock_el.fetch_unread.return_value = []
+        mock_el.idle_start.return_value = False
+        mock_el.idle_wait.side_effect = self._idle_for(
+            clock, idle_seconds, "connection reset"
+        )
+        waits: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            waits.append(timeout)
+            return True
+
+        def fake_connect(
+            max_retries: int = 3, stop_event: threading.Event | None = None
+        ) -> None:
+            cl._running = False
+
+        mock_el.connect.side_effect = fake_connect
+
+        with (
+            patch("time.monotonic", side_effect=lambda: clock[0]),
+            patch.object(cl._stop_event, "wait", record_wait),
+        ):
+            cl._idle_loop()
+
+        assert waits == expected_waits
+        mock_el.connect.assert_called_once()
+
+    def test_one_off_idle_error_resets_backoff(self) -> None:
+        """After a one-off IDLE error, a quick one starts at 10s again."""
+        cl, mock_el = _make_idle_listener()
+        clock = [0.0]
+        mock_el.fetch_unread.return_value = []
+        mock_el.idle_start.return_value = False
+        idle_waits = iter(
+            [
+                self._idle_for(clock, 0, "IDLE failed"),
+                self._idle_for(clock, 600, "connection dropped"),
+                self._idle_for(clock, 0, "IDLE failed"),
+            ]
+        )
+        mock_el.idle_wait.side_effect = lambda t: next(idle_waits)(t)
+        waits: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            waits.append(timeout)
+            return True
+
+        def fake_connect(
+            max_retries: int = 3, stop_event: threading.Event | None = None
+        ) -> None:
+            if mock_el.connect.call_count == 3:
+                cl._running = False
+
+        mock_el.connect.side_effect = fake_connect
+
+        with (
+            patch("time.monotonic", side_effect=lambda: clock[0]),
+            patch.object(cl._stop_event, "wait", record_wait),
+        ):
+            cl._idle_loop()
+
+        assert waits == [10, 10]
+
+    def test_idle_error_during_stop_does_not_reconnect(self) -> None:
+        """An IDLE error caused by stop() interrupting IDLE is ignored.
+
+        Even after a long time in IDLE, which would otherwise be handled
+        as a one-off and reconnected right away.
+        """
+        cl, mock_el = _make_idle_listener()
+        clock = [0.0]
+        mock_el.fetch_unread.return_value = []
+        mock_el.idle_start.return_value = False
+
+        def long_wait(timeout: float) -> bool:
+            clock[0] += 600
+            return True
+
+        def interrupted() -> None:
+            cl._running = False
+            raise IMAPIdleError(
+                "Server closed the connection while leaving IDLE"
+            )
+
+        mock_el.idle_wait.side_effect = long_wait
+        # The loop skips idle_done once stopped, so stop() must land
+        # while it runs.
+        mock_el.idle_done.side_effect = interrupted
+
+        with (
+            patch("time.monotonic", side_effect=lambda: clock[0]),
+            patch.object(cl._log, "warning") as log_warning,
+        ):
+            cl._idle_loop()
+
+        log_warning.assert_not_called()
+        mock_el.disconnect.assert_not_called()
+        mock_el.connect.assert_not_called()
+
+    def test_completed_idle_cycle_resets_backoff(self) -> None:
+        """Once IDLE works again, the next IDLE error starts at 10s."""
+        cl, mock_el = _make_idle_listener()
+        mock_el.fetch_unread.return_value = []
+        mock_el.idle_start.side_effect = [
+            IMAPIdleError("IDLE not accepted"),
+            IMAPIdleError("IDLE not accepted"),
+            False,  # entered IDLE
+            IMAPIdleError("IDLE not accepted"),
+        ]
+        mock_el.idle_wait.return_value = False
+        waits: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            waits.append(timeout)
+            return True
+
+        def fake_connect(
+            max_retries: int = 3, stop_event: threading.Event | None = None
+        ) -> None:
+            if mock_el.connect.call_count == 3:
+                cl._running = False
+
+        mock_el.connect.side_effect = fake_connect
+
+        with patch.object(cl._stop_event, "wait", record_wait):
+            cl._idle_loop()
+
+        mock_el.idle_done.assert_called_once()
+        assert waits == [10, 30, 10]
+
     def test_idle_no_reconnect_during_shutdown(self) -> None:
         """IDLE loop skips reconnection when _running is False.
 
@@ -884,8 +1112,8 @@ class TestIdleLoop:
             return []
 
         mock_el.fetch_unread.side_effect = fake_fetch
-        # e.g. sending IDLE on a reset socket raises a bare OSError
-        mock_el.idle_start.side_effect = BrokenPipeError("broken pipe")
+        # Anything other than an IDLE or connection error is unexpected.
+        mock_el.idle_start.side_effect = ValueError("unexpected")
 
         cl._idle_loop()
 

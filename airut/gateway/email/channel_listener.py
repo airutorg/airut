@@ -44,6 +44,14 @@ _RECONNECT_BASE_DELAY = 10
 #: for as long as the server stays unreachable.
 _RECONNECT_MAX_DELAY = 300
 
+#: Seconds IDLE must have been running for an error in it to count as a
+#: one-off (e.g. the server dropping a long-idle connection) that is
+#: reconnected right away; this also caps such reconnects at one per
+#: minute.  An IDLE error sooner than this backs off like a lost
+#: connection, so a server that keeps failing IDLE is not hit with
+#: back-to-back logins.
+_IDLE_ERROR_STABLE_SECONDS = 60
+
 
 def reconnect_delay(attempt: int) -> int:
     """Seconds to wait before IMAP reconnect *attempt* (1-based).
@@ -205,8 +213,10 @@ class EmailChannelListener(ChannelListener):
 
         Args:
             failures: Consecutive failed attempts so far.  The loops reset
-                it only after a successful fetch, so a connection that
-                drops again right after reconnecting keeps backing off.
+                it only once the connection has worked again (a successful
+                fetch, or for IDLE errors a completed IDLE cycle or a
+                one-off error), so one that fails again right after
+                reconnecting keeps backing off.
             error: The error that lost the connection.
 
         Returns:
@@ -216,14 +226,16 @@ class EmailChannelListener(ChannelListener):
             failures += 1
             delay = reconnect_delay(failures)
             self._log.error(
-                "IMAP connection error, reconnecting in %ds (attempt %d): %s",
+                "IMAP error, reconnecting in %ds (attempt %d): %s",
                 delay,
                 failures,
                 error,
-                # Errors other than IMAPConnectionError are unexpected;
-                # log the traceback to make them diagnosable.
+                # Other errors are unexpected; log the traceback to make
+                # them diagnosable.
                 exc_info=(
-                    None if isinstance(error, IMAPConnectionError) else error
+                    None
+                    if isinstance(error, (IMAPConnectionError, IMAPIdleError))
+                    else error
                 ),
             )
             self._status = ChannelStatus(
@@ -299,9 +311,17 @@ class EmailChannelListener(ChannelListener):
     def _idle_loop(self) -> None:
         """IDLE-based message loop.
 
-        Errors are handled as in ``_polling_loop``.
+        Errors are handled as in ``_polling_loop``.  An IDLE error after
+        IDLE had been running for a while (e.g. the server dropped a
+        long-idle connection) reconnects right away.  One sooner than
+        that reconnects with backoff, so a server that keeps failing IDLE
+        is not hit with back-to-back logins.  Those attempts are counted
+        separately from ``failures``, which every successful fetch
+        resets, and the count resets once an IDLE cycle completes or a
+        one-off error occurs.
         """
         failures = 0
+        idle_failures = 0
         last_reconnect = time.time()
         reconnect_interval = self._config.imap.idle_reconnect_interval
         el = self._email_listener
@@ -327,37 +347,53 @@ class EmailChannelListener(ChannelListener):
                 if messages:
                     continue
 
+                time_until_reconnect = max(
+                    0,
+                    reconnect_interval - (time.time() - last_reconnect),
+                )
+                idle_started = time.monotonic()
                 try:
-                    has_pending = el.idle_start()
-                    if has_pending:
-                        continue
-
-                    time_until_reconnect = max(
-                        0,
-                        reconnect_interval - (time.time() - last_reconnect),
-                    )
-                    idle_timeout = min(time_until_reconnect, 29 * 60)
-
-                    if idle_timeout > 0:
-                        got_notification = el.idle_wait(idle_timeout)
-
-                        if got_notification:
-                            self._log.debug("IDLE notification received")
-
-                    if not self._running:
-                        break
-
-                    el.idle_done()
-
+                    if self._idle_cycle(min(time_until_reconnect, 29 * 60)):
+                        idle_failures = 0
                 except IMAPIdleError as e:
-                    self._log.warning(
-                        "IDLE error, reconnecting: %s",
-                        e,
-                    )
-                    last_reconnect = 0
+                    if not self._running:
+                        break  # Interrupted by stop()
+                    idle_seconds = time.monotonic() - idle_started
+                    if idle_seconds >= _IDLE_ERROR_STABLE_SECONDS:
+                        self._log.warning("IDLE error, reconnecting: %s", e)
+                        idle_failures = 0
+                        last_reconnect = 0  # forces the reconnect above
+                    else:
+                        idle_failures = self._reconnect(idle_failures, e)
+                        last_reconnect = time.time()
 
             except Exception as e:
                 if not self._running:
                     return  # Shutting down; don't attempt reconnection
                 failures = self._reconnect(failures, e)
                 last_reconnect = time.time()
+
+    def _idle_cycle(self, timeout: float) -> bool:
+        """Enter IMAP IDLE, wait up to *timeout* seconds, then leave it.
+
+        Returns:
+            True if the cycle completed.  False if IDLE was not entered
+            because unseen messages are pending, or was cut short by
+            ``stop()``.
+
+        Raises:
+            IMAPIdleError: If entering, waiting in, or leaving IDLE
+                fails, including the server closing the connection.
+        """
+        el = self._email_listener
+        if el.idle_start():
+            return False
+
+        if timeout > 0 and el.idle_wait(timeout):
+            self._log.debug("IDLE notification received")
+
+        if not self._running:
+            return False
+
+        el.idle_done()
+        return True

@@ -425,12 +425,14 @@ class EmailListener:
             response = self.connection.readline()
             if not response.startswith(b"+"):
                 self._idle_tag = None
-                raise IMAPIdleError(f"IDLE not accepted: {response.decode()}")
+                raise IMAPIdleError(
+                    f"IDLE not accepted: {response.decode(errors='replace')}"
+                )
 
             logger.debug("Entered IDLE mode with tag %s", self._idle_tag)
             return False
 
-        except imaplib.IMAP4.error as e:
+        except (imaplib.IMAP4.error, OSError) as e:
             self._idle_tag = None
             raise IMAPIdleError(f"Failed to enter IDLE mode: {e}")
 
@@ -480,14 +482,16 @@ class EmailListener:
             if sock in readable:
                 # Read whatever data is available (EXISTS/EXPUNGE notification)
                 response_data = self.connection.readline()
-                decoded = response_data.decode().strip()
+                if not response_data:
+                    raise IMAPIdleError("Server closed the connection in IDLE")
+                decoded = response_data.decode(errors="replace").strip()
                 logger.debug("IDLE notification received: %s", decoded)
                 return True
 
             logger.debug("IDLE timeout after %.0f seconds", timeout)
             return False
 
-        except OSError as e:
+        except (imaplib.IMAP4.error, OSError) as e:
             raise IMAPIdleError(f"IDLE wait error: {e}")
 
     def idle_done(self) -> None:
@@ -515,7 +519,11 @@ class EmailListener:
 
             for _ in range(max_responses):
                 response = self.connection.readline()
-                response_str = response.decode().strip()
+                if not response:
+                    raise IMAPIdleError(
+                        "Server closed the connection while leaving IDLE"
+                    )
+                response_str = response.decode(errors="replace").strip()
 
                 # Untagged responses start with *
                 if response.startswith(b"*"):

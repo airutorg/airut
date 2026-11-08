@@ -748,6 +748,12 @@ full list.
   at the shortest delay. Unexpected errors in the listener loop are retried the
   same way rather than stopping the listener. The channel reports `DEGRADED`,
   with the latest error, until it reconnects.
+- **IMAP IDLE error** (including the server closing the connection in IDLE):
+  After at least a minute in IDLE (e.g. the server dropped a long-idle
+  connection), reconnect right away. Sooner than that, back off as for a
+  disconnect instead, so a server that keeps failing IDLE is not hit with
+  back-to-back logins; that backoff resets once an IDLE cycle completes or IDLE
+  has run for a minute.
 - **SMTP send failure**: Log error, retry once, then mark conversation as failed
 - **Parse error**: Reply "Could not parse your message. Please resend."
 
