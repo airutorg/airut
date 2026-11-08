@@ -130,6 +130,7 @@ During service startup, each repository is initialized independently:
 
 1. Service attempts to start listener for each configured repo
 2. If a repo fails (e.g., IMAP auth error, git clone failure), error is recorded
+   and any of its listeners that did start are stopped
 3. Service continues with repos that succeeded
 4. If ALL repos fail, service raises RuntimeError and exits (unless resilient
    mode)

@@ -661,6 +661,35 @@ class TestAddRemoveRepo:
 
         assert status_at_stop == [RepoStatus.RELOAD_PENDING]
 
+    def test_add_repo_partial_start_leaves_no_listener_running(
+        self, tmp_path: Path
+    ) -> None:
+        """A repo added with one failing channel keeps none running.
+
+        Otherwise the started listener would be orphaned, and every
+        retry of the add would start another one on the same mailbox.
+        """
+        svc = _make_service(tmp_path)
+        email, slack = MagicMock(), MagicMock()
+        slack.listener.start.side_effect = RuntimeError("invalid_auth")
+
+        with (
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters",
+                return_value={"email": email, "slack": slack},
+            ),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            svc._add_repo("new-repo", _make_email_config(repo_id="new-repo"))
+
+        assert "new-repo" not in svc.repo_handlers
+        email.listener.start.assert_called_once()
+        email.listener.stop.assert_called_once()
+        (state,) = [
+            r for r in svc._repos_store.get().value if r.repo_id == "new-repo"
+        ]
+        assert state.status == RepoStatus.FAILED
+
     def test_add_repo_exception(self, tmp_path: Path) -> None:
         """Exception during _add_repo is logged, not raised."""
         svc = _make_service(tmp_path)
@@ -1031,6 +1060,65 @@ class TestApplySingleRepoReload:
 
         # Rollback succeeded — config should be original
         assert svc.repo_handlers["test"].config.model == "opus"
+
+    def test_reload_failure_after_start_stops_new_listeners(
+        self, tmp_path: Path
+    ) -> None:
+        """Listeners started by a reload that then fails are stopped.
+
+        Otherwise they would keep running alongside the rolled-back
+        listeners, both polling the same mailbox.
+        """
+        svc = _make_service(tmp_path)
+        svc._scheduler = MagicMock()
+        svc._scheduler.rebuild_repo.side_effect = RuntimeError("bad")
+        events: list[str] = []
+        new, rolled_back = MagicMock(), MagicMock()
+        new.listener.stop.side_effect = lambda: events.append("new stopped")
+        rolled_back.listener.start.side_effect = lambda **kw: events.append(
+            "rolled back started"
+        )
+
+        with patch(
+            "airut.gateway.service.gateway.create_adapters",
+            side_effect=[{"email": new}, {"email": rolled_back}],
+        ):
+            svc._apply_single_repo_reload("test")
+
+        new.listener.start.assert_called_once()
+        assert events == ["new stopped", "rolled back started"]
+        assert svc.repo_handlers["test"].adapters == {"email": rolled_back}
+
+    def test_reload_failure_restores_conversation_manager(
+        self, tmp_path: Path
+    ) -> None:
+        """Rolling back a URL change also restores the old repo's manager.
+
+        Otherwise the repo would be live on the old config while new
+        conversations cloned from the new URL.
+        """
+        svc = _make_service(tmp_path)
+        handler = svc.repo_handlers["test"]
+        old_config = handler.config
+        old_manager = handler.conversation_manager
+        handler.config = dataclasses.replace(
+            old_config, git_repo_url="https://example.com/other.git"
+        )
+        new = MagicMock()
+        new.listener.start.side_effect = RuntimeError("invalid_auth")
+
+        with (
+            patch("airut.gateway.conversation.ConversationManager"),
+            patch(
+                "airut.gateway.service.gateway.create_adapters",
+                side_effect=[{"email": new}, {"email": MagicMock()}],
+            ),
+        ):
+            svc._apply_single_repo_reload("test", old_config)
+
+        assert handler.config is old_config
+        assert handler.conversation_manager is old_manager
+        new.listener.stop.assert_called()
 
     def test_reload_failure_rollback_also_fails(self, tmp_path: Path) -> None:
         """Double failure does not crash the service."""
