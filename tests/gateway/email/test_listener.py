@@ -653,6 +653,22 @@ def test_idle_start_not_accepted(email_config):
     assert listener._idle_tag is None
 
 
+def test_idle_start_not_accepted_undecodable(email_config):
+    """A rejection with undecodable bytes is still an IDLE error."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_conn._new_tag.return_value = b"A001"
+    mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.uid.return_value = ("OK", [b""])
+    mock_conn.readline.return_value = b"A001 BAD Unbekannter Befehl \xfc\r\n"
+
+    with pytest.raises(IMAPIdleError, match="IDLE not accepted"):
+        listener.idle_start()
+
+
 def test_idle_start_has_pending_messages(email_config):
     """Test IDLE start returns True when unseen messages exist.
 
@@ -692,6 +708,90 @@ def test_idle_start_imap_error(email_config):
 
     # Tag should be cleared on failure
     assert listener._idle_tag is None
+
+
+def test_idle_start_oserror(email_config):
+    """A socket error sending IDLE is an IDLE error, not a raw OSError."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_conn._new_tag.return_value = b"A001"
+    mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.uid.return_value = ("OK", [b""])
+    mock_conn.send.side_effect = BrokenPipeError("Broken pipe")
+
+    with pytest.raises(IMAPIdleError, match="Failed to enter IDLE mode"):
+        listener.idle_start()
+
+    assert listener._idle_tag is None
+
+
+def test_idle_wait_connection_closed(email_config):
+    """EOF while waiting in IDLE means the server closed the connection.
+
+    Regression: the empty read was reported as a notification, and the
+    following idle_done() returned normally, so the loop never learned
+    that IDLE had failed.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_sock = MagicMock()
+    mock_conn.socket.return_value = mock_sock
+    mock_conn.readline.return_value = b""
+
+    with patch("airut.gateway.email.listener.select.select") as mock_select:
+        mock_select.return_value = ([mock_sock], [], [])
+
+        with pytest.raises(IMAPIdleError, match="closed the connection"):
+            listener.idle_wait(timeout=60)
+
+    listener.close()
+
+
+def test_idle_wait_imap_error(email_config):
+    """An imaplib error reading the notification is an IDLE error."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_sock = MagicMock()
+    mock_conn.socket.return_value = mock_sock
+    mock_conn.readline.side_effect = imaplib.IMAP4.error(
+        "got more than 1000000 bytes"
+    )
+
+    with patch("airut.gateway.email.listener.select.select") as mock_select:
+        mock_select.return_value = ([mock_sock], [], [])
+
+        with pytest.raises(IMAPIdleError, match="IDLE wait error"):
+            listener.idle_wait(timeout=60)
+
+    listener.close()
+
+
+def test_idle_wait_undecodable_notification(email_config):
+    """A notification with undecodable bytes is still a notification."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_sock = MagicMock()
+    mock_conn.socket.return_value = mock_sock
+    mock_conn.readline.return_value = b"* 1 EXISTS \xff\r\n"
+
+    with patch("airut.gateway.email.listener.select.select") as mock_select:
+        mock_select.return_value = ([mock_sock], [], [])
+
+        assert listener.idle_wait(timeout=60) is True
+
+    listener.close()
 
 
 def test_idle_wait_notification_received(email_config):
@@ -814,6 +914,40 @@ def test_idle_done_unexpected_response(email_config):
     mock_conn.send.assert_called_once_with(b"DONE\r\n")
     # Tag should still be cleared
     assert listener._idle_tag is None
+
+
+def test_idle_done_connection_closed(email_config):
+    """EOF while leaving IDLE means the server closed the connection."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+    listener._idle_tag = "A001"
+
+    mock_conn.readline.return_value = b""
+
+    with pytest.raises(IMAPIdleError, match="closed the connection"):
+        listener.idle_done()
+
+    assert listener._idle_tag is None
+
+
+def test_idle_done_undecodable_response(email_config):
+    """Undecodable bytes in a drained response do not raise."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+    listener._idle_tag = "A001"
+
+    mock_conn.readline.side_effect = [
+        b"* 2 EXISTS \xff\r\n",
+        b"A001 OK IDLE terminated\r\n",
+    ]
+
+    listener.idle_done()
+
+    assert mock_conn.readline.call_count == 2
 
 
 def test_idle_done_imap_error(email_config):
