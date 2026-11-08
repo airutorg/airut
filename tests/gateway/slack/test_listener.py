@@ -87,6 +87,22 @@ class TestSlackChannelListener:
         assert listener.status.health == ChannelHealth.FAILED
         assert listener.status.message == "stopped"
 
+    def test_stop_without_start(self) -> None:
+        """stop() is safe, and repeatable, on a listener never started.
+
+        The gateway stops every listener of a repo that fails to start,
+        including ones it never got to; closing the handler also stops
+        the SDK threads started when it was constructed.
+        """
+        handler = MagicMock()
+        listener = _make_listener(handler=handler)
+
+        listener.stop()
+        listener.stop()
+
+        assert handler.close.call_count == 2
+        assert listener.status.health == ChannelHealth.FAILED
+
     def test_handlers_registered_on_start(self) -> None:
         app = MagicMock()
         handler = MagicMock()

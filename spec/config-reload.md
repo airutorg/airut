@@ -160,12 +160,15 @@ For each repo with repo-scope changes:
    completion, `_check_pending_repo_reload(repo_id)` applies when the repo
    becomes idle.
 
-If listener restart fails, the handler reverts to old config and attempts to
-restart with old settings. If that also fails, the repo enters `FAILED` state.
+If listener restart fails, the handler stops any new listeners that did start,
+reverts to old config (and conversation manager, if the repo URL changed) and
+attempts to restart with old settings. If that also fails, the repo enters
+`FAILED` state.
 
 **Adding repos:** create new `RepoHandler` and start listeners. No deferral
 needed. If listener startup fails, the repo enters `FAILED` state in the repos
-store (visible on the dashboard), matching boot-time behaviour. On subsequent
+store (visible on the dashboard), matching boot-time behaviour, and none of its
+listeners is left running, so a retried add cannot duplicate one. On subsequent
 reloads, `_reconcile_repo_handlers` retries the add for any repo that is in
 config but not in `repo_handlers`.
 

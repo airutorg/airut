@@ -283,7 +283,10 @@ class ChannelListener(Protocol):
     def stop(self) -> None:
         """Stop listening and release all resources.
 
-        Blocks until internal threads have terminated.
+        Blocks until internal threads have terminated.  Must be safe to
+        call on a listener whose ``start()`` was never called or raised,
+        and to call more than once: the gateway stops every listener of
+        a repo that fails to start, and may stop them again at shutdown.
         """
         ...
 

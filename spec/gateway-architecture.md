@@ -43,9 +43,10 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
   protocol-specific knowledge.
 - **`ChannelListener`** — `typing.Protocol` defining the listener lifecycle
   interface. Non-blocking `start(submit)` spawns internal threads; blocking
-  `stop()` ensures clean shutdown; `status` property exposes health without
-  callbacks. Each implementation manages its own threads, reconnection logic,
-  and health tracking.
+  `stop()` ensures clean shutdown, and must be safe on a listener that was never
+  started (or failed to start) and when repeated; `status` property exposes
+  health without callbacks. Each implementation manages its own threads,
+  reconnection logic, and health tracking.
 - **`ChannelHealth`** — Enum with states `STARTING`, `CONNECTED`, `DEGRADED`
   (not connected, internally retrying), and `FAILED` (hard failure: the listener
   has stopped and cannot recover without a restart). Listeners never give up on
@@ -135,7 +136,10 @@ a `-N` suffix instead.
   Delegates listener lifecycle to each adapter's `listener.start()` /
   `listener.stop()`. Has zero channel-specific imports. The `adapters` dict is
   keyed by channel type (e.g.
-  `{"email": EmailChannelAdapter, "slack": SlackChannelAdapter}`).
+  `{"email": EmailChannelAdapter, "slack": SlackChannelAdapter}`). Starting is
+  all or nothing: if the mirror update or any listener fails to start, every
+  listener of the repo is stopped before the error propagates, so a repo that
+  failed to start receives no messages.
 - **ConversationManager** — Git checkout management and state persistence
 - **ChannelHealthMonitor** — Polls listener health into repo status (see
   [Channel Health](#channel-health))

@@ -1067,6 +1067,7 @@ class GatewayService:
 
         if old_config is None:
             old_config = handler.config
+        old_conversation_manager = handler.conversation_manager
         self._set_repo_status(repo_id, RepoStatus.RELOADING)
 
         try:
@@ -1094,8 +1095,12 @@ class GatewayService:
             )
             # Attempt rollback.  Note: self.config.repos still has the
             # new config; the next reload will detect the mismatch and
-            # retry the repo-scope reload.
+            # retry the repo-scope reload.  The new listeners may have
+            # started before the failure; stop them so they do not run
+            # alongside the rolled-back ones.
+            handler.stop()
             handler.config = old_config
+            handler.conversation_manager = old_conversation_manager
             try:
                 handler.adapters = create_adapters(old_config)
                 handler.start_listener()
