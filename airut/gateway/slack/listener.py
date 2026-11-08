@@ -55,6 +55,13 @@ _DEDUP_CAPACITY = 256
 #: stay in sync on what counts as content.
 CONTENT_SUBTYPES: frozenset[str] = frozenset({"file_share"})
 
+#: Status while Socket Mode is disconnected and no close or error event
+#: has said why.
+_DISCONNECTED = ChannelStatus(
+    health=ChannelHealth.DEGRADED,
+    message="Socket Mode disconnected, reconnecting",
+)
+
 
 def mentions_bot(text: str, bot_user_id: str | None) -> bool:
     """Return whether *text* contains the bot's ``<@BOT_USER_ID>`` token.
@@ -112,9 +119,12 @@ class SlackChannelListener(ChannelListener):
         self._handler = handler or SocketModeHandler(
             self._app, config.app_token
         )
-        self._status = ChannelStatus(health=ChannelHealth.STARTING)
         self._submit: Callable[[RawMessage[JsonDict]], bool] | None = None
         self._started = False
+        self._stopped = False
+        # Why the connection last dropped, reported while disconnected;
+        # cleared once traffic flows again.
+        self._disconnect_status: ChannelStatus | None = None
         # Ordered set of recently-seen (channel, ts) keys for dedup.
         self._seen_events: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._dedup_lock = threading.Lock()
@@ -144,32 +154,35 @@ class SlackChannelListener(ChannelListener):
         self._install_connection_listeners()
         self._handler.connect()
         self._started = True
-        self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
         logger.info("Slack listener connected (Socket Mode)")
 
     def stop(self) -> None:
         """Disconnect Socket Mode and release resources."""
         self._handler.close()
-        self._status = ChannelStatus(
-            health=ChannelHealth.FAILED, message="stopped"
-        )
+        self._stopped = True
         logger.info("Slack listener stopped")
 
     @property
     def status(self) -> ChannelStatus:
-        """Current health of this listener."""
-        return self._status
+        """Current health of this listener.
+
+        Derived from the Socket Mode client's connection state rather
+        than from close/error events alone: the SDK can drop a stale
+        connection, and fail to reconnect, without firing either event,
+        and an error event does not always mean the connection was lost.
+        The SDK reconnects on its own, indefinitely.
+        """
+        if self._stopped:
+            return ChannelStatus(health=ChannelHealth.FAILED, message="stopped")
+        if not self._started:
+            return ChannelStatus(health=ChannelHealth.STARTING)
+        if self._handler.client.is_connected():
+            return ChannelStatus(health=ChannelHealth.CONNECTED)
+        return self._disconnect_status or _DISCONNECTED
 
     def _install_connection_listeners(self) -> None:
         """Install close/error listeners on the Socket Mode client."""
-        client = getattr(self._handler, "client", None)
-        if client is None:
-            logger.warning(
-                "Socket Mode handler has no 'client' attribute; "
-                "connection health listeners not installed"
-            )
-            return
-
+        client = self._handler.client
         installed = 0
 
         close_listeners = getattr(client, "on_close_listeners", None)
@@ -199,14 +212,14 @@ class SlackChannelListener(ChannelListener):
         else:
             logger.warning(
                 "Socket Mode client has no 'on_message_listeners'; "
-                "reconnect recovery will not be tracked"
+                "disconnect reasons will not be cleared on recovery"
             )
 
         logger.debug("Installed %d connection health listener(s)", installed)
 
     def _on_ws_close(self, code: int, reason: str | None) -> None:
-        """Handle WebSocket close — mark as degraded (auto-reconnect)."""
-        self._status = ChannelStatus(
+        """Handle WebSocket close — record why (the SDK reconnects)."""
+        self._disconnect_status = ChannelStatus(
             health=ChannelHealth.DEGRADED,
             message=f"WebSocket closed (code={code})",
         )
@@ -215,23 +228,25 @@ class SlackChannelListener(ChannelListener):
         )
 
     def _on_ws_error(self, error: Exception) -> None:
-        """Handle WebSocket error — mark as degraded."""
-        self._status = ChannelStatus(
+        """Handle WebSocket error — record it in case it drops the link."""
+        self._disconnect_status = ChannelStatus(
             health=ChannelHealth.DEGRADED,
             message=f"WebSocket error: {error}",
+            error_type=type(error).__name__,
         )
         logger.warning("Slack WebSocket error: %s", error)
 
     def _on_ws_message(self, message: str) -> None:
-        """Handle WebSocket message — recover from degraded state.
+        """Handle WebSocket message — forget the last disconnect reason.
 
         After a close/error, the Bolt SDK auto-reconnects.  The first
         message received on the new connection proves connectivity is
-        restored, so we flip back to CONNECTED.
+        restored, so a later disconnect is not reported with a stale
+        reason.
         """
-        if self._status.health != ChannelHealth.DEGRADED:
+        if self._disconnect_status is None:
             return
-        self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
+        self._disconnect_status = None
         logger.info("Slack WebSocket recovered (message received)")
 
     def _register_handlers(self) -> None:

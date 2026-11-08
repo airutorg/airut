@@ -1608,13 +1608,17 @@ class TestStateProviders:
         assert len(result) == 1
         assert result[0] == handler.conversation_manager.conversations_dir
 
-    def test_get_work_dirs_excludes_failed(
+    def test_get_work_dirs_includes_failed(
         self, email_config, tmp_path: Path
     ) -> None:
-        """_get_work_dirs excludes repos that failed to start."""
+        """_get_work_dirs includes FAILED repos that have a handler.
+
+        A repo whose listener has failed still has its conversations,
+        including ones whose tasks are still running.
+        """
         from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
 
-        svc, _ = make_service(email_config, tmp_path)
+        svc, handler = make_service(email_config, tmp_path)
         svc._repos_store.update(
             (
                 RepoState(
@@ -1631,7 +1635,7 @@ class TestStateProviders:
             )
         )
         result = svc._get_work_dirs()
-        assert len(result) == 0
+        assert result == [handler.conversation_manager.conversations_dir]
 
     def test_get_work_dirs_includes_reload_pending(
         self, email_config, tmp_path: Path
@@ -2586,3 +2590,66 @@ class TestUpstreamDnsResolution:
                 SystemResolverError, match="No nameserver entries"
             ):
                 GatewayService(server_config, repo_root=tmp_path)
+
+
+class TestChannelHealth:
+    """Gateway wiring of the channel health monitor."""
+
+    def test_boot_starts_monitor(self, email_config, tmp_path: Path) -> None:
+        """Boot starts the health monitor thread."""
+        from airut.gateway.service.channel_health import ChannelHealthMonitor
+
+        svc, handler = make_service(email_config, tmp_path)
+        started = threading.Event()
+
+        def fake_start(**kwargs):
+            svc._running = False
+            svc._shutdown_event.set()
+
+        handler.adapters["email"].listener.start.side_effect = fake_start
+
+        with patch.object(
+            ChannelHealthMonitor,
+            "run",
+            side_effect=lambda self: started.set(),
+            autospec=True,
+        ):
+            svc.start()
+
+        assert started.wait(timeout=5)
+
+    def test_get_channel_statuses(self, email_config, tmp_path: Path) -> None:
+        """Statuses come from the repo's handler; None without one."""
+        from airut.gateway.channel import ChannelHealth, ChannelStatus
+
+        svc, handler = make_service(email_config, tmp_path)
+        degraded = ChannelStatus(health=ChannelHealth.DEGRADED)
+        handler.adapters["email"].listener.status = degraded
+
+        assert svc._get_channel_statuses("test") == {"email": degraded}
+        assert svc._get_channel_statuses("unknown") is None
+
+    def test_set_repo_status_clears_error(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """A status change drops the error recorded with the old status."""
+        from airut.dashboard.tracker import RepoState, RepoStatus
+
+        svc, _ = make_service(email_config, tmp_path)
+        svc._repos_store.update(
+            (
+                RepoState(
+                    repo_id="test",
+                    status=RepoStatus.DEGRADED,
+                    error_message="email: IMAP reconnecting (attempt 1): x",
+                    error_type="IMAPConnectionError",
+                ),
+            )
+        )
+
+        svc._set_repo_status("test", RepoStatus.RELOADING)
+
+        (state,) = svc._repos_store.get().value
+        assert state.status == RepoStatus.RELOADING
+        assert state.error_message is None
+        assert state.error_type is None

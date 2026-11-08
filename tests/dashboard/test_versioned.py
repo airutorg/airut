@@ -214,3 +214,61 @@ class TestVersionedStore:
         # Should see version 2 and value "v2"
         assert snap.version == 2
         assert snap.value.name == "v2"
+
+
+class TestVersionedStoreModify:
+    """Tests for VersionedStore.modify()."""
+
+    def test_applies_transform(self) -> None:
+        clock = VersionClock()
+        store = VersionedStore(_SampleState(name="a", count=1), clock)
+
+        version = store.modify(
+            lambda s: _SampleState(name=s.name, count=s.count + 1)
+        )
+
+        assert version == 1
+        assert store.get() == Versioned(1, _SampleState(name="a", count=2))
+
+    def test_unchanged_result_does_not_tick(self) -> None:
+        """A transform returning an equal value leaves version and clock."""
+        clock = VersionClock()
+        store = VersionedStore(_SampleState(name="a"), clock)
+        store.update(_SampleState(name="b"))
+
+        version = store.modify(lambda s: _SampleState(name=s.name))
+
+        assert version == 1
+        assert store.get().version == 1
+        assert clock.version == 1
+
+    def test_concurrent_modifications_are_not_lost(self) -> None:
+        """A transform runs with the lock held, so no update is lost.
+
+        Each transform waits for the other thread to enter its own
+        transform.  If both could read the value before either wrote,
+        both would see 0 and one increment would be lost; with the lock
+        held the second transform cannot start, the wait times out, and
+        it then runs on the first one's result.
+        """
+        clock = VersionClock()
+        store = VersionedStore(_SampleState(name="n", count=0), clock)
+        barrier = threading.Barrier(2)
+
+        def increment(s: _SampleState) -> _SampleState:
+            try:
+                barrier.wait(timeout=0.5)
+            except threading.BrokenBarrierError:
+                pass
+            return _SampleState(name=s.name, count=s.count + 1)
+
+        threads = [
+            threading.Thread(target=store.modify, args=(increment,))
+            for _ in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert store.get().value.count == 2

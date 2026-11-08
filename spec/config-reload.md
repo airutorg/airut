@@ -286,7 +286,9 @@ thread pool can be safely recreated without losing queued work.
 
 **New `RepoStatus` values:** `RELOAD_PENDING` (waiting for tasks to drain) and
 `RELOADING` (actively restarting listeners), added to the existing `RepoStatus`
-enum.
+enum. The channel health monitor does not override them; it resumes setting
+`LIVE`/`DEGRADED`/`FAILED` from listener health once the reload has made the
+repo `LIVE` again.
 
 **`/api/status` endpoint:** Returns service-level reload status:
 

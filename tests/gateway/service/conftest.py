@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.channel import RawMessage
+from airut.gateway.channel import ChannelHealth, ChannelStatus, RawMessage
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.email.incoming import IncomingEmail
 from airut.gateway.service import GatewayService
@@ -208,6 +208,9 @@ def make_service(
         ),
     ):
         mock_adapter = MagicMock()
+        mock_adapter.listener.status = ChannelStatus(
+            health=ChannelHealth.CONNECTED
+        )
         mock_create.return_value = {"email": mock_adapter}
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = GatewayService(server_config, repo_root=tmp_path)

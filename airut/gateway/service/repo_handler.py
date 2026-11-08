@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from airut.gateway.channel import ChannelAdapter, RawMessage
+from airut.gateway.channel import ChannelAdapter, ChannelStatus, RawMessage
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.conversation import ConversationManager
 from airut.gateway.service.adapter_factory import create_adapters
@@ -92,6 +92,13 @@ class RepoHandler:
                 self.config.repo_id,
                 channel_type,
             )
+
+    def channel_statuses(self) -> dict[str, ChannelStatus]:
+        """Return the current health of each listener, by channel type."""
+        return {
+            channel_type: adapter.listener.status
+            for channel_type, adapter in self.adapters.items()
+        }
 
     def _submit_message(
         self,

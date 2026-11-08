@@ -61,10 +61,14 @@ class CompletionReason(Enum):
 class RepoStatus(Enum):
     """Repository status.
 
-    Tracks both initialization and runtime reload status.
+    Tracks initialization, channel listener health, and runtime reload
+    status.  A started repo is LIVE while all its channel listeners are
+    connected, DEGRADED while any is reconnecting, and FAILED if one has
+    stopped for good (or the repo failed to start).
     """
 
     LIVE = "live"
+    DEGRADED = "degraded"
     FAILED = "failed"
     RELOADING = "reloading"
     RELOAD_PENDING = "reload_pending"
@@ -193,9 +197,11 @@ class RepoState:
 
     Attributes:
         repo_id: Unique repository identifier.
-        status: Current status (live or failed).
-        error_message: Human-readable error message if failed, None if live.
-        error_type: Exception type name if failed, None if live.
+        status: Current status (see ``RepoStatus``).
+        error_message: Human-readable error message if failed or
+            degraded, None if live.
+        error_type: Exception type name if failed or degraded, None if
+            live.
         git_repo_url: URL of the git repository.
         channels: Per-channel info for dashboard display.
         storage_dir: Path to storage directory.

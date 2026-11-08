@@ -25,10 +25,7 @@ from unittest.mock import MagicMock, patch
 
 from airut.dashboard.tracker import (
     BootPhase,
-    ChannelInfo,
     CompletionReason,
-    RepoState,
-    RepoStatus,
     TaskStatus,
     TaskTracker,
 )
@@ -809,48 +806,12 @@ class TestCaptureVersionInfo:
 class TestMultiRepoInteractions:
     """Tests for interactions across multiple repos."""
 
-    def test_work_dirs_excludes_failed_repos(
+    def test_work_dirs_empty_when_no_handlers(
         self, email_config, tmp_path: Path
     ) -> None:
-        """_get_work_dirs excludes FAILED repos."""
-        svc, handler = make_service(email_config, tmp_path)
-
-        svc._repos_store.update(
-            (
-                RepoState(
-                    repo_id="test",
-                    status=RepoStatus.LIVE,
-                    git_repo_url="https://example.com/r1",
-                    channels=(
-                        ChannelInfo(
-                            channel_type="email", info="imap.example.com"
-                        ),
-                    ),
-                    storage_dir="/s/test",
-                ),
-                RepoState(
-                    repo_id="failed-repo",
-                    status=RepoStatus.FAILED,
-                    git_repo_url="https://example.com/r2",
-                    channels=(
-                        ChannelInfo(
-                            channel_type="email", info="imap2.example.com"
-                        ),
-                    ),
-                    storage_dir="/s/failed",
-                ),
-            )
-        )
-
-        dirs = svc._get_work_dirs()
-        assert len(dirs) == 1
-
-    def test_work_dirs_empty_when_no_repos(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        """_get_work_dirs returns empty list when no non-failed repos."""
+        """_get_work_dirs returns empty list when no repo has a handler."""
         svc, _ = make_service(email_config, tmp_path)
-        # Default repos_store is empty tuple
+        svc.repo_handlers.clear()
         dirs = svc._get_work_dirs()
         assert dirs == []
 

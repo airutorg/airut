@@ -12,6 +12,7 @@ notification for SSE endpoints.
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -82,10 +83,8 @@ class VersionedStore[T]:
     Each update increments the shared VersionClock.
 
     Thread safety note: ``get()`` and ``update()`` are individually atomic,
-    but read-modify-write sequences (get → transform → update) are NOT.
-    If multiple threads may write concurrently, callers must synchronize
-    externally. In practice, the gateway uses a single-writer pattern
-    where only the boot/main thread mutates stores.
+    but a read-modify-write sequence of them (get → transform → update) is
+    NOT.  Use ``modify()`` when multiple threads may write concurrently.
     """
 
     def __init__(self, initial: T, clock: VersionClock) -> None:
@@ -102,7 +101,29 @@ class VersionedStore[T]:
     def update(self, new_value: T) -> int:
         """Replace value, tick clock, return new version."""
         with self._lock:
-            version = self._clock.tick()
-            self._version = version
-            self._value = new_value
-            return version
+            return self._set(new_value)
+
+    def modify(self, transform: Callable[[T], T]) -> int:
+        """Atomically replace the value with ``transform(value)``.
+
+        The store's lock is held while *transform* runs, so concurrent
+        writers cannot interleave.  *transform* must therefore be quick
+        and must not access this store.  A result equal to the current
+        value is not stored and does not tick the clock, so a no-op
+        modification does not wake waiters.
+
+        Returns:
+            The new version, or the current one if nothing changed.
+        """
+        with self._lock:
+            new_value = transform(self._value)
+            if new_value == self._value:
+                return self._version
+            return self._set(new_value)
+
+    def _set(self, new_value: T) -> int:
+        """Store *new_value* and tick the clock; caller holds ``_lock``."""
+        version = self._clock.tick()
+        self._version = version
+        self._value = new_value
+        return version

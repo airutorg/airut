@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from airut.dashboard.tracker import TaskTracker
+from airut.dashboard.tracker import RepoState, RepoStatus, TaskTracker
 from airut.gateway.config import (
     EmailAccountConfig,
     EmailAuthConfig,
@@ -630,6 +630,36 @@ class TestAddRemoveRepo:
             svc._remove_repo("test")
         assert "test" in svc.repo_handlers
         assert "test" in svc._pending_repo_reload
+
+    def test_remove_busy_repo_marks_pending_before_stop(
+        self, tmp_path: Path
+    ) -> None:
+        """Listeners stop only once the repo is RELOAD_PENDING.
+
+        The health monitor leaves RELOAD_PENDING repos alone; marking
+        the repo first keeps it from reporting the stopped listeners
+        (Slack reports FAILED once stopped) as a failed repo.
+        """
+        svc = _make_service(tmp_path)
+        svc._repos_store.update(
+            (RepoState(repo_id="test", status=RepoStatus.LIVE),)
+        )
+        status_at_stop: list[RepoStatus] = []
+        handler = svc.repo_handlers["test"]
+        handler.stop = MagicMock(
+            side_effect=lambda: status_at_stop.append(
+                svc._repos_store.get().value[0].status
+            )
+        )
+
+        with patch.object(
+            TaskTracker,
+            "has_active_tasks_for_repo",
+            return_value=True,
+        ):
+            svc._remove_repo("test")
+
+        assert status_at_stop == [RepoStatus.RELOAD_PENDING]
 
     def test_add_repo_exception(self, tmp_path: Path) -> None:
         """Exception during _add_repo is logged, not raised."""

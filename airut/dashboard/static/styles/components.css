@@ -133,6 +133,7 @@
   letter-spacing: 0.03em;
 }
 .status-badge.live { background: var(--status-success-bg); color: var(--status-success); }
+.status-badge.degraded { background: var(--status-warning-bg); color: var(--status-warning); }
 .status-badge.failed { background: var(--status-error-bg); color: var(--status-error); }
 .status-badge.reload_pending,
 .status-badge.reloading { background: var(--status-info-bg); color: var(--status-info); }
@@ -187,6 +188,7 @@
   flex-shrink: 0;
 }
 .repo-status-indicator.live { background: var(--status-success); }
+.repo-status-indicator.degraded { background: var(--status-warning); }
 .repo-status-indicator.failed { background: var(--status-error); }
 .repo-status-indicator.reload_pending,
 .repo-status-indicator.reloading {

@@ -47,8 +47,11 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
   callbacks. Each implementation manages its own threads, reconnection logic,
   and health tracking.
 - **`ChannelHealth`** — Enum with states `STARTING`, `CONNECTED`, `DEGRADED`
-  (temporarily lost, internally retrying), and `FAILED` (gave up, will not
-  retry). Maps to dashboard display.
+  (not connected, internally retrying), and `FAILED` (hard failure: the listener
+  has stopped and cannot recover without a restart). Listeners never give up on
+  a lost connection — a temporary outage must not become a permanent one — so
+  `FAILED` is not used for connection loss. Reflected in the repo status, see
+  [Channel Health](#channel-health).
 - **`ChannelStatus`** — Frozen dataclass with `health`, `message`, and
   `error_type` for structured health reporting.
 - **`RawMessage[T]`** — Generic dataclass wrapping a channel-specific payload
@@ -134,6 +137,8 @@ a `-N` suffix instead.
   keyed by channel type (e.g.
   `{"email": EmailChannelAdapter, "slack": SlackChannelAdapter}`).
 - **ConversationManager** — Git checkout management and state persistence
+- **ChannelHealthMonitor** — Polls listener health into repo status (see
+  [Channel Health](#channel-health))
 - **Sandbox** — Container lifecycle, network isolation, and execution
   (`airut/sandbox/`)
 
@@ -144,8 +149,9 @@ a `-N` suffix instead.
   `from_config()` factory. `RepoHandler` accesses email functionality only
   through the adapter.
 - **EmailChannelListener** — Implements `ChannelListener` for email. Manages the
-  IMAP polling/IDLE loop in an internal thread with automatic reconnection and
-  health tracking. Wraps the low-level `EmailListener`.
+  IMAP polling/IDLE loop in an internal thread with automatic reconnection
+  (retried indefinitely) and health tracking. Wraps the low-level
+  `EmailListener`.
 - **EmailListener** — Low-level IMAP operations (connect, fetch, IDLE, close)
 - **EmailResponder** — SMTP reply construction with threading support
 - **SenderAuthenticator** — DMARC and DKIM verification (trusted headers, and
@@ -158,8 +164,9 @@ a `-N` suffix instead.
   Slack sub-components (listener, authorizer, thread store) via `from_config()`
   factory.
 - **SlackChannelListener** — Implements `ChannelListener` for Slack. Wraps the
-  Bolt SDK's `SocketModeHandler` with connection health tracking (close/error
-  listeners on the underlying WebSocket).
+  Bolt SDK's `SocketModeHandler` with connection health tracking (the Socket
+  Mode client's connection state, with the reason from close/error listeners on
+  the underlying WebSocket).
 - **SlackAuthorizer** — Authorization via workspace membership, user groups, or
   user IDs with TTL-cached API data.
 - **SlackThreadStore** — Thread-to-conversation mapping with atomic JSON
@@ -735,16 +742,40 @@ full list.
 
 **Email:**
 
-- **IMAP disconnect**: Retry with exponential backoff (10s, 30s, 60s, 300s)
+- **IMAP disconnect**: Retry indefinitely with capped exponential backoff (10s,
+  30s, 90s, 270s, then every 300s). The backoff resets only after a successful
+  fetch, so a server that accepts the login but fails every fetch is not retried
+  at the shortest delay. Unexpected errors in the listener loop are retried the
+  same way rather than stopping the listener. The channel reports `DEGRADED`,
+  with the latest error, until it reconnects.
 - **SMTP send failure**: Log error, retry once, then mark conversation as failed
 - **Parse error**: Reply "Could not parse your message. Please resend."
 
 **Slack:**
 
-- **WebSocket disconnect**: Bolt SDK auto-reconnects; listener marks health as
-  DEGRADED until reconnected
+- **WebSocket disconnect**: Bolt SDK auto-reconnects indefinitely. The listener
+  derives its health from the Socket Mode client's connection state (the SDK can
+  drop a connection, and fail to restore it, without firing close or error
+  events), so it reports `DEGRADED` until reconnected
 - **Slack API failure**: Log error, reply with error message in thread
 - **Rate limiting**: Handled by Slack SDK's built-in retry logic
+
+### Channel Health
+
+Listeners expose health only through the `ChannelListener.status` property. A
+gateway thread (`ChannelHealthMonitor`) polls it every few seconds and sets the
+status of each started repo (`LIVE` or `DEGRADED`) from its listeners:
+
+- `FAILED` if any listener has failed
+- `DEGRADED` if any listener is otherwise not connected (reconnecting, or not
+  yet connected)
+- `LIVE` when all listeners are connected
+
+The repo's `error_type` and `error_message` describe the channels responsible
+and are cleared once it is live again. Reload states (`RELOAD_PENDING`,
+`RELOADING`) take precedence, and a `FAILED` repo stays failed until a reload or
+restart replaces its listeners. A repo whose listener fails to start is `FAILED`
+from the outset (see [dashboard.md](dashboard.md#graceful-repo-initialization)).
 
 ### Conversation Limit
 

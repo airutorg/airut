@@ -817,6 +817,9 @@ class RequestHandlers:
         # Include repo status in health check
         repo_states = self._get_repo_states()
         live_repos = sum(1 for r in repo_states if r.status.value == "live")
+        degraded_repos = sum(
+            1 for r in repo_states if r.status.value == "degraded"
+        )
         failed_repos = sum(1 for r in repo_states if r.status.value == "failed")
 
         # Determine overall status based on boot state
@@ -836,6 +839,7 @@ class RequestHandlers:
                 "tasks": counts,
                 "repos": {
                     "live": live_repos,
+                    "degraded": degraded_repos,
                     "failed": failed_repos,
                     "total": len(repo_states),
                 },

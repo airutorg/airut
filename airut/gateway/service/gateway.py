@@ -51,6 +51,7 @@ from airut.dns import get_system_resolver
 from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
+    ChannelStatus,
     ParsedMessage,
     RawMessage,
     TaskPhase,
@@ -65,6 +66,7 @@ from airut.gateway.config import (
 from airut.gateway.dotenv_loader import reset_dotenv_state
 from airut.gateway.scheduler.service import Scheduler
 from airut.gateway.service.adapter_factory import create_adapters
+from airut.gateway.service.channel_health import ChannelHealthMonitor
 from airut.gateway.service.message_processing import (
     process_message,
 )
@@ -243,6 +245,8 @@ class GatewayService:
         self.dashboard: DashboardServer | None = None
         self._version_info, self._git_version_info = capture_version_info()
         self._boot_store = VersionedStore(BootState(), self._clock)
+        # Written by config reloads and the channel health monitor, so
+        # read-modify-write updates go through ``modify()``.
         self._repos_store = VersionedStore(
             tuple[RepoState, ...](()), self._clock
         )
@@ -453,6 +457,20 @@ class GatewayService:
         )
         gc_thread.start()
 
+        # Start channel health monitor (reflects listener health in the
+        # repos store once repos are published below)
+        health_monitor = ChannelHealthMonitor(
+            self._repos_store,
+            self._get_channel_statuses,
+            self._shutdown_event,
+        )
+        health_thread = threading.Thread(
+            target=health_monitor.run,
+            daemon=True,
+            name="ChannelHealthMonitor",
+        )
+        health_thread.start()
+
         # Phase: repos
         boot = self._boot_store.get().value
         self._boot_store.update(
@@ -591,21 +609,16 @@ class GatewayService:
         """Return current work dirs for the dashboard.
 
         Called by the dashboard on each request to get fresh state.
-        Includes directories for repos in any non-FAILED state so that
+        Includes every repo with a handler, whatever its status, so that
         conversations remain accessible during pending or in-progress
-        reloads.
+        reloads and when a repo's listener has failed.
 
         Returns:
-            List of work directories for non-failed repos.
+            List of work directories for repos with a handler.
         """
-        repo_states = self._repos_store.get().value
-        active_repo_ids = {
-            r.repo_id for r in repo_states if r.status != RepoStatus.FAILED
-        }
         return [
             repo.conversation_manager.conversations_dir
-            for repo_id, repo in self.repo_handlers.items()
-            if repo_id in active_repo_ids
+            for repo in list(self.repo_handlers.values())
         ]
 
     def stop(self) -> None:
@@ -1027,10 +1040,12 @@ class GatewayService:
 
         handler = self.repo_handlers.get(repo_id)
         if self.tracker.has_active_tasks_for_repo(repo_id):
-            if handler:
-                handler.stop()
+            # Mark the repo before stopping its listeners, so the health
+            # monitor never reports the stopped listeners as failed.
             self._pending_repo_reload[repo_id] = None
             self._set_repo_status(repo_id, RepoStatus.RELOAD_PENDING)
+            if handler:
+                handler.stop()
             logger.info("Repo '%s': removal deferred (active tasks)", repo_id)
             return
 
@@ -1226,30 +1241,41 @@ class GatewayService:
     def _set_repo_status(self, repo_id: str, status: RepoStatus) -> None:
         """Update a single repo's status in the repos store.
 
-        Read-modify-write on VersionedStore; callers must hold
-        ``_reload_lock`` for synchronization (except during boot).
+        Clears any error recorded with the previous status: the error
+        fields describe the status they were recorded with.
         """
-        current = self._repos_store.get().value
-        updated = tuple(
-            replace(r, status=status) if r.repo_id == repo_id else r
-            for r in current
+        self._repos_store.modify(
+            lambda current: tuple(
+                replace(r, status=status, error_message=None, error_type=None)
+                if r.repo_id == repo_id
+                else r
+                for r in current
+            )
         )
-        self._repos_store.update(updated)
 
     def _update_repos_store_entry(
         self, repo_id: str, new_state: RepoState
     ) -> None:
         """Add or replace a repo entry in the repos store."""
-        current = self._repos_store.get().value
-        entries = [r for r in current if r.repo_id != repo_id]
-        entries.append(new_state)
-        self._repos_store.update(tuple(entries))
+        self._repos_store.modify(
+            lambda current: (
+                *(r for r in current if r.repo_id != repo_id),
+                new_state,
+            )
+        )
 
     def _remove_repos_store_entry(self, repo_id: str) -> None:
         """Remove a repo entry from the repos store."""
-        current = self._repos_store.get().value
-        updated = tuple(r for r in current if r.repo_id != repo_id)
-        self._repos_store.update(updated)
+        self._repos_store.modify(
+            lambda current: tuple(r for r in current if r.repo_id != repo_id)
+        )
+
+    def _get_channel_statuses(
+        self, repo_id: str
+    ) -> dict[str, ChannelStatus] | None:
+        """Return a repo's listener statuses, or None without a handler."""
+        handler = self.repo_handlers.get(repo_id)
+        return handler.channel_statuses() if handler else None
 
     def register_active_task(
         self, conversation_id: str, task: AgentTask

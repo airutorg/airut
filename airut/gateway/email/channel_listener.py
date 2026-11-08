@@ -6,12 +6,14 @@
 """Email channel listener implementing the ChannelListener protocol.
 
 Wraps the low-level EmailListener (IMAP operations) with polling/IDLE
-loops, reconnection logic, and health tracking.
+loops, reconnection logic, and health tracking.  A lost connection is
+retried indefinitely with capped exponential backoff.
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -35,8 +37,23 @@ from airut.gateway.email.listener import (
 logger = logging.getLogger(__name__)
 
 
-class _ReconnectFailedError(Exception):
-    """Sentinel raised when IMAP reconnection attempts are exhausted."""
+#: First reconnect delay in seconds; each further attempt triples it.
+_RECONNECT_BASE_DELAY = 10
+
+#: Longest reconnect delay in seconds.  Retries continue at this interval
+#: for as long as the server stays unreachable.
+_RECONNECT_MAX_DELAY = 300
+
+
+def reconnect_delay(attempt: int) -> int:
+    """Seconds to wait before IMAP reconnect *attempt* (1-based).
+
+    10s, 30s, 90s, 270s, then 300s for every later attempt.
+    """
+    # Bound the exponent so the delay stays cheap to compute however
+    # long an outage lasts; the cap is reached from attempt 5 on.
+    exponent = min(attempt - 1, 4)
+    return min(_RECONNECT_BASE_DELAY * 3**exponent, _RECONNECT_MAX_DELAY)
 
 
 def _raw_message(email: IncomingEmail) -> RawMessage[IncomingEmail]:
@@ -157,141 +174,137 @@ class EmailChannelListener(ChannelListener):
         return self._status
 
     def _listener_loop(self) -> None:
-        """Main listener loop, dispatching to IDLE or polling mode."""
-        if self._config.imap.use_idle:
-            self._idle_loop()
-        else:
-            self._polling_loop()
+        """Main listener loop, dispatching to IDLE or polling mode.
 
-    def _reconnect_with_backoff(
-        self,
-        reconnect_attempts: int,
-        max_reconnect_attempts: int,
-        *,
-        error: IMAPConnectionError | None = None,
-    ) -> int:
-        """Handle IMAP reconnection with exponential backoff.
+        The loops only return once ``stop()`` is called.  Should one end
+        any other way, the listener can no longer receive mail, so it is
+        marked FAILED rather than left looking connected.
+        """
+        try:
+            if self._config.imap.use_idle:
+                self._idle_loop()
+            else:
+                self._polling_loop()
+        finally:
+            if self._running:
+                self._log.critical("Email listener loop exited unexpectedly")
+                error = sys.exc_info()[1]
+                self._status = ChannelStatus(
+                    health=ChannelHealth.FAILED,
+                    message="Email listener stopped unexpectedly",
+                    error_type=type(error).__name__ if error else None,
+                )
+
+    def _reconnect(self, failures: int, error: Exception) -> int:
+        """Reconnect to IMAP, retrying until connected or stopped.
+
+        Never gives up: waits with capped exponential backoff (see
+        ``reconnect_delay``) between attempts and reports DEGRADED until
+        the connection is back, so an outage of any length recovers
+        without a restart.
 
         Args:
-            reconnect_attempts: Current attempt count (will be incremented).
-            max_reconnect_attempts: Max attempts before giving up.
-            error: The connection error that triggered the reconnect.
+            failures: Consecutive failed attempts so far.  The loops reset
+                it only after a successful fetch, so a connection that
+                drops again right after reconnecting keeps backing off.
+            error: The error that lost the connection.
 
         Returns:
-            Updated reconnect_attempts count.
-
-        Raises:
-            _ReconnectFailedError: If max attempts reached.
+            Updated count of consecutive failed attempts.
         """
-        reconnect_attempts += 1
-        error_msg = str(error) if error else "unknown"
-        self._log.error(
-            "IMAP connection error (attempt %d/%d): %s",
-            reconnect_attempts,
-            max_reconnect_attempts,
-            error_msg,
-        )
-
-        self._status = ChannelStatus(
-            health=ChannelHealth.DEGRADED,
-            message=(
-                f"IMAP reconnecting (attempt {reconnect_attempts}"
-                f"/{max_reconnect_attempts})"
-            ),
-            error_type=type(error).__name__ if error else None,
-        )
-
-        if reconnect_attempts >= max_reconnect_attempts:
-            self._log.critical(
-                "Failed to reconnect after %d attempts",
-                max_reconnect_attempts,
+        while self._running:
+            failures += 1
+            delay = reconnect_delay(failures)
+            self._log.error(
+                "IMAP connection error, reconnecting in %ds (attempt %d): %s",
+                delay,
+                failures,
+                error,
+                # Errors other than IMAPConnectionError are unexpected;
+                # log the traceback to make them diagnosable.
+                exc_info=(
+                    None if isinstance(error, IMAPConnectionError) else error
+                ),
             )
             self._status = ChannelStatus(
-                health=ChannelHealth.FAILED,
-                message=(
-                    f"IMAP reconnection failed after "
-                    f"{max_reconnect_attempts} attempts"
-                ),
-                error_type=type(error).__name__ if error else None,
+                health=ChannelHealth.DEGRADED,
+                message=f"IMAP reconnecting (attempt {failures}): {error}",
+                error_type=type(error).__name__,
             )
-            raise _ReconnectFailedError
 
-        backoff = min(10 * (3 ** (reconnect_attempts - 1)), 300)
-        self._log.info("Reconnecting in %ds...", backoff)
-        self._stop_event.wait(backoff)
+            self._stop_event.wait(delay)
+            if not self._running:
+                break
 
-        if not self._running:
-            return reconnect_attempts
+            try:
+                self._email_listener.disconnect()
+                self._email_listener.connect(
+                    max_retries=self._config.imap.connect_retries,
+                    stop_event=self._stop_event,
+                )
+            except Exception as e:
+                error = e
+                continue
 
-        try:
-            self._email_listener.disconnect()
-            self._email_listener.connect(
-                max_retries=self._config.imap.connect_retries,
-                stop_event=self._stop_event,
-            )
             self._log.info("Reconnected to IMAP")
             self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
-        except IMAPConnectionError as reconnect_error:
-            self._log.error(
-                "Reconnection attempt %d/%d failed: %s",
-                reconnect_attempts,
-                max_reconnect_attempts,
-                reconnect_error,
-            )
+            break
 
-        return reconnect_attempts
+        return failures
+
+    def _process_messages(
+        self, messages: list[tuple[bytes, IncomingEmail]]
+    ) -> None:
+        """Delete each fetched message from the server and submit it.
+
+        Raises:
+            IMAPConnectionError: If the connection fails while deleting,
+                so the loop reconnects.  Other per-message errors are
+                logged and the next message is processed.
+        """
+        assert self._submit is not None
+        if messages:
+            self._log.info("Processing %d new messages", len(messages))
+
+        for msg_id, message in messages:
+            try:
+                self._email_listener.delete_message(msg_id)
+                self._submit(_raw_message(message))
+            except IMAPConnectionError:
+                raise  # Bubble up for reconnection
+            except Exception as e:
+                self._log.exception("Failed to submit message: %s", e)
 
     def _polling_loop(self) -> None:
-        """Polling-based message loop."""
-        reconnect_attempts = 0
-        max_reconnect_attempts = 5
+        """Polling-based message loop.
+
+        Any error outside per-message handling, expected or not, is
+        treated as a lost connection and retried by ``_reconnect``.
+        """
+        failures = 0
         el = self._email_listener
-        assert self._submit is not None
 
         while self._running:
             try:
                 messages = el.fetch_unread()
-
-                if messages:
-                    self._log.info(
-                        "Processing %d new messages",
-                        len(messages),
-                    )
-
-                reconnect_attempts = 0
-
-                for msg_id, message in messages:
-                    try:
-                        el.delete_message(msg_id)
-                        self._submit(_raw_message(message))
-                    except IMAPConnectionError:
-                        raise  # Bubble up for reconnection
-                    except Exception as e:
-                        self._log.exception(
-                            "Failed to submit message: %s",
-                            e,
-                        )
-
+                failures = 0
+                self._process_messages(messages)
                 self._stop_event.wait(self._config.imap.poll_interval)
 
-            except IMAPConnectionError as e:
+            except Exception as e:
                 if not self._running:
                     return  # Shutting down; don't attempt reconnection
-                try:
-                    reconnect_attempts = self._reconnect_with_backoff(
-                        reconnect_attempts, max_reconnect_attempts, error=e
-                    )
-                except _ReconnectFailedError:
-                    return
+                failures = self._reconnect(failures, e)
 
     def _idle_loop(self) -> None:
-        """IDLE-based message loop."""
-        reconnect_attempts = 0
-        max_reconnect_attempts = 5
+        """IDLE-based message loop.
+
+        Errors are handled as in ``_polling_loop``.
+        """
+        failures = 0
         last_reconnect = time.time()
         reconnect_interval = self._config.imap.idle_reconnect_interval
         el = self._email_listener
-        assert self._submit is not None
 
         while self._running:
             try:
@@ -306,29 +319,10 @@ class EmailChannelListener(ChannelListener):
                         stop_event=self._stop_event,
                     )
                     last_reconnect = time.time()
-                    reconnect_attempts = 0
 
                 messages = el.fetch_unread()
-
-                if messages:
-                    self._log.info(
-                        "Processing %d new messages",
-                        len(messages),
-                    )
-
-                reconnect_attempts = 0
-
-                for msg_id, message in messages:
-                    try:
-                        el.delete_message(msg_id)
-                        self._submit(_raw_message(message))
-                    except IMAPConnectionError:
-                        raise  # Bubble up for reconnection
-                    except Exception as e:
-                        self._log.exception(
-                            "Failed to submit message: %s",
-                            e,
-                        )
+                failures = 0
+                self._process_messages(messages)
 
                 if messages:
                     continue
@@ -362,13 +356,8 @@ class EmailChannelListener(ChannelListener):
                     )
                     last_reconnect = 0
 
-            except IMAPConnectionError as e:
+            except Exception as e:
                 if not self._running:
                     return  # Shutting down; don't attempt reconnection
-                try:
-                    reconnect_attempts = self._reconnect_with_backoff(
-                        reconnect_attempts, max_reconnect_attempts, error=e
-                    )
-                    last_reconnect = time.time()
-                except _ReconnectFailedError:
-                    return
+                failures = self._reconnect(failures, e)
+                last_reconnect = time.time()
