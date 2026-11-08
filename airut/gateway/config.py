@@ -933,7 +933,10 @@ class ImapConfig:
     Attributes:
         server: IMAP server hostname.
         port: IMAP port.
-        connect_retries: Max connection attempts before giving up.
+        connect_retries: Connection attempts per connect.  A repo whose
+            initial connection exhausts them fails to start; a running
+            listener that loses its connection keeps reconnecting with
+            backoff, indefinitely.
         poll_interval: Seconds between IMAP polls.
         use_idle: Whether to use IMAP IDLE instead of polling.
         idle_reconnect_interval: Reconnect interval in seconds for IDLE
@@ -950,7 +953,8 @@ class ImapConfig:
     connect_retries: int = field(
         default=3,
         metadata=meta(
-            "Max IMAP connection attempts before giving up",
+            "IMAP connection attempts per connect"
+            " (at startup, the repo fails after these)",
             Scope.REPO,
         ),
     )

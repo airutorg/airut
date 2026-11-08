@@ -130,8 +130,39 @@ class TestDashboardServer:
         data = json.loads(response.get_data(as_text=True))
         assert data["status"] == "ok"
         assert data["repos"]["live"] == 1
+        assert data["repos"]["degraded"] == 0
         assert data["repos"]["failed"] == 1
         assert data["repos"]["total"] == 2
+
+    def test_health_endpoint_degraded_repos_not_live(self) -> None:
+        """/api/health counts degraded repos separately from live ones.
+
+        With every repo's listener disconnected no repo is live, so the
+        overall status is degraded rather than ok.
+        """
+        tracker = TaskTracker()
+        repo_states = [
+            RepoState(
+                repo_id=f"repo{i}",
+                status=RepoStatus.DEGRADED,
+                error_message="email: IMAP reconnecting (attempt 4): refused",
+                error_type="IMAPConnectionError",
+            )
+            for i in range(2)
+        ]
+        repos_store = VersionedStore(tuple(repo_states), VersionClock())
+        server = DashboardServer(tracker, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        data = json.loads(client.get("/api/health").get_data(as_text=True))
+
+        assert data["status"] == "degraded"
+        assert data["repos"] == {
+            "live": 0,
+            "degraded": 2,
+            "failed": 0,
+            "total": 2,
+        }
 
     def test_version_endpoint(self) -> None:
         """Test /api/version endpoint returns structured JSON."""
@@ -400,6 +431,28 @@ class TestDashboardServer:
         assert "Connection refused" in html
         assert "IMAPConnectionError" in html
 
+    def test_repo_detail_degraded_repo(self) -> None:
+        """/repo/<id> shows the reconnect error for degraded repos."""
+        tracker = TaskTracker()
+        repo_states = [
+            RepoState(
+                repo_id="degraded-repo",
+                status=RepoStatus.DEGRADED,
+                error_message="email: IMAP reconnecting (attempt 3): refused",
+                error_type="IMAPConnectionError",
+            ),
+        ]
+        repos_store = VersionedStore(tuple(repo_states), VersionClock())
+        server = DashboardServer(tracker, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        html = client.get("/repo/degraded-repo").get_data(as_text=True)
+
+        assert 'class="status-badge degraded"' in html
+        assert "DEGRADED" in html
+        assert "email: IMAP reconnecting (attempt 3): refused" in html
+        assert "IMAPConnectionError" in html
+
     def test_repo_detail_channel_with_detail(self) -> None:
         """Repo detail page shows channel detail and server info."""
         tracker = TaskTracker()
@@ -484,6 +537,28 @@ class TestDashboardServer:
         # Check for links to repo detail pages
         assert "/repo/repo1" in html
         assert "/repo/repo2" in html
+
+    def test_index_shows_degraded_repos(self) -> None:
+        """Degraded repos get their own indicator, count, and error hint."""
+        tracker = TaskTracker()
+        repo_states = [
+            RepoState(repo_id="repo1", status=RepoStatus.LIVE),
+            RepoState(
+                repo_id="repo2",
+                status=RepoStatus.DEGRADED,
+                error_message="email: IMAP reconnecting (attempt 1): lost",
+                error_type="IMAPConnectionError",
+            ),
+        ]
+        repos_store = VersionedStore(tuple(repo_states), VersionClock())
+        server = DashboardServer(tracker, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        html = client.get("/").get_data(as_text=True)
+
+        assert "Repositories (1 live, 1 degraded)" in html
+        assert 'class="repo-status-indicator degraded"' in html
+        assert "IMAPConnectionError" in html
 
     def test_index_shows_reload_pending_repos(self) -> None:
         """Test dashboard shows reload-pending repos with spinner indicator."""

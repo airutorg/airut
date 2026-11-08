@@ -114,7 +114,9 @@ visibility into startup progress and errors from the moment the service starts.
 
 The `/api/health` endpoint reflects boot state: `"booting"` during startup,
 `"error"` on boot failure, `"ok"` when running with live repos, `"degraded"`
-when no repos are live.
+when no repos are live. Its `repos` object counts `live`, `degraded`, `failed`,
+and `total` repos; a repo whose channel listener is reconnecting is degraded,
+not live.
 
 **Resilient mode** (`--resilient` CLI flag): When enabled, boot failures don't
 crash the service. Instead, the error is displayed on the dashboard and the
@@ -391,11 +393,13 @@ Three-column layout showing queued, in-progress, and completed tasks.
 **Repository status section** (below server section):
 
 - Lists all configured repositories with status indicators
-- Green dot for live repos, red dot for failed repos, spinning dot for
+- Green dot for live repos, yellow dot for degraded repos (a channel listener is
+  reconnecting), red dot for failed repos, spinning dot for
   reload-pending/reloading repos
-- Summary count: "N live, M reloading, M failed" (zero counts omitted)
+- Summary count: "N live, M reloading, M degraded, M failed" (zero counts
+  omitted)
 - Each repo links to its detail page
-- Failed repos show error type as a hint
+- Failed and degraded repos show error type as a hint
 
 **Task cards** display:
 
@@ -457,11 +461,14 @@ session ID, token usage, and request/response text.
 
 Per-repository view showing:
 
-- Repository ID and status (LIVE, FAILED, RELOAD PENDING, or RELOADING)
+- Repository ID and status (LIVE, DEGRADED, FAILED, RELOAD PENDING, or
+  RELOADING); see
+  [gateway-architecture.md](gateway-architecture.md#channel-health) for how
+  channel listener health sets LIVE, DEGRADED, and FAILED
 - Git repository URL
 - IMAP server hostname
 - Storage directory path
-- For failed repos: error type and message with full details
+- For failed and degraded repos: error type and message with full details
 
 ### Past Task Loading
 

@@ -196,11 +196,16 @@ class RawMessage[ContentT]:
 class ChannelHealth(Enum):
     """Health state of a channel listener.
 
+    Listeners never give up on a lost connection: they keep retrying
+    while DEGRADED, so FAILED is reserved for a listener that has stopped
+    and cannot recover without being restarted.  The gateway reflects
+    these states in the repository status shown on the dashboard.
+
     Attributes:
         STARTING: Not yet connected.
         CONNECTED: Healthy, receiving messages.
-        DEGRADED: Temporarily lost connection, internally retrying.
-        FAILED: Hard failure, will not retry.
+        DEGRADED: Not connected, internally retrying until reconnected.
+        FAILED: Hard failure, the listener has stopped.
     """
 
     STARTING = "starting"
@@ -216,7 +221,7 @@ class ChannelStatus:
     Attributes:
         health: Current health state.
         message: Human-readable status description
-            (e.g. "IMAP reconnecting (attempt 2/5)").
+            (e.g. "IMAP reconnecting (attempt 2): Connection refused").
         error_type: Exception type name if degraded or failed.
     """
 
@@ -284,7 +289,13 @@ class ChannelListener(Protocol):
 
     @property
     def status(self) -> ChannelStatus:
-        """Current health of this listener."""
+        """Current health of this listener.
+
+        Polled every few seconds by the gateway's health monitor from
+        another thread, while it holds the repos store's lock.  It must
+        therefore be cheap, thread-safe and non-blocking, must not take
+        locks or touch gateway state, and must not raise.
+        """
         ...
 
 

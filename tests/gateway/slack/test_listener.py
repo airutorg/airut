@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from slack_bolt import App
 
 from airut._json_types import JsonDict, JsonValue
-from airut.gateway.channel import ChannelHealth, RawMessage
+from airut.gateway.channel import ChannelHealth, ChannelStatus, RawMessage
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.listener import SlackChannelListener, mentions_bot
@@ -65,6 +65,7 @@ class TestSlackChannelListener:
     def test_start_connects_and_sets_connected(self) -> None:
         app = MagicMock()
         handler = MagicMock()
+        handler.client.is_connected.return_value = True
         listener = _make_listener(app=app, handler=handler)
         submit = MagicMock()
 
@@ -253,100 +254,97 @@ class TestDoubleStartGuard:
 
 
 class TestConnectionHealthListeners:
-    def test_ws_close_sets_degraded(self) -> None:
-        """WebSocket close callback sets status to DEGRADED."""
-        app = MagicMock()
+    @staticmethod
+    def _started_listener() -> tuple[SlackChannelListener, MagicMock]:
         handler = MagicMock()
-        listener = _make_listener(app=app, handler=handler)
-
-        with patch("airut.gateway.slack.listener.Assistant"):
-            listener.start(MagicMock())
-
-        assert listener.status.health == ChannelHealth.CONNECTED
-
-        # Simulate WebSocket close
-        listener._on_ws_close(1006, "abnormal closure")
-
-        assert listener.status.health == ChannelHealth.DEGRADED
-        assert "1006" in (listener.status.message or "")
-
-    def test_ws_error_sets_degraded(self) -> None:
-        """WebSocket error callback sets status to DEGRADED."""
-        app = MagicMock()
-        handler = MagicMock()
-        listener = _make_listener(app=app, handler=handler)
-
-        with patch("airut.gateway.slack.listener.Assistant"):
-            listener.start(MagicMock())
-
-        listener._on_ws_error(ConnectionError("network down"))
-
-        assert listener.status.health == ChannelHealth.DEGRADED
-        assert "network down" in (listener.status.message or "")
-
-    def test_ws_close_then_message_recovers_connected(self) -> None:
-        """Status recovers to CONNECTED when a message arrives after close."""
-        app = MagicMock()
-        handler = MagicMock()
-        listener = _make_listener(app=app, handler=handler)
-
-        with patch("airut.gateway.slack.listener.Assistant"):
-            listener.start(MagicMock())
-
-        assert listener.status.health == ChannelHealth.CONNECTED
-
-        # WebSocket closes — status goes to DEGRADED
-        listener._on_ws_close(1006, "abnormal closure")
-        assert listener.status.health == ChannelHealth.DEGRADED
-
-        # SDK auto-reconnects and delivers a message — status should recover
-        listener._on_ws_message("hello")
-        assert listener.status.health == ChannelHealth.CONNECTED
-
-    def test_ws_error_then_message_recovers_connected(self) -> None:
-        """Status recovers to CONNECTED when a message arrives after error."""
-        app = MagicMock()
-        handler = MagicMock()
-        listener = _make_listener(app=app, handler=handler)
-
-        with patch("airut.gateway.slack.listener.Assistant"):
-            listener.start(MagicMock())
-
-        listener._on_ws_error(ConnectionError("network down"))
-        assert listener.status.health == ChannelHealth.DEGRADED
-
-        listener._on_ws_message("hello")
-        assert listener.status.health == ChannelHealth.CONNECTED
-
-    def test_ws_message_noop_when_already_connected(self) -> None:
-        """Message callback is a no-op when already CONNECTED."""
-        app = MagicMock()
-        handler = MagicMock()
-        listener = _make_listener(app=app, handler=handler)
-
-        with patch("airut.gateway.slack.listener.Assistant"):
-            listener.start(MagicMock())
-
-        original_status = listener.status
-        listener._on_ws_message("hello")
-        # Status object should be unchanged (no unnecessary re-assignment)
-        assert listener.status is original_status
-
-    def test_install_listeners_no_client(self) -> None:
-        """Logs warning when handler has no client attribute."""
-        handler = MagicMock()
-        # Remove client attribute so getattr returns None
-        del handler.client
+        handler.client.is_connected.return_value = True
         listener = _make_listener(handler=handler)
-
         with patch("airut.gateway.slack.listener.Assistant"):
-            with patch("airut.gateway.slack.listener.logger") as mock_logger:
-                listener.start(MagicMock())
+            listener.start(MagicMock())
+        return listener, handler
 
-        mock_logger.warning.assert_any_call(
-            "Socket Mode handler has no 'client' attribute; "
-            "connection health listeners not installed"
+    def test_silent_disconnect_reports_degraded(self) -> None:
+        """A dropped connection is DEGRADED even without a close event.
+
+        The SDK can close a stale connection, and fail to reconnect,
+        without calling the close or error listeners.
+        """
+        listener, handler = self._started_listener()
+        assert listener.status.health == ChannelHealth.CONNECTED
+
+        handler.client.is_connected.return_value = False
+
+        assert listener.status == ChannelStatus(
+            health=ChannelHealth.DEGRADED,
+            message="Socket Mode disconnected, reconnecting",
         )
+
+    def test_ws_close_reason_reported_while_disconnected(self) -> None:
+        """The close code is reported while the connection is down."""
+        listener, handler = self._started_listener()
+
+        listener._on_ws_close(1006, "abnormal closure")
+        handler.client.is_connected.return_value = False
+
+        assert listener.status.health == ChannelHealth.DEGRADED
+        assert listener.status.message == "WebSocket closed (code=1006)"
+
+    def test_ws_error_reason_reported_while_disconnected(self) -> None:
+        """The error and its type are reported while disconnected."""
+        listener, handler = self._started_listener()
+
+        listener._on_ws_error(ConnectionError("network down"))
+        handler.client.is_connected.return_value = False
+
+        assert listener.status == ChannelStatus(
+            health=ChannelHealth.DEGRADED,
+            message="WebSocket error: network down",
+            error_type="ConnectionError",
+        )
+
+    def test_error_on_live_connection_stays_connected(self) -> None:
+        """An error event that leaves the connection up is not DEGRADED.
+
+        Otherwise a quiet workspace would show a stale warning until
+        the next message arrived.
+        """
+        listener, _ = self._started_listener()
+
+        listener._on_ws_error(ValueError("bad frame"))
+
+        assert listener.status.health == ChannelHealth.CONNECTED
+
+    def test_reconnect_recovers_connected(self) -> None:
+        """Status is CONNECTED again once the SDK has reconnected."""
+        listener, handler = self._started_listener()
+        listener._on_ws_close(1006, "abnormal closure")
+        handler.client.is_connected.return_value = False
+        assert listener.status.health == ChannelHealth.DEGRADED
+
+        handler.client.is_connected.return_value = True
+
+        assert listener.status.health == ChannelHealth.CONNECTED
+
+    def test_ws_message_clears_disconnect_reason(self) -> None:
+        """Traffic after a reconnect clears the recorded reason."""
+        listener, handler = self._started_listener()
+        listener._on_ws_close(1006, "abnormal closure")
+
+        listener._on_ws_message("hello")
+        handler.client.is_connected.return_value = False
+
+        assert listener.status.message == (
+            "Socket Mode disconnected, reconnecting"
+        )
+
+    def test_ws_message_noop_without_reason(self) -> None:
+        """Message callback does nothing when no reason is recorded."""
+        listener, _ = self._started_listener()
+
+        with patch("airut.gateway.slack.listener.logger") as mock_logger:
+            listener._on_ws_message("hello")
+
+        mock_logger.info.assert_not_called()
 
     def test_install_listeners_missing_close_listeners(self) -> None:
         """Logs warning when client lacks on_close_listeners."""
@@ -390,7 +388,7 @@ class TestConnectionHealthListeners:
 
         mock_logger.warning.assert_any_call(
             "Socket Mode client has no 'on_message_listeners'; "
-            "reconnect recovery will not be tracked"
+            "disconnect reasons will not be cleared on recovery"
         )
 
 
@@ -416,6 +414,7 @@ class TestHandlerRegistrationWithRealApp:
             token_verification_enabled=False,
         )
         handler = MagicMock()
+        handler.client.is_connected.return_value = True
         listener = _make_listener(app=app, handler=handler)
 
         submit = MagicMock()

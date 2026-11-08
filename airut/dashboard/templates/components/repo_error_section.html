@@ -1,5 +1,5 @@
 {# Repo error section — expects: repo (RepoState) #}
-{% if repo.status.value == 'failed' and repo.error_message %}
+{% if repo.status.value in ('failed', 'degraded') and repo.error_message %}
 <div class="error-section">
     <div class="field-label">Error Type</div>
     <div class="field-value error-type">{{ repo.error_type or 'Unknown' }}</div>

@@ -276,7 +276,9 @@ class FakeSocketModeHandler:
 
     Exposes a ``client`` attribute with ``on_close_listeners`` and
     ``on_error_listeners`` so the listener can install health
-    listeners without errors.
+    listeners without errors, and whose ``is_connected()`` reflects
+    ``connect()``/``close()`` since the listener derives its health
+    from it.
     """
 
     def __init__(self, app: App | None, app_token: str = "") -> None:
@@ -285,6 +287,7 @@ class FakeSocketModeHandler:
         self.client = MagicMock()
         self.client.on_close_listeners = []
         self.client.on_error_listeners = []
+        self.client.is_connected = lambda: self._connected
         self._connected = False
 
     def connect(self) -> None:

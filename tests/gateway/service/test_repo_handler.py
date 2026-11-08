@@ -74,3 +74,17 @@ class TestStop:
         handler.stop()
 
         handler.adapters["email"].listener.stop.assert_called_once()
+
+
+class TestChannelStatuses:
+    def test_returns_listener_status_per_channel(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """channel_statuses() reports each adapter's listener status."""
+        from airut.gateway.channel import ChannelHealth, ChannelStatus
+
+        svc, handler = make_service(email_config, tmp_path)
+        degraded = ChannelStatus(health=ChannelHealth.DEGRADED, message="x")
+        handler.adapters["email"].listener.status = degraded
+
+        assert handler.channel_statuses() == {"email": degraded}
