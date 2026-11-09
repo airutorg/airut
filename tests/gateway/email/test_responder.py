@@ -5,6 +5,7 @@
 
 """Tests for email responder (SMTP)."""
 
+import logging
 import smtplib
 from unittest.mock import MagicMock, patch
 
@@ -77,6 +78,31 @@ def test_send_reply_success(email_config):
         assert len(parts) == 2
         assert parts[0].get_content_type() == "text/plain"
         assert parts[1].get_content_type() == "text/html"
+
+
+def test_send_reply_logs_recipient_not_subject(
+    email_config, caplog: pytest.LogCaptureFixture
+):
+    """Sending logs the recipient but not the subject, which is content."""
+    responder = EmailResponder(email_config.channels["email"])
+
+    with (
+        patch("smtplib.SMTP") as mock_smtp_class,
+        caplog.at_level(logging.DEBUG),
+    ):
+        mock_smtp_class.return_value.__enter__.return_value = MagicMock()
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Re: Quarterly layoff plan",
+            body="This is the reply.",
+            message_id="<reply1@example.com>",
+        )
+
+    assert "layoff" not in caplog.text
+    assert (
+        "Sent email to recipient@example.com (Message-ID: <reply1@example.com>)"
+        in caplog.text
+    )
 
 
 def test_send_reply_without_threading(email_config):

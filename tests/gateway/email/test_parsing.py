@@ -5,6 +5,7 @@
 
 """Tests for email parsing utilities."""
 
+import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.parser import BytesParser
@@ -43,6 +44,16 @@ def test_extract_conversation_id_missing() -> None:
     subject = "No conversation ID here"
     conv_id = extract_conversation_id(subject)
     assert conv_id is None
+
+
+def test_extract_conversation_id_does_not_log_subject(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The subject is content: a missing ID is logged without it."""
+    with caplog.at_level(logging.DEBUG):
+        assert extract_conversation_id("Fix the payroll export") is None
+    assert "payroll" not in caplog.text
+    assert "No conversation ID found in subject" in caplog.text
 
 
 def test_extract_conversation_id_invalid_format() -> None:

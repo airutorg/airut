@@ -32,10 +32,11 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO, TypedDict
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from aws_signing import (
     SIGNING_TYPE_AWS_SIGV4,
@@ -118,6 +119,17 @@ DEBUG_SIGNING = os.environ.get("DEBUG_SIGNING", "").lower() in (
 
 
 _GLOB_CHARS = frozenset("*?[]")
+
+# Replacement map fields that hold a real credential value (masked
+# secret, AWS signing credential, GitHub App private key).  Every log
+# line has them redacted.
+_REAL_VALUE_FIELDS = (
+    "value",
+    "access_key_id",
+    "secret_access_key",
+    "session_token",
+    "private_key",
+)
 
 
 def _is_glob(pattern: str) -> bool:
@@ -232,6 +244,35 @@ def _encode_basic_auth(username: str, password: str) -> str:
     return f"Basic {encoded}"
 
 
+def _real_value_pattern(
+    replacements: dict[str, dict[str, _JsonValue]],
+) -> re.Pattern[str] | None:
+    """Build a pattern matching every real credential value.
+
+    Each value is matched as is and percent-encoded, as it appears in a
+    query string (STS session tokens contain ``/``, ``+`` and ``=``).
+    Longer forms come first so that a value containing another is
+    redacted whole.
+
+    Args:
+        replacements: Replacement map, keyed by surrogate.
+
+    Returns:
+        The pattern, or None when the map holds no real values.
+    """
+    values = {
+        value
+        for entry in replacements.values()
+        for field in _REAL_VALUE_FIELDS
+        if isinstance(value := entry.get(field), str) and value
+    }
+    if not values:
+        return None
+    forms = values | {quote(value, safe="") for value in values}
+    ordered = sorted(forms, key=len, reverse=True)
+    return re.compile("|".join(map(re.escape, ordered)))
+
+
 class ProxyFilter:
     """mitmproxy addon for network allowlist and token masking."""
 
@@ -239,6 +280,7 @@ class ProxyFilter:
         self.domains: list[str] = []
         self.url_prefixes: list[UrlPrefixEntry] = []
         self.replacements: dict[str, dict[str, _JsonValue]] = {}
+        self._real_values: re.Pattern[str] | None = None
         self._log_file: TextIO | None = None
         self._github_app_cache: dict[str, CachedToken] = {}
 
@@ -305,16 +347,43 @@ class ProxyFilter:
         try:
             with open(REPLACEMENTS_PATH) as f:
                 self.replacements = json.load(f)
+            self._real_values = _real_value_pattern(self.replacements)
             ctx.log.info(f"Loaded {len(self.replacements)} token replacements")
         except (OSError, json.JSONDecodeError) as e:
             ctx.log.warn(f"Failed to load replacements: {e}")
             self.replacements = {}
 
+    def _redact(self, message: str) -> str:
+        """Replace real credential values in a log message.
+
+        A backstop: log lines are built from what the sandbox sent, but
+        diagnostics such as ``DEBUG_SIGNING`` output can carry a value
+        the proxy injected.
+        """
+        if self._real_values is None:
+            return message
+        return self._real_values.sub("[REDACTED]", message)
+
+    @staticmethod
+    def _logged_url(flow: http.HTTPFlow) -> str:
+        """Return the request URL to log: as the sandbox sent it.
+
+        Re-signing a presigned AWS URL rewrites it to carry the real key
+        ID, session token, and a valid signature -- the rewritten URL is
+        itself a usable credential.  ``requestheaders()`` records the URL
+        before any rewrite.
+        """
+        return flow.metadata.get("client_url") or flow.request.pretty_url
+
     def _log(self, message: str) -> None:
         """Log message to network log file only (not stdout/mitmproxy)."""
+        self._write_log_file(self._redact(message))
+
+    def _write_log_file(self, line: str) -> None:
+        """Append an already-redacted line to the network log file."""
         if self._log_file is not None:
             try:
-                self._log_file.write(message + "\n")
+                self._log_file.write(line + "\n")
                 self._log_file.flush()
             except OSError:
                 pass  # Best effort file logging
@@ -331,8 +400,9 @@ class ProxyFilter:
         INFO-level server-connect / client-connect / client-disconnect
         messages emitted by mitmproxy internals.
         """
-        ctx.log.warn(message)
-        self._log(message)
+        line = self._redact(message)
+        ctx.log.warn(line)
+        self._write_log_file(line)
 
     def _is_allowed(
         self, host: str, path: str, method: str = ""
@@ -555,7 +625,7 @@ class ProxyFilter:
         self._log_loud(
             f"COLLAPSED {entry_count} duplicate '{name_lower}' "
             f"headers in {flow.request.method} "
-            f"{flow.request.pretty_url} "
+            f"{self._logged_url(flow)} "
             f"(duplicate credential headers removed)"
         )
 
@@ -741,7 +811,7 @@ class ProxyFilter:
                     self._log_loud(
                         f"STRIPPED header '{header_lower}' from "
                         f"{flow.request.method} "
-                        f"{flow.request.pretty_url} "
+                        f"{self._logged_url(flow)} "
                         f"(foreign credential blocked)"
                     )
 
@@ -869,7 +939,7 @@ class ProxyFilter:
                     self._log_loud(
                         f"GitHub App token refresh failed for "
                         f"{flow.request.method} "
-                        f"{flow.request.pretty_url}: {e}"
+                        f"{self._logged_url(flow)}: {e}"
                     )
                     flow.metadata["credential_info"] = (
                         "github-app: refresh-failed"
@@ -1042,7 +1112,7 @@ class ProxyFilter:
                 self._log_loud(
                     f"STRIPPED header 'authorization' from "
                     f"{flow.request.method} "
-                    f"{flow.request.pretty_url} "
+                    f"{self._logged_url(flow)} "
                     f"(foreign credential blocked)"
                 )
 
@@ -1424,7 +1494,7 @@ class ProxyFilter:
 
         if header_host.lower() != url_host.lower():
             self._log_loud(
-                f"BLOCKED {flow.request.method} {flow.request.pretty_url} "
+                f"BLOCKED {flow.request.method} {self._logged_url(flow)} "
                 f"-> 403 (host mismatch: "
                 f"header={header_host}, url={url_host})"
             )
@@ -1459,6 +1529,9 @@ class ProxyFilter:
         like Bedrock), signing is deferred to ``request()`` where the
         body is available for computing the payload hash.
         """
+        # Log the URL as sent, before credential handling rewrites it.
+        flow.metadata["client_url"] = flow.request.pretty_url
+
         # Block requests where Host header disagrees with URL host
         # (prevents allowlist bypass via absolute-URI mismatch)
         if self._check_host_mismatch(flow):
@@ -1715,7 +1788,7 @@ class ProxyFilter:
             return
 
         code = flow.response.status_code if flow.response else "?"
-        url = flow.request.pretty_url
+        url = self._logged_url(flow)
         method = flow.request.method
 
         # Build annotation suffix
@@ -1767,7 +1840,10 @@ class ProxyFilter:
                         if isinstance(body, bytes)
                         else body
                     )
-                    # Truncate to avoid flooding logs
+                    # Redact before truncating, which could cut a
+                    # value short of matching.  Truncate to avoid
+                    # flooding logs.
+                    text = self._redact(text)
                     if len(text) > 4096:
                         text = text[:4096] + "...(truncated)"
                     self._log(f"aws-error-body: {text}")
@@ -1779,7 +1855,7 @@ class ProxyFilter:
         if flow.metadata.get("allowlist_action") not in ("ALLOWED", "BLOCKED"):
             return
 
-        url = flow.request.pretty_url
+        url = self._logged_url(flow)
         msg = flow.error.msg if flow.error else "unknown error"
         self._log_loud(f"ERROR {flow.request.method} {url} -> {msg}")
 

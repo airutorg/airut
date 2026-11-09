@@ -218,6 +218,13 @@ enables INFO-level messages (sandbox startup, image build progress, shutdown).
 details) and implies `--verbose`. When `--log` is specified, the chosen level
 applies to the log file; stderr receives no log output.
 
+**Secret redaction**: The real values of the config's `masked_secrets` and
+`signing_credentials` are replaced with `[REDACTED]` wherever they appear in log
+output, including exception messages and tracebacks. Values from `env:` and
+`pass_env:` are not registered: they are mostly not secret, and redacting short
+values such as `1` or `true` would garble the log. The CLI does not log them
+(container `-e` arguments are masked).
+
 **Entrypoint output**: CA certificate setup in the container entrypoint is
 silent by default -- its output is redirected to `/dev/null`. When `--verbose`
 or `--debug` is used, the entrypoint outputs setup details to stderr. This is

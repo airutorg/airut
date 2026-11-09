@@ -5,21 +5,35 @@
 
 """Tests for lib/logging.py."""
 
+import io
 import logging
 
 from airut.logging import SecretFilter, configure_logging, get_logger
 
 
+def _emit(
+    level: int,
+    msg: str,
+    *args: object,
+    exc_info: bool = False,
+    stack_info: bool = False,
+) -> str:
+    """Log through a handler with a SecretFilter and return its output.
+
+    The logger stands outside the logging hierarchy, so no other
+    handler (such as pytest's capture handlers) sees the record.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SecretFilter())
+    logger = logging.Logger("test_secret_filter")
+    logger.addHandler(handler)
+    logger.log(level, msg, *args, exc_info=exc_info, stack_info=stack_info)
+    return stream.getvalue()
+
+
 class TestSecretFilter:
     """Tests for SecretFilter class."""
-
-    def setup_method(self) -> None:
-        """Clear secrets before each test."""
-        SecretFilter.clear_secrets()
-
-    def teardown_method(self) -> None:
-        """Clear secrets after each test."""
-        SecretFilter.clear_secrets()
 
     def test_filter_returns_true(self) -> None:
         """Filter should always return True (never suppress records)."""
@@ -97,7 +111,108 @@ class TestSecretFilter:
             exc_info=None,
         )
         filter_.filter(record)
-        assert record.args == ("[REDACTED]",)
+        assert record.getMessage() == "Login with [REDACTED]"
+
+    def test_redacts_in_non_string_args(self) -> None:
+        """Secrets inside exceptions and other objects are redacted."""
+        SecretFilter.register_secret("password123")
+        output = _emit(
+            logging.ERROR,
+            "Login failed: %s (%r)",
+            ValueError("bad password123"),
+            {"password": "password123"},
+        )
+        assert "password123" not in output
+        assert output == (
+            "Login failed: bad [REDACTED] ({'password': '[REDACTED]'})\n"
+        )
+
+    def test_redacts_in_traceback(self) -> None:
+        """Secrets in a logged exception's traceback are redacted."""
+        SecretFilter.register_secret("password123")
+        try:
+            raise RuntimeError("cannot log in with password123")
+        except RuntimeError:
+            output = _emit(logging.ERROR, "Login failed", exc_info=True)
+        assert "password123" not in output
+        assert "RuntimeError: cannot log in with [REDACTED]" in output
+        assert "Traceback (most recent call last)" in output
+
+    def test_redacts_in_stack_info(self) -> None:
+        """Secrets in stack info are redacted."""
+        SecretFilter.register_secret("test_redacts_in_stack_info")
+        output = _emit(logging.INFO, "Here", stack_info=True)
+        assert "test_redacts_in_stack_info" not in output
+        assert "Stack (most recent call last)" in output
+
+    def test_rendered_message_keeps_percent_signs(self) -> None:
+        """A rendered message with % characters is output as-is."""
+        SecretFilter.register_secret("password123")
+        output = _emit(logging.INFO, "Progress %s: %d%%", "password123", 50)
+        assert output == "Progress [REDACTED]: 50%\n"
+
+    def test_malformed_args_are_redacted(self) -> None:
+        """Arguments that do not fit the format are still redacted."""
+        SecretFilter.register_secret("password123")
+        output = _emit(logging.INFO, "Value %d", "password123")
+        assert output == (
+            "Value %d ('[REDACTED]',) <log format error: TypeError>\n"
+        )
+
+    def test_missing_mapping_key_does_not_raise(self) -> None:
+        """A mapping without the format's key is logged, not raised."""
+        SecretFilter.register_secret("password123")
+        output = _emit(logging.INFO, "%(a)s", {"b": "password123"})
+        assert output == (
+            "%(a)s {'b': '[REDACTED]'} <log format error: KeyError>\n"
+        )
+
+    def test_argument_failing_str_does_not_raise(self) -> None:
+        """An argument whose str() raises is logged, not raised."""
+
+        class Unprintable:
+            def __str__(self) -> str:
+                raise RuntimeError("no")
+
+            def __repr__(self) -> str:
+                return "<Unprintable password123>"
+
+        SecretFilter.register_secret("password123")
+        output = _emit(logging.INFO, "Value %s", Unprintable())
+        assert output == (
+            "Value %s (<Unprintable [REDACTED]>,) "
+            "<log format error: RuntimeError>\n"
+        )
+
+    def test_unrepresentable_argument_does_not_raise(self) -> None:
+        """When even repr() fails, a placeholder is logged."""
+
+        class Opaque:
+            def __str__(self) -> str:
+                raise RuntimeError("no")
+
+            def __repr__(self) -> str:
+                raise RuntimeError("no")
+
+        SecretFilter.register_secret("password123")
+        output = _emit(logging.INFO, "Value %s", Opaque())
+        assert output == "<log format error: RuntimeError>\n"
+
+    def test_redacts_repr_escaped_secret(self) -> None:
+        """A secret is redacted where repr() escapes it."""
+        secret = "line1\nback\\slash 'q' \"dq\""
+        SecretFilter.register_secret(secret)
+        output = _emit(
+            logging.INFO, "%s | %r | %s", secret, secret, {"key": secret}
+        )
+        assert output == ("[REDACTED] | '[REDACTED]' | {'key': '[REDACTED]'}\n")
+
+    def test_redacts_longer_overlapping_secret_whole(self) -> None:
+        """A secret that contains another is redacted in full."""
+        SecretFilter.register_secret("abc")
+        SecretFilter.register_secret("abcdef")
+        output = _emit(logging.INFO, "Key: abcdef")
+        assert output == "Key: [REDACTED]\n"
 
     def test_ignores_empty_secret(self) -> None:
         """Empty strings should not be registered as secrets."""
@@ -114,8 +229,6 @@ class TestSecretFilter:
 
     def test_rebuild_pattern_with_empty_secrets(self) -> None:
         """_rebuild_pattern sets pattern to None when secrets empty."""
-        # Ensure secrets are empty
-        SecretFilter.clear_secrets()
         # Call _rebuild_pattern directly with empty secrets
         SecretFilter._rebuild_pattern()
         assert SecretFilter._pattern is None
@@ -140,19 +253,26 @@ class TestSecretFilter:
 class TestConfigureLogging:
     """Tests for configure_logging function."""
 
-    def teardown_method(self) -> None:
-        """Reset registered secrets after each test.
-
-        Root logger changes are undone by the root conftest's
-        ``_restore_root_logger`` fixture.
-        """
-        SecretFilter.clear_secrets()
-
     def test_sets_log_level(self) -> None:
-        """configure_logging should set the root logger level."""
+        """configure_logging sets the level of Airut's loggers."""
+        configure_logging(level=logging.WARNING)
+        assert logging.getLogger().level == logging.WARNING
+        assert logging.getLogger("airut").level == logging.WARNING
+
+    def test_debug_level_applies_to_airut_only(self) -> None:
+        """DEBUG enables Airut's debug logs but not third-party ones.
+
+        Third-party debug output can hold message content: the Slack
+        SDK logs every event and request body at DEBUG.
+        """
         configure_logging(level=logging.DEBUG)
-        root = logging.getLogger()
-        assert root.level == logging.DEBUG
+        assert logging.getLogger("airut.gateway.service").isEnabledFor(
+            logging.DEBUG
+        )
+        assert not logging.getLogger("slack_sdk.web").isEnabledFor(
+            logging.DEBUG
+        )
+        assert logging.getLogger("slack_sdk.web").isEnabledFor(logging.INFO)
 
     def test_adds_handler(self) -> None:
         """configure_logging should add a stream handler."""

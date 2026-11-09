@@ -1873,7 +1873,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Enable debug logging",
+        help="Enable debug logging for Airut's own modules",
     )
     parser.add_argument(
         "--resilient",

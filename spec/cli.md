@@ -337,7 +337,7 @@ Start the email gateway service. Normally invoked by systemd, not run directly.
 | `--config PATH`      | Config file (see [Config File Selection](#config-file-selection))                                   |
 | `--read-only-config` | Dashboard config editor is a read-only viewer ([config-editor.md](config-editor.md#read-only-mode)) |
 | `--resilient`        | Stay alive on boot failure, show error on dashboard                                                 |
-| `--debug`            | Enable debug logging                                                                                |
+| `--debug`            | Enable debug logging for Airut's own modules (third-party libraries stay at INFO)                   |
 
 Delegates immediately to `airut.gateway.service:main()` with the remaining
 arguments. See [gateway-architecture.md](gateway-architecture.md) for the

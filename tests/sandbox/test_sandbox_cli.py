@@ -249,6 +249,46 @@ class TestSetupLogging:
         assert isinstance(handler, logging.FileHandler)
         assert handler.mode == "a"
 
+    def test_log_redacts_config_secrets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Masked secrets and signing credentials never reach the log."""
+        monkeypatch.setenv("TOKEN_VAL", "masked-real-123")
+        monkeypatch.setenv("AWS_AKI", "AKIAREALKEY")
+        monkeypatch.setenv("AWS_SAK", "real-secret-key")
+        monkeypatch.setenv("AWS_ST", "real-session-token")
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "masked_secrets:\n"
+            "  TOKEN:\n"
+            "    value: !env TOKEN_VAL\n"
+            "    scopes:\n"
+            "      - api.example.com\n"
+            "    headers:\n"
+            "      - Authorization\n"
+            "signing_credentials:\n"
+            "  aws:\n"
+            "    type: aws-sigv4\n"
+            "    access_key_id: !env AWS_AKI\n"
+            "    secret_access_key: !env AWS_SAK\n"
+            "    session_token: !env AWS_ST\n"
+            "    scopes:\n"
+            "      - bedrock.us-east-1.amazonaws.com\n"
+        )
+        log_path = tmp_path / "sandbox.log"
+        _setup_logging(log_file=log_path)
+        _load_config(cfg_file)
+        logging.getLogger("airut.sandbox_cli").error(
+            "Failed: %s",
+            RuntimeError(
+                "masked-real-123 AKIAREALKEY real-secret-key real-session-token"
+            ),
+        )
+        logging.getLogger().handlers[-1].flush()
+
+        text = log_path.read_text()
+        assert "Failed: [REDACTED] [REDACTED] [REDACTED] [REDACTED]" in text
+
 
 # -------------------------------------------------------------------
 # _require_env

@@ -56,8 +56,8 @@ register values with `SecretFilter`.
 Secret registration remains in `__post_init__` methods as it is today. The
 existing manual calls to `SecretFilter.register_secret()` in
 `EmailChannelConfig`, `SlackChannelConfig`, and `RepoServerConfig` are
-unchanged. Derived secrets (surrogates) continue to be registered in
-`_build_task_env()`.
+unchanged. Surrogates are not registered: they are not secret, and each task
+gets a fresh set.
 
 ### Which Classes Get Annotated
 

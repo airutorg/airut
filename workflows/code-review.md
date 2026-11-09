@@ -68,6 +68,10 @@ the project-specific checklist below.
 ### 7. General
 
 - [ ] No `print()` — use `logging`.
+- [ ] Log calls carry metadata only: no prompts, message bodies, email subjects,
+  Claude output, or other user content (lengths and counts are fine), and no
+  secrets or values carrying them (tokens, signed URLs). Check exception
+  messages and tracebacks that are logged too.
 - [ ] No secrets or credentials in committed files.
 - [ ] Error handling is appropriate (not excessive, not missing at boundaries).
 

@@ -590,6 +590,16 @@ proxy-filter.py request_data()            [fires per TCP segment, only if stream
 | Surrogate key ID   | No                           | Yes (debugging) |
 | Surrogate secret   | No                           | Yes (debugging) |
 
+The network log shows a presigned URL as the container sent it (surrogate key ID
+and session token, original signature), never the re-signed URL, which is a
+usable credential until it expires. The proxy also redacts the real values, as
+is and percent-encoded, from every line it logs, including `DEBUG_SIGNING`
+diagnostics (see
+[network-sandbox.md](network-sandbox.md#credentials-in-the-log)). AWS error
+bodies logged under `DEBUG_SIGNING` can still carry the real session token in
+other encodings (S3 echoes the canonical request as hex bytes), so enable it
+only while debugging.
+
 The `[masked: N]` suffix in network logs applies to re-signed requests as well
 (counts as 1 per re-signed request, regardless of how many fields were
 replaced).

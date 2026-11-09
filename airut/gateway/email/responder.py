@@ -171,10 +171,13 @@ class EmailResponder:
             Attachment(filename, content)
             for filename, content in attachments or []
         ]
+        # The subject is content (it often carries the request), so
+        # identify the message by recipient and Message-ID only.
+        shown_id = message_id or "(server-assigned)"
         try:
-            logger.debug("Sending email to %s: %s", to, subject)
+            logger.debug("Sending email to %s (Message-ID: %s)", to, shown_id)
             left_out = self._deliver(draft, files)
-            logger.info("Sent email to %s: %s", to, subject)
+            logger.info("Sent email to %s (Message-ID: %s)", to, shown_id)
             return left_out
         except (
             smtplib.SMTPException,
