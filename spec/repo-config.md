@@ -38,7 +38,8 @@ When the same env var name appears in multiple pools, the highest-priority pool
 wins. This allows upgrading a credential from plain `secrets` to
 `masked_secrets` without removing the old entry (though removing it is cleaner).
 
-All resolved values are registered for log redaction.
+The real values in every pool are registered for log redaction when the config
+loads. Surrogates are not: they are not secret, and each task gets a fresh set.
 
 ## Model and Effort
 
@@ -111,14 +112,14 @@ and [doc/periodic-tasks.md](../doc/periodic-tasks.md) for the user-facing guide.
 
 1. Service starts, loads server config (`ServerConfig.from_yaml()`)
 2. Per-repo settings (model, effort, resource limits, network, all credential
-   pools) are parsed from the server config
+   pools) are parsed from the server config, and the real credential values are
+   registered with `SecretFilter`
 3. Mirror is updated (`mirror.update_mirror()`)
 4. Network allowlist and container Dockerfile are read from the mirror's default
    branch
 5. Credential pool entries are resolved and prepared (surrogates generated for
    masked/signing/GitHub App credentials)
-6. All resolved env var values are registered with `SecretFilter`
-7. Fields are validated (timeout >= 10, etc.)
+6. Fields are validated (timeout >= 10, etc.)
 
 ## Multi-Repo Support
 

@@ -522,9 +522,6 @@ def test_repo_server_config_secret_redaction(
     password = "very_secret_password"
     api_key = "sk-test-key"
 
-    # Clear any existing secrets
-    SecretFilter._secrets.clear()
-
     _make_repo_server_config(
         master_repo,
         tmp_path,
@@ -543,9 +540,6 @@ def test_repo_server_config_masked_secret_redaction(
     """Test that masked secret values are also redacted."""
     password = "test_password"
     masked_value = "ghp_masked_token_value"
-
-    # Clear any existing secrets
-    SecretFilter._secrets.clear()
 
     _make_repo_server_config(
         master_repo,
@@ -811,7 +805,6 @@ def test_repo_server_config_oauth2_secret_redaction(
 ) -> None:
     """OAuth2 client secret is registered for log redaction."""
     client_secret = "super-secret-oauth2-client-secret"
-    SecretFilter._secrets.clear()
 
     _make_repo_server_config(
         master_repo,
@@ -2289,6 +2282,35 @@ class TestRepoServerConfigBuildTaskEnv:
         # Different calls should produce different surrogates
         assert env1["TOKEN"] != env2["TOKEN"]
 
+    def test_build_task_env_registers_no_surrogates(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Building a task env leaves the redaction registry unchanged.
+
+        The real values are registered when the config loads.
+        Surrogates are not secret, and registering a fresh set per task
+        would grow the registry with every message.
+        """
+        config = _make_repo_server_config(
+            master_repo,
+            tmp_path,
+            secrets={"API_KEY": "sk-test-123"},
+            masked_secrets={
+                "TOKEN": MaskedSecret(
+                    value="ghp_realtoken",
+                    scopes=frozenset(["api.github.com"]),
+                    headers=("Authorization",),
+                )
+            },
+        )
+        registered = set(SecretFilter._secrets)
+        assert {"sk-test-123", "ghp_realtoken"} <= registered
+
+        env, _ = config.build_task_env()
+
+        assert env["TOKEN"] not in SecretFilter._secrets
+        assert SecretFilter._secrets == registered
+
 
 # ---------------------------------------------------------------------------
 # RepoServerConfig parsing from YAML (resource_limits, model)
@@ -3489,8 +3511,6 @@ class TestRepoServerConfigSigningCredentials:
         self, master_repo: Path, tmp_path: Path
     ) -> None:
         """Signing credential values are redacted in logs."""
-        SecretFilter._secrets.clear()
-
         _make_repo_server_config(
             master_repo,
             tmp_path,
@@ -3521,8 +3541,6 @@ class TestRepoServerConfigSigningCredentials:
         self, master_repo: Path, tmp_path: Path
     ) -> None:
         """Signing credential without session token redacts key+secret."""
-        SecretFilter._secrets.clear()
-
         _make_repo_server_config(
             master_repo,
             tmp_path,
@@ -4287,7 +4305,6 @@ class TestRepoServerConfigGitHubApp:
 
     def test_registers_private_key_for_redaction(self) -> None:
         """Private key is registered with SecretFilter."""
-        SecretFilter.clear_secrets()
         config = RepoServerConfig(
             repo_id="test",
             git_repo_url="https://github.com/test/repo.git",

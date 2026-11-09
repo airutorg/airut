@@ -40,6 +40,7 @@ from typing import cast
 import yaml
 
 from airut.allowlist import Allowlist, parse_allowlist_yaml
+from airut.logging import SecretFilter
 from airut.sandbox import (
     CommandResult,
     ContainerEnv,
@@ -134,6 +135,9 @@ def _require_env(value: YamlValue, path: str) -> str:
 def _load_config(config_path: Path) -> _SandboxCliConfig:
     """Load and resolve ``.airut/sandbox.yaml``.
 
+    Registers the real values of masked secrets and signing credentials
+    for log redaction.
+
     Args:
         config_path: Path to the config file.
 
@@ -160,7 +164,7 @@ def _load_config(config_path: Path) -> _SandboxCliConfig:
         raise _ConfigError(f"Config file must be a YAML mapping: {config_path}")
 
     cfg = cast(dict[str, YamlValue], raw)
-    return _SandboxCliConfig(
+    config = _SandboxCliConfig(
         env=_parse_env(cfg.get("env")),
         pass_env=_parse_pass_env(cfg.get("pass_env")),
         masked_secrets=_parse_masked_secrets(cfg.get("masked_secrets")),
@@ -170,6 +174,19 @@ def _load_config(config_path: Path) -> _SandboxCliConfig:
         network_sandbox=_parse_network_sandbox(cfg.get("network_sandbox")),
         resource_limits=_parse_resource_limits(cfg.get("resource_limits")),
     )
+    _register_secrets(config)
+    return config
+
+
+def _register_secrets(config: _SandboxCliConfig) -> None:
+    """Register the config's real credential values for log redaction."""
+    for masked in config.masked_secrets:
+        SecretFilter.register_secret(masked.real_value)
+    for cred in config.signing_credentials:
+        SecretFilter.register_secret(cred.access_key_id)
+        SecretFilter.register_secret(cred.secret_access_key)
+        if cred.session_token is not None:
+            SecretFilter.register_secret(cred.session_token)
 
 
 def _parse_env(raw: YamlValue) -> dict[str, str]:
@@ -628,6 +645,7 @@ def _setup_logging(
         handler = logging.StreamHandler(sys.stderr)
 
     handler.setLevel(level)
+    handler.addFilter(SecretFilter())
     handler.setFormatter(
         logging.Formatter(
             fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

@@ -50,7 +50,7 @@ def parse_stream_events(stdout: str) -> list[StreamEvent]:
         try:
             raw_obj = json.loads(line)
         except json.JSONDecodeError:
-            logger.debug("Skipping non-JSON line: %s", line[:100])
+            logger.debug("Skipping non-JSON line (%d chars)", len(line))
             continue
 
         if not isinstance(raw_obj, dict):

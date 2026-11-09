@@ -22,29 +22,71 @@ Usage:
 
 import logging
 import re
+import threading
 from typing import ClassVar
+
+
+_REDACTED = "[REDACTED]"
+"""Text that replaces a registered secret in log output."""
+
+# Parent of every Airut module's logger (``logging.getLogger(__name__)``).
+_PACKAGE_LOGGER = "airut"
+
+# Renders exception tracebacks for redaction the way the handlers'
+# formatters would.
+_EXCEPTION_FORMATTER = logging.Formatter()
+
+
+def _describe_unrenderable(record: logging.LogRecord, error: Exception) -> str:
+    """Stand in for a message whose arguments cannot be rendered.
+
+    Logging would report such a record with its raw arguments, which
+    could hold a secret; this text is redacted and output instead.
+
+    Args:
+        record: The log record whose message failed to render.
+        error: The error rendering raised.
+
+    Returns:
+        The format string and arguments, or a placeholder when even
+        those cannot be turned into text.
+    """
+    marker = f"<log format error: {type(error).__name__}>"
+    try:
+        return f"{record.msg} {record.args!r} {marker}"
+    except Exception:
+        return marker
 
 
 class SecretFilter(logging.Filter):
     """Logging filter that redacts registered secrets from log output.
 
-    Secrets can be registered at runtime using register_secret().
-    Any registered secret appearing in a log message will be replaced
-    with '[REDACTED]'.
+    Secrets can be registered at runtime using register_secret().  The
+    filter renders the complete record -- the message with its
+    arguments of any type, exception traceback, and stack trace --
+    and replaces every registered secret in it with '[REDACTED]', so a
+    secret inside an exception or another non-string argument is
+    caught too.  Each secret is also matched as ``repr()`` escapes it,
+    as it appears inside a container or an exception message.
 
     Example:
         filter = SecretFilter()
         filter.register_secret("my-api-key-12345")
-        logger.addFilter(filter)
+        handler.addFilter(filter)
         logger.info("Using key: my-api-key-12345")
         # Output: "Using key: [REDACTED]"
     """
 
     _secrets: ClassVar[set[str]] = set()
     _pattern: ClassVar[re.Pattern[str] | None] = None
+    _lock: ClassVar[threading.Lock] = threading.Lock()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Filter log record by redacting any registered secrets.
+        """Redact registered secrets from everything the record renders.
+
+        Replaces the message and arguments with the redacted rendered
+        message, and the exception and stack text with redacted copies,
+        which formatters then output as they are.
 
         Args:
             record: The log record to filter.
@@ -52,15 +94,25 @@ class SecretFilter(logging.Filter):
         Returns:
             Always True (record is never suppressed, only modified).
         """
-        if self._pattern is not None:
-            record.msg = self._pattern.sub("[REDACTED]", str(record.msg))
-            if record.args:
-                record.args = tuple(
-                    self._pattern.sub("[REDACTED]", str(arg))
-                    if isinstance(arg, str)
-                    else arg
-                    for arg in record.args
-                )
+        pattern = self._pattern
+        if pattern is None:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception as e:
+            # Filters run outside the handler's error handling: raising
+            # here would raise in the code that logged.
+            message = _describe_unrenderable(record, e)
+        record.msg = pattern.sub(_REDACTED, message)
+        record.args = None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = _EXCEPTION_FORMATTER.formatException(
+                record.exc_info
+            )
+        if record.exc_text:
+            record.exc_text = pattern.sub(_REDACTED, record.exc_text)
+        if record.stack_info:
+            record.stack_info = pattern.sub(_REDACTED, record.stack_info)
         return True
 
     @classmethod
@@ -71,21 +123,29 @@ class SecretFilter(logging.Filter):
             secret: The secret string to redact. Empty strings are ignored.
         """
         if secret:
-            cls._secrets.add(secret)
-            cls._rebuild_pattern()
+            with cls._lock:
+                cls._secrets.add(secret)
+                cls._rebuild_pattern()
 
     @classmethod
     def clear_secrets(cls) -> None:
         """Clear all registered secrets. Primarily for testing."""
-        cls._secrets.clear()
-        cls._pattern = None
+        with cls._lock:
+            cls._secrets.clear()
+            cls._pattern = None
 
     @classmethod
     def _rebuild_pattern(cls) -> None:
-        """Rebuild the compiled regex pattern from registered secrets."""
+        """Rebuild the compiled regex pattern from registered secrets.
+
+        Each secret is matched as is and as ``repr()`` escapes it.
+        Longer forms come first so that a secret containing another is
+        redacted whole rather than around the shorter one.
+        """
         if cls._secrets:
-            escaped = [re.escape(s) for s in cls._secrets]
-            cls._pattern = re.compile("|".join(escaped))
+            forms = cls._secrets | {repr(s)[1:-1] for s in cls._secrets}
+            ordered = sorted(forms, key=len, reverse=True)
+            cls._pattern = re.compile("|".join(map(re.escape, ordered)))
         else:
             cls._pattern = None
 
@@ -99,6 +159,11 @@ def configure_logging(
 
     Sets up the root logger with a standard format and optional
     secret redaction filter.
+
+    *level* applies to Airut's own loggers.  Third-party libraries log
+    at INFO and above even when *level* is DEBUG: their debug output
+    can hold message content (the Slack SDK logs every event and
+    request body).
 
     Args:
         level: The logging level (e.g., logging.INFO, logging.DEBUG).
@@ -115,7 +180,8 @@ def configure_logging(
         handler.addFilter(SecretFilter())
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(level)
+    root_logger.setLevel(max(level, logging.INFO))
+    logging.getLogger(_PACKAGE_LOGGER).setLevel(level)
 
     # Remove existing handlers to avoid duplicates
     for existing_handler in root_logger.handlers[:]:

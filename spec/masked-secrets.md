@@ -201,6 +201,9 @@ proxy_filter.py request()
 | Real      | Yes                          | No (redacted)   |
 | Surrogate | No                           | Yes (debugging) |
 
+The proxy redacts real values from the network log as well (see
+[network-sandbox.md](network-sandbox.md#credentials-in-the-log)).
+
 ## Network Sandbox Requirement
 
 Masked secrets depend on the network sandbox proxy to function. The proxy is

@@ -364,11 +364,7 @@ class AgentTask:
             ]
         )
 
-        logger.info(
-            "Executing Claude Code with prompt (length=%d): %s",
-            len(prompt),
-            prompt,
-        )
+        logger.info("Starting Claude Code (prompt length=%d)", len(prompt))
 
         # Build mounts list (caller mounts + claude dir + binary)
         all_mounts = list(self._mounts) + [

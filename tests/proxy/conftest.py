@@ -145,12 +145,16 @@ def _install_mitmproxy_mock() -> None:
             self.url = url
             self.host = url_host if url_host is not None else host
             self.pretty_host = host
-            self.pretty_url = url
             self.path = path
             self.port = 443
             self.headers = _MockHeaders(headers if headers is not None else {})
             self.stream = stream
             self.content = content
+
+        @property
+        def pretty_url(self) -> str:
+            """Follow ``url`` as mitmproxy does when the URL is rewritten."""
+            return self.url
 
         def get_content(self) -> bytes:
             return self.content

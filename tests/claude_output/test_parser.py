@@ -6,6 +6,9 @@
 """Tests for lib/claude_output/parser.py."""
 
 import json
+import logging
+
+import pytest
 
 from airut._json_types import JsonDict
 from airut.claude_output.parser import (
@@ -194,6 +197,16 @@ class TestParseStreamEvents:
         events = parse_stream_events(stdout)
         assert len(events) == 1
         assert events[0].event_type == EventType.SYSTEM
+
+    def test_non_json_line_text_not_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Skipped lines are container output: log their length only."""
+        stdout = "secret plans\n" + json.dumps(_make_system_event())
+        with caplog.at_level(logging.DEBUG):
+            parse_stream_events(stdout)
+        assert "secret plans" not in caplog.text
+        assert "Skipping non-JSON line (12 chars)" in caplog.text
 
     def test_skips_non_dict_json(self) -> None:
         stdout = "[1,2,3]\n" + json.dumps(_make_system_event())

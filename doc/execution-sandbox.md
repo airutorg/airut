@@ -87,7 +87,8 @@ entries (`secrets`, `masked_secrets`, `signing_credentials`,
 `github_app_credentials`) in the server config auto-inject into the container as
 environment variables by their key name.
 
-- All resolved values are registered for log redaction
+- All real credential values are registered for log redaction when the config
+  loads
 - No host credential files are mounted
 
 For credentials that should only be usable with specific services (e.g., GitHub

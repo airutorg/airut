@@ -17,6 +17,7 @@
   - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
   - [Signing Credentials (AWS SigV4 Re-signing)](#signing-credentials-aws-sigv4-re-signing)
   - [GitHub App Credentials (Token Rotation)](#github-app-credentials-token-rotation)
+- [Logging](#logging)
 - [Dashboard Security](#dashboard-security)
 - [Attack Surface Analysis](#attack-surface-analysis)
 - [Configuration Security](#configuration-security)
@@ -264,7 +265,7 @@ as environment variables by their key name.
 **Security properties:**
 
 - All per-repo settings live in the server config (operator-controlled)
-- All resolved values registered for log redaction
+- All real credential values registered for log redaction
 - Container sees environment variables, not files
 
 ### Git Authentication
@@ -352,6 +353,40 @@ See [github-app-setup.md](github-app-setup.md) for the setup guide and
 [network-sandbox.md](network-sandbox.md#github-app-credentials-proxy-managed-token-rotation)
 for the proxy implementation details.
 
+## Logging
+
+Airut keeps message content and secrets out of its logs:
+
+- **Service log** (stderr, typically the systemd journal) — records metadata:
+  sender and recipient addresses, Slack user and channel IDs, conversation and
+  task IDs, models, attachment names and sizes, outcomes, and errors. It never
+  records message content: prompts, message bodies, email subjects, or Claude's
+  output. Conversation content is kept only in the conversation directory, which
+  the dashboard displays.
+- **Network log** (`network-sandbox.log`, per conversation) — one line per
+  request, with the URL as the container sent it (carrying surrogate
+  credentials, never the real ones the proxy swaps in).
+- **Proxy container output** (container runtime log, usually the journal) —
+  proxy startup and failure diagnostics, and the network log's `BLOCKED` and
+  `ERROR` lines. These carry the requested URL, whose path and query string are
+  whatever the agent sent.
+- **Sandbox CLI log** (`airut-sandbox`, stderr or `--log FILE`) — the CLI's own
+  diagnostics (startup, image build, errors); the sandboxed command's output is
+  passed through, not logged.
+
+Each log replaces secret values with `[REDACTED]`. The service log redacts every
+credential in the server config (email password or OAuth2 client secret, Slack
+tokens, `secrets`, masked secrets, signing credentials, GitHub App private
+keys); the sandbox CLI log redacts its masked secrets and signing credentials;
+the network log and the proxy's copies of its lines redact the real values in
+the proxy's replacement map. In the service and CLI logs, redaction covers the
+fully rendered record, including exception messages and tracebacks. Redaction is
+a backstop: code does not log secrets in the first place.
+
+`run-gateway --debug` raises only Airut's own loggers to DEBUG. Third-party
+libraries stay at INFO, since their debug output can hold message content (the
+Slack SDK logs every event and request body).
+
 ## Dashboard Security
 
 The dashboard binds to localhost (`127.0.0.1:5200`) by default:
@@ -385,7 +420,7 @@ This is acceptable for a single-user system behind authentication.
 | Credential theft      | Environment-only secrets, no host mounts                                       |
 | Cross-session attack  | Per-conversation isolation (workspace, network)                                |
 | Resource exhaustion   | Timeout, conversation limit, garbage collection                                |
-| Log leakage           | Automatic secret redaction (passwords and tokens)                              |
+| Log leakage           | Metadata-only service logs; secret redaction in all logs                       |
 | Dashboard access      | Localhost binding, reverse proxy auth                                          |
 | Workflow escape       | Sandbox CI, omit `workflow` scope / GitHub App without `Workflows` permission  |
 

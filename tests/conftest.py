@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airut.gateway.dotenv_loader import reset_dotenv_state
+from airut.logging import SecretFilter
 from tests.memory_tree import use_repo_files
 
 
@@ -80,15 +81,20 @@ def preserve_root_logger() -> Generator[None]:
     """Restore the root logger's level and handlers on exit.
 
     Handlers added inside are removed and closed (pytest's own are
-    never closed); handlers removed inside are added back.
+    never closed); handlers removed inside are added back.  The
+    ``airut`` package logger's level, which ``configure_logging`` sets,
+    is restored as well.
     """
     root = logging.getLogger()
+    package = logging.getLogger("airut")
     level = root.level
+    package_level = package.level
     handlers = root.handlers[:]
     try:
         yield
     finally:
         root.setLevel(level)
+        package.setLevel(package_level)
         for handler in root.handlers[:]:
             if handler not in handlers and not _is_pytest_handler(handler):
                 root.removeHandler(handler)
@@ -140,6 +146,17 @@ def _restore_root_logger() -> Iterator[None]:
     """
     with preserve_root_logger():
         yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_registered_secrets() -> Iterator[None]:
+    """Start each test with no secrets registered for log redaction.
+
+    Loading a config registers its secret values process-wide; leaked
+    into later tests they would redact matching text from log output.
+    """
+    SecretFilter.clear_secrets()
+    yield
 
 
 @pytest.fixture(autouse=True)

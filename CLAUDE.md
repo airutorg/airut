@@ -351,6 +351,10 @@ workflows/                  - Step-by-step operational guides
   checking
 - **Google Python Style Guide**
 - Use `logging` module, not `print()`
+- **Log metadata, never content or secrets** — IDs, addresses, sizes, counts,
+  and outcomes are fine; prompts, message bodies, email subjects, Claude output,
+  and credentials (or values carrying them, such as signed URLs) are not.
+  `SecretFilter` redaction is a backstop, not permission to log secrets.
 
 ### Testing
 

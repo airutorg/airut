@@ -203,6 +203,19 @@ ERROR lines indicate upstream connection failures — the domain passed the
 allowlist but mitmproxy could not connect (e.g. DNS resolution failure, timeout,
 connection refused). The format is `ERROR {METHOD} {URL} -> {error message}`.
 
+### Credentials in the Log
+
+`{URL}` is always the URL as the container sent it, recorded before credential
+handling can rewrite it: re-signing a presigned AWS URL puts the real key ID,
+session token, and a valid signature into its query string, making the rewritten
+URL a usable credential. The log therefore only ever shows surrogates.
+
+As a backstop, the proxy redacts every real credential value in the replacement
+map (masked secret values, signing credential fields, GitHub App private keys),
+as is and percent-encoded, from each line it writes to the network log —
+including the `BLOCKED` and `ERROR` lines it echoes to stdout — replacing it
+with `[REDACTED]`.
+
 The log file is created in the conversation directory and persists with the
 session. It is cleaned up automatically when conversations are pruned.
 

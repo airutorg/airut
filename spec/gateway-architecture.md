@@ -718,6 +718,18 @@ No host credential files are mounted — all authentication uses environment
 variables passed via the config file. See `config/airut.example.yaml` for the
 full list.
 
+### Service Logging
+
+The service log records metadata only: sender and recipient addresses, Slack
+user and channel IDs, conversation and task IDs, Message-IDs, models, attachment
+names and sizes, outcomes, and errors. Message content — prompts, message
+bodies, email subjects (they become part of the prompt), and Claude's output —
+is never logged; it is stored only in the conversation directory.
+
+The handler set up by `configure_logging()` carries `SecretFilter`, which
+replaces every registered secret with `[REDACTED]` in the fully rendered record:
+the message with arguments of any type, exception tracebacks, and stack traces.
+
 ### Attack Surface
 
 | Risk                  | Mitigation                                                                               |

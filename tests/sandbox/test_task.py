@@ -6,6 +6,7 @@
 """Tests for lib/sandbox/task.py -- per-execution AgentTask class."""
 
 import asyncio
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -490,6 +491,27 @@ class TestAgentTaskExecute:
         await task.execute("My test prompt")
 
         assert calls[0]["stdin_data"] == "My test prompt"
+
+    async def test_execute_does_not_log_prompt(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """execute() logs the prompt's length, never its text."""
+        task = _make_task(tmp_path)
+        monkeypatch.setattr(
+            "airut.sandbox.task.run_container",
+            create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            ),
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            await task.execute("Summarize the confidential report")
+
+        assert "confidential" not in caplog.text
+        assert "prompt length=33" in caplog.text
 
     async def test_execute_mounts_claude_dir(
         self,

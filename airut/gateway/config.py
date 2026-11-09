@@ -2648,9 +2648,4 @@ def _build_task_env(
         if value:
             resolved[name] = value
 
-    # Register all resolved values for log redaction.
-    for value in resolved.values():
-        if value:
-            SecretFilter.register_secret(value)
-
     return resolved, replacement_map

@@ -98,7 +98,7 @@ def extract_conversation_id(subject: str) -> str | None:
         logger.debug("Extracted conversation ID: %s", conversation_id)
         return conversation_id
 
-    logger.debug("No conversation ID found in subject: %s", subject)
+    logger.debug("No conversation ID found in subject")
     return None
 
 

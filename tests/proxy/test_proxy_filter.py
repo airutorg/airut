@@ -29,6 +29,7 @@ from request_filter import (  # ty:ignore[unresolved-import]
 )
 from tests.proxy.vectors import (
     REAL_ACCESS_KEY_ID,
+    REAL_SECRET_ACCESS_KEY,
     SIGNING_REPLACEMENT,
     SIGV4_AUTH,
     SIGV4A_AUTH,
@@ -47,6 +48,13 @@ from airut._bundled.proxy.proxy_filter import (
     _encode_basic_auth,
     _match_header_pattern,
     _match_pattern,
+    _real_value_pattern,
+)
+from airut.sandbox.secrets import (
+    GitHubAppCredential,
+    MaskedSecret,
+    SigningCredential,
+    prepare_secrets,
 )
 
 
@@ -447,6 +455,134 @@ class TestProxyFilterLog:
         """_log_loud logs to ctx.log even when no file."""
         pf = ProxyFilter()
         pf._log_loud("test")  # Should not raise
+
+    def test_logs_redact_real_credential_values(self, tmp_path: Path) -> None:
+        """Real values from the replacement map never reach a log line."""
+        repl_path = tmp_path / "replacements.json"
+        private_key = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END"
+        repl_path.write_text(
+            json.dumps(
+                {
+                    "ghp_surr": {
+                        "value": "ghp_real",
+                        "scopes": ["api.github.com"],
+                        "headers": ["Authorization"],
+                    },
+                    SURROGATE_ACCESS_KEY_ID: SIGNING_REPLACEMENT,
+                    "ghs_surr": {
+                        "type": "github-app",
+                        "app_id": "12345",
+                        "private_key": private_key,
+                        "installation_id": 678,
+                        "scopes": ["api.github.com"],
+                    },
+                }
+            )
+        )
+        log_path = tmp_path / "test.log"
+        pf = ProxyFilter()
+        with patch(
+            "airut._bundled.proxy.proxy_filter.REPLACEMENTS_PATH", repl_path
+        ):
+            pf._load_replacements()
+        real_values = [
+            "ghp_real",
+            REAL_ACCESS_KEY_ID,
+            REAL_SECRET_ACCESS_KEY,
+            "real_session_token_value",
+            private_key,
+        ]
+        line = "values: " + " ".join(real_values)
+        pf._log_file = open(log_path, "w")
+        with patch("airut._bundled.proxy.proxy_filter.ctx") as mock_ctx:
+            try:
+                pf._log(line)
+                pf._log_loud(line)
+            finally:
+                pf._log_file.close()
+
+        redacted = "values: " + " ".join(["[REDACTED]"] * len(real_values))
+        assert log_path.read_text() == f"{redacted}\n{redacted}\n"
+        mock_ctx.log.warn.assert_called_once_with(redacted)
+
+    def test_logs_redact_percent_encoded_values(self) -> None:
+        """A real value is redacted where a query string encodes it."""
+        token = "FwoGZXIvYXdzE+abc/def=="
+        pf = ProxyFilter()
+        pf._real_values = _real_value_pattern(
+            {SURROGATE_ACCESS_KEY_ID: {"session_token": token}}
+        )
+        line = "X-Amz-Security-Token=FwoGZXIvYXdzE%2Babc%2Fdef%3D%3D&x=1"
+        assert pf._redact(line) == "X-Amz-Security-Token=[REDACTED]&x=1"
+
+    def test_real_value_pattern_covers_prepared_secrets(self) -> None:
+        """Every real value in a prepared replacement map is redacted.
+
+        Guards the field list against drift from the map's JSON shape.
+        """
+        prepared = prepare_secrets(
+            [
+                MaskedSecret(
+                    env_var="TOKEN",
+                    real_value="masked-real",
+                    scopes=("api.example.com",),
+                    headers=("Authorization",),
+                )
+            ],
+            [
+                SigningCredential(
+                    access_key_id_env_var="AWS_ACCESS_KEY_ID",
+                    access_key_id="AKIAREALKEY",
+                    secret_access_key_env_var="AWS_SECRET_ACCESS_KEY",
+                    secret_access_key="real-secret-key",
+                    session_token_env_var="AWS_SESSION_TOKEN",
+                    session_token="real-session-token",
+                    scopes=("*.amazonaws.com",),
+                )
+            ],
+            [
+                GitHubAppCredential(
+                    env_var="GH_TOKEN",
+                    app_id="Iv23li",
+                    private_key="real-private-key",
+                    installation_id=123,
+                    scopes=("api.github.com",),
+                )
+            ],
+        )
+        real_values = [
+            "masked-real",
+            "AKIAREALKEY",
+            "real-secret-key",
+            "real-session-token",
+            "real-private-key",
+        ]
+        pf = ProxyFilter()
+        pf._real_values = _real_value_pattern(
+            json.loads(json.dumps(prepared.replacements.to_dict()))
+        )
+        assert pf._redact(" ".join(real_values)) == " ".join(
+            ["[REDACTED]"] * len(real_values)
+        )
+
+    def test_logs_unchanged_without_real_values(self, tmp_path: Path) -> None:
+        """Without a replacement map, log lines are written as given."""
+        repl_path = tmp_path / "replacements.json"
+        repl_path.write_text(json.dumps({}))
+        log_path = tmp_path / "test.log"
+        pf = ProxyFilter()
+        with patch(
+            "airut._bundled.proxy.proxy_filter.REPLACEMENTS_PATH", repl_path
+        ):
+            pf._load_replacements()
+        pf._log_file = open(log_path, "w")
+        try:
+            pf._log("ALLOWED GET https://example.com/ -> 200")
+        finally:
+            pf._log_file.close()
+        assert (
+            log_path.read_text() == "ALLOWED GET https://example.com/ -> 200\n"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2240,6 +2376,38 @@ class TestResignPresigned:
         assert result is not None
         # The request should still succeed (host was fixed up internally)
         assert REAL_ACCESS_KEY_ID in flow.request.url
+
+    @pytest.mark.parametrize("outcome", ["response", "error"])
+    def test_log_line_shows_url_as_sent(
+        self, tmp_path: Path, outcome: str
+    ) -> None:
+        """The network log shows the surrogate URL, not the re-signed one.
+
+        The re-signed URL holds the real key ID and session token and a
+        valid signature: anyone reading it could use it until it expires.
+        """
+        pf = _pf_with_signing()
+        log_path = tmp_path / "network.log"
+        pf._log_file = open(log_path, "w")
+        flow = self._presigned_flow(with_session_token=True)
+        sent_url = flow.request.url
+        try:
+            pf.requestheaders(flow)
+            pf.request(flow)
+            assert REAL_ACCESS_KEY_ID in flow.request.url
+            if outcome == "response":
+                flow.response = MockResponse(200)
+                pf.response(flow)
+            else:
+                flow.error = MockError("connection refused")
+                pf.error(flow)
+        finally:
+            pf._log_file.close()
+
+        text = log_path.read_text()
+        assert sent_url in text
+        assert REAL_ACCESS_KEY_ID not in text
+        assert "real_session_token_value" not in text
 
 
 # ---------------------------------------------------------------------------
