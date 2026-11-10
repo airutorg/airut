@@ -317,7 +317,9 @@ non-version-controlled file with the same security posture as `.env`.
 
 `!file PATH` takes a value from a file — for secrets delivered as files (agenix,
 sops-nix, systemd `LoadCredential=`), which keeps them out of the gateway's
-environment, which every `git` and `podman` process it starts inherits:
+environment, which every `git` and `podman` process it starts inherits. A task's
+`podman run` still holds the plain `secrets` values it passes to the container
+in its environment (see [sandbox.md](sandbox.md#execution-flow)):
 
 ```yaml
 repos:

@@ -273,6 +273,7 @@ def _handle_interactive_run(args: list[str]) -> int:
     only.  Then delegates to mock_claude.main().
     """
     mounts: dict[str, str] = {}
+    container_env: dict[str, str] = {}
     i = 0
     while i < len(args) and args[i].startswith("-"):
         arg = args[i]
@@ -282,13 +283,28 @@ def _handle_interactive_run(args: list[str]) -> int:
                 parts = value.split(":")
                 if len(parts) >= 2:
                     mounts[parts[1]] = parts[0]
-            elif arg == "-e" and "=" in value:
-                name, env_value = value.split("=", 1)
-                os.environ[name] = env_value
+            elif arg == "-e":
+                name, has_value, env_value = value.partition("=")
+                if has_value:
+                    container_env[name] = env_value
+                elif name in os.environ:
+                    # Like podman: a name alone takes its value from
+                    # podman's own environment.
+                    container_env[name] = os.environ[name]
             i += 2
         else:
             i += 1  # flag or --option=value
     command = args[i + 1 :]  # args[i] is the image
+
+    # Like podman, give the "container" only the variables passed with
+    # -e, plus the mocks' own configuration and a PATH.
+    kept = {
+        k: v
+        for k, v in os.environ.items()
+        if k.startswith("MOCK_") or k == "PATH"
+    }
+    os.environ.clear()
+    os.environ.update({**kept, **container_env})
 
     # CLAUDE_BINARY_CONTAINER_PATH, spelled out: importing airut.sandbox
     # would slow down every one of the thousands of mock invocations.

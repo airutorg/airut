@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +15,6 @@ import pytest
 
 from airut.sandbox._run_container import (
     _ProcessTracker,
-    _redact_env_args,
     run_container,
 )
 from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
@@ -76,6 +76,24 @@ def _make_mock_process(
     mock.kill = MagicMock()
 
     return mock
+
+
+async def _run_with_env(variables: dict[str, str]) -> None:
+    """Run a container with *variables* and default everything else."""
+    await run_container(
+        container_command="podman",
+        image_tag="airut:test",
+        mounts=[],
+        env=ContainerEnv(variables=variables),
+        resource_limits=ResourceLimits(),
+        network_args=[],
+        command=["cmd"],
+        stdin_data=None,
+        on_stdout_line=None,
+        on_stderr_line=None,
+        timeout=None,
+        process_tracker=_ProcessTracker(),
+    )
 
 
 class TestProcessTracker:
@@ -160,50 +178,6 @@ class TestProcessTracker:
         tracker._force_kill()
 
 
-class TestRedactEnvArgs:
-    """Tests for _redact_env_args helper."""
-
-    def test_no_env_args(self) -> None:
-        """Command without env args passes through unchanged."""
-        cmd = ["podman", "run", "--rm", "image"]
-        assert _redact_env_args(cmd) == cmd
-
-    def test_redacts_env_values(self) -> None:
-        """Env var values are replaced with ***."""
-        cmd = [
-            "podman",
-            "run",
-            "-e",
-            "API_KEY=secret123",
-            "-e",
-            "TOKEN=abc",
-            "image",
-        ]
-        result = _redact_env_args(cmd)
-        assert result == [
-            "podman",
-            "run",
-            "-e",
-            "API_KEY=***",
-            "-e",
-            "TOKEN=***",
-            "image",
-        ]
-
-    def test_preserves_other_flags(self) -> None:
-        """Non-env flags are preserved."""
-        cmd = ["podman", "run", "--memory", "2g", "-e", "KEY=val", "image"]
-        result = _redact_env_args(cmd)
-        assert "--memory" in result
-        assert "2g" in result
-
-    def test_no_equals_not_redacted(self) -> None:
-        """Env args without = are passed through unchanged."""
-        cmd = ["podman", "run", "-e", "KEY_ONLY", "image"]
-        result = _redact_env_args(cmd)
-        assert result == ["podman", "run", "-e", "KEY_ONLY", "image"]
-
-
 class TestRunContainer:
     """Tests for async run_container function."""
 
@@ -272,31 +246,68 @@ class TestRunContainer:
 
     @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
     async def test_env_vars(self, mock_create: MagicMock) -> None:
-        """run_container passes environment variables."""
-        tracker = _ProcessTracker()
-        mock_process = _make_mock_process()
-        mock_create.return_value = mock_process
+        """run_container passes each variable's name with ``-e``."""
+        mock_create.return_value = _make_mock_process()
 
-        env = ContainerEnv(variables={"API_KEY": "secret", "TOKEN": "abc123"})
-        await run_container(
-            container_command="podman",
-            image_tag="airut:test",
-            mounts=[],
-            env=env,
-            resource_limits=ResourceLimits(),
-            network_args=[],
-            command=["cmd"],
-            stdin_data=None,
-            on_stdout_line=None,
-            on_stderr_line=None,
-            timeout=None,
-            process_tracker=tracker,
-        )
+        await _run_with_env({"API_KEY": "secret", "TOKEN": "abc123"})
+
+        call_args = list(mock_create.call_args[0])
+        names = [call_args[i + 1] for i, a in enumerate(call_args) if a == "-e"]
+        assert names == ["API_KEY", "TOKEN"]
+        podman_env = mock_create.call_args.kwargs["env"]
+        assert podman_env["API_KEY"] == "secret"
+        assert podman_env["TOKEN"] == "abc123"
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_env_values_not_on_command_line(
+        self,
+        mock_create: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Values reach podman through its environment, not its argv.
+
+        A process's command line is readable by every local user and
+        journald records it with each of podman's log entries.  Given
+        ``-e NAME`` without a value, podman copies the value from its own
+        environment, which keeps the rest of the host environment too.
+        """
+        monkeypatch.setenv("HOST_ONLY", "kept")
+        # The container's value wins over podman's own: the sandbox CLI
+        # holds a masked secret's real value under the name whose
+        # surrogate the container gets.
+        monkeypatch.setenv("API_KEY", "real-host-value")
+        mock_create.return_value = _make_mock_process()
+
+        with caplog.at_level(logging.DEBUG):
+            await _run_with_env({"API_KEY": "sk-real-secret"})
 
         call_args = mock_create.call_args[0]
-        assert "-e" in call_args
-        assert "API_KEY=secret" in call_args
-        assert "TOKEN=abc123" in call_args
+        assert not any("sk-real-secret" in arg for arg in call_args)
+        assert "sk-real-secret" not in caplog.text
+        podman_env = mock_create.call_args.kwargs["env"]
+        assert podman_env["API_KEY"] == "sk-real-secret"
+        assert podman_env["HOST_ONLY"] == "kept"
+
+    @pytest.mark.parametrize(
+        "name", ["", "GH_*", "*", " GH_TOKEN", "\tGH_TOKEN", "A=B", "A\0B"]
+    )
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_rejects_names_podman_reads_differently(
+        self, mock_create: MagicMock, name: str
+    ) -> None:
+        """Names podman would read as other variables or reject are refused.
+
+        Without a value, ``-e PREFIX*`` copies every variable of
+        podman's own environment that starts with PREFIX, and podman
+        strips leading whitespace before looking a name up: ``-e
+        " GH_TOKEN"`` would copy podman's own ``GH_TOKEN`` -- the real
+        token -- instead of the container's surrogate.
+        """
+        mock_create.return_value = _make_mock_process()
+        with pytest.raises(ValueError, match="environment variable name"):
+            await _run_with_env({name: "value"})
+        mock_create.assert_not_called()
 
     @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
     async def test_mounts(self, mock_create: MagicMock) -> None:

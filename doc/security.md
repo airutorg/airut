@@ -252,8 +252,12 @@ repos:
 
 Actual values come from environment variables or `~/.config/airut/.env`, or from
 files with `!file` (agenix, sops-nix, systemd `LoadCredential=`), which keeps
-them out of the gateway's environment and so out of every `git` and `podman`
-process it starts. `!file` is only available in the server config, not in the
+them out of the gateway's environment and so out of the `git` and `podman`
+processes it starts. The exception is the `podman run` of each task: podman
+copies container variables from its own environment, so it holds the plain
+`secrets` values (readable only by the same user and root, never on a command
+line). Masked secrets, signing credentials, and GitHub App credentials reach it
+only as surrogates. `!file` is only available in the server config, not in the
 repository-provided `.airut/sandbox.yaml` the sandbox CLI reads.
 
 ### Container Secrets
