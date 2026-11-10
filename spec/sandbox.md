@@ -183,6 +183,7 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
   |    +- Force airut-owned Claude env vars over the caller's env
+  |    +- Pass env vars as -e NAME, values in podman's own environment
   |    +- Prompt on stdin, read stdout/stderr concurrently as async streams
   |    +- Parse each stdout line as StreamEvent, invoke on_event callback
   |    +- Invoke on_stderr_line callback for each stderr line
@@ -194,6 +195,26 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |
   +- Build ExecutionResult from accumulator (no disk re-read)
 ```
+
+**Environment values stay off the command line**: The caller's container env
+vars (`ContainerEnv`) are passed as `-e NAME` without a value, with the values
+in the environment of the podman process, which copies each one into the
+container. A process's command line is readable by every local user and journald
+records it with each of podman's log entries; its environment is readable only
+by the same user and root. Only the CA trust variables of the network sandbox,
+which hold a fixed certificate path, still go as `-e NAME=value`.
+
+Because the values are part of podman's own environment, a container variable
+that the container runtime (podman or docker) or the helpers it starts (such as
+netavark) also read applies to them too. For example, `PATH`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `XDG_*`, `STORAGE_DRIVER`, `STORAGE_OPTS`,
+`CONTAINERS_*`, `CONTAINER_HOST`, `CONTAINER_CONNECTION`, and `DOCKER_HOST` or
+`DOCKER_CONFIG` change how the host-side runtime runs, and `PODMAN_USERNS`
+changes the task container's user namespace. Names that podman would read as a
+different variable or reject are refused: empty names, names starting with a
+space or tab (which podman strips before the lookup), names ending in `*`
+(without a value, `-e PREFIX*` copies every variable of podman's environment
+starting with `PREFIX`), and names containing `=` or NUL.
 
 **Forced Claude environment**: Before running the container, `AgentTask` merges
 a fixed set of airut-owned environment variables on top of the caller-provided
@@ -249,6 +270,7 @@ await task.execute(["make", "test"], on_output=..., on_stderr=...,
   |    +- --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID
   |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
+  |    +- Pass env vars as -e NAME, values in podman's own environment
   |    +- Read stdout/stderr concurrently as async streams
   |    +- Invoke on_output callback for each stdout line
   |    +- Invoke on_stderr callback for each stderr line

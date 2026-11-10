@@ -114,32 +114,42 @@ class _ProcessTracker:
             pass  # already exited
 
 
-def _redact_env_args(cmd: list[str]) -> list[str]:
-    """Redact environment variable values from a command for logging.
+def _env_args(env: ContainerEnv) -> list[str]:
+    """Build podman's ``-e`` arguments: variable names only.
 
-    Replaces ``-e VAR=value`` pairs with ``-e VAR=***``.
+    Given a name without a value, podman copies the value from its own
+    environment, so no value appears on its command line, which every
+    local user can read and journald records with each of podman's log
+    entries.  The caller puts the values in podman's environment.
 
     Args:
-        cmd: Full command-line argument list.
+        env: Container environment variables.
 
     Returns:
-        Redacted copy of the command.
+        ``-e NAME`` pairs for every variable.
+
+    Raises:
+        ValueError: If podman would read a name as a different variable
+            or reject it.  Without a value, ``-e PREFIX*`` copies every
+            variable of podman's own environment that starts with
+            PREFIX, and podman strips leading spaces and tabs before the
+            lookup, so ``-e " GH_TOKEN"`` would copy podman's own
+            ``GH_TOKEN`` rather than the container's.
     """
-    redacted: list[str] = []
-    skip_next = False
-    for i, arg in enumerate(cmd):
-        if skip_next:
-            skip_next = False
-            continue
-        if arg == "-e" and i + 1 < len(cmd):
-            next_arg = cmd[i + 1]
-            if "=" in next_arg:
-                var_name = next_arg.split("=")[0]
-                redacted.extend(["-e", f"{var_name}=***"])
-                skip_next = True
-                continue
-        redacted.append(arg)
-    return redacted
+    args: list[str] = []
+    for name in env.variables:
+        if (
+            not name
+            or name[0] in " \t"
+            or name.endswith("*")
+            or "=" in name
+            or "\0" in name
+        ):
+            raise ValueError(
+                f"Invalid container environment variable name: {name!r}"
+            )
+        args.extend(["-e", name])
+    return args
 
 
 async def run_container(
@@ -197,9 +207,8 @@ async def run_container(
         "--security-opt=no-new-privileges:true",
     ]
 
-    # Pass environment variables to container
-    for env_var, value in env.variables.items():
-        cmd.extend(["-e", f"{env_var}={value}"])
+    # Pass environment variables to container (values via podman's env)
+    cmd.extend(_env_args(env))
 
     # Add caller mounts
     for mount in mounts:
@@ -221,14 +230,13 @@ async def run_container(
     cmd.append(image_tag)
     cmd.extend(command)
 
-    # Log redacted command
-    redacted_cmd = _redact_env_args(cmd)
-    logger.debug("Full command: %s", " ".join(redacted_cmd))
+    logger.debug("Full command: %s", " ".join(cmd))
 
     start_time = time.time()
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
+        env={**os.environ, **env.variables},
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

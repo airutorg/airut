@@ -129,7 +129,10 @@ different control, and all four must hold simultaneously:
    > secrets) comes from that branch, not the default branch. This is safe
    > because a human triggers the dispatch after reviewing the PR, but the
    > dispatcher should verify the branch's `.airut/` configuration before
-   > triggering. For automated CI on PRs, use `pull_request` triggers.
+   > triggering: its `sandbox.yaml` variables are also set in the environment of
+   > the runner-side podman, so a name such as `LD_PRELOAD` or `PATH` runs code
+   > on the runner, outside the sandbox. For automated CI on PRs, use
+   > `pull_request` triggers.
 
 2. **Workflow files are immutable to the agent** -- the agent must not be able
    to modify `.github/workflows/`. For `pull_request` events, GitHub executes

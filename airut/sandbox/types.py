@@ -39,8 +39,10 @@ class Mount:
 class ContainerEnv:
     """Container environment variables.
 
-    All values are redacted in log output (command-line logging).
-    Container env vars are assumed to be secrets or secret-derived.
+    Container env vars are assumed to be secrets or secret-derived:
+    their values reach podman through its process environment, never
+    on its command line.  They are therefore also part of podman's own
+    environment.
 
     Attributes:
         variables: Mapping of environment variable names to values.

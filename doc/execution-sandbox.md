@@ -89,6 +89,12 @@ environment variables by their key name.
 
 - All real credential values are registered for log redaction when the config
   loads
+- Values reach podman through its process environment (`-e NAME` without a
+  value), never its command line, which any local user can read and journald
+  records. A variable named like one the container runtime reads itself (such as
+  `PATH`, `HOME`, `LD_PRELOAD`, or `STORAGE_DRIVER`) therefore also applies to
+  the host-side runtime; see
+  [spec/sandbox.md](../spec/sandbox.md#execution-flow)
 - No host credential files are mounted
 
 For credentials that should only be usable with specific services (e.g., GitHub

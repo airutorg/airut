@@ -222,8 +222,9 @@ applies to the log file; stderr receives no log output.
 `signing_credentials` are replaced with `[REDACTED]` wherever they appear in log
 output, including exception messages and tracebacks. Values from `env:` and
 `pass_env:` are not registered: they are mostly not secret, and redacting short
-values such as `1` or `true` would garble the log. The CLI does not log them
-(container `-e` arguments are masked).
+values such as `1` or `true` would garble the log. The CLI does not log them,
+and no `env:`, `pass_env:`, or credential value is put on podman's command line
+(see [sandbox.md](sandbox.md#execution-flow)).
 
 **Entrypoint output**: CA certificate setup in the container entrypoint is
 silent by default -- its output is redirected to `/dev/null`. When `--verbose`
@@ -267,6 +268,9 @@ config to resolve values from host environment variables at startup.
 # --- Environment Variables ---
 # Plain env vars passed to the container. Use only for non-sensitive values
 # or values that don't need exfiltration protection (e.g., CI flags).
+# Container variables are also set in the host-side podman's environment, so
+# names podman itself reads (PATH, HOME, LD_PRELOAD, STORAGE_DRIVER, ...)
+# affect podman too (see sandbox.md#execution-flow).
 env:
   CI: "true"
 
