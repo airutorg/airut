@@ -30,7 +30,7 @@ def _make_build_hook(root: str) -> GitVersionBuildHook:
     _BuildBase = object in that case).
     """
     try:
-        import hatchling.builders.hooks.plugin.interface as _iface  # ty: ignore[unresolved-import]
+        import hatchling.builders.hooks.plugin.interface as _iface  # ty: ignore[import-not-found]
 
         _has_hatchling = hasattr(_iface, "BuildHookInterface")
     except ImportError:
@@ -61,7 +61,7 @@ def _make_metadata_hook(root: str) -> GitVersionMetadataHook:
     environment.
     """
     try:
-        import hatchling.metadata.plugin.interface as _iface  # ty: ignore[unresolved-import]
+        import hatchling.metadata.plugin.interface as _iface  # ty: ignore[import-not-found]
 
         _has_hatchling = hasattr(_iface, "MetadataHookInterface")
     except ImportError:

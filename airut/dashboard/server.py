@@ -411,7 +411,7 @@ class DashboardServer:
                 if wakeup_r in readable:
                     break
                 if server_fd in readable:
-                    server._handle_request_noblock()  # ty:ignore[unresolved-attribute]  # inherited from BaseServer
+                    server._handle_request_noblock()  # ty:ignore[missing-attribute]  # inherited from BaseServer
         except (OSError, ValueError):
             # Closed underneath us (ValueError: a closed socket's fd is -1).
             pass

@@ -196,12 +196,14 @@ def check_operations(
     if fields is None:
         return _FRAGMENT_SPREAD
 
-    # fields is never empty here: graphql-core requires at least one
-    # selection per selection set, and _collect_top_level_fields only
-    # returns an empty list if all selections are resolved inline
-    # fragments with no fields — which graphql-core rejects at parse
-    # time (empty selection sets are a syntax error).
-    assert fields
+    # An operation without top-level fields has nothing to match: the
+    # allowlist check below is vacuously true for an empty field list,
+    # and the log tag indexes fields[0].  graphql-core >= 3.3.2 parses
+    # empty selection sets (graphql-spec #1227), including inline
+    # fragments with no fields, so block such operations here as the
+    # parse error they were under the previous grammar.
+    if not fields:
+        return _PARSE_ERROR
 
     # Step 7: Match against allowlist.
     # graphql-core OperationType has exactly query/mutation/subscription.

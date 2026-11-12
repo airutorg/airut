@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from graphql_scope import (  # ty:ignore[unresolved-import]
+from graphql_scope import (  # ty:ignore[import-not-found]
     _MAX_BODY_SIZE,
     ScopeResult,
     ScopeVerdict,

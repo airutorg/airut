@@ -14,7 +14,7 @@ import pytest
 
 # Import the module under test
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import check_licenses  # ty:ignore[unresolved-import]
+import check_licenses  # ty:ignore[import-not-found]
 
 
 UV_TREE_OUTPUT = """\

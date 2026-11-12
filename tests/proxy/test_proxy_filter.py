@@ -16,14 +16,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mitmproxy.http import (  # ty:ignore[unresolved-import]
+from mitmproxy.http import (  # ty:ignore[import-not-found]
     MockError,
     MockHeaders,
     MockHTTPFlow,
     MockRequest,
     MockResponse,
 )
-from request_filter import (  # ty:ignore[unresolved-import]
+from request_filter import (  # ty:ignore[import-not-found]
     FilterRequest,
     FilterResult,
 )

@@ -11,7 +11,7 @@ import base64
 import struct
 
 import pytest
-from node_id import (  # ty:ignore[unresolved-import]
+from node_id import (  # ty:ignore[import-not-found]
     _NODE_ID_RE,
     _decode_msgpack_array,
     decode_repo_db_id,
