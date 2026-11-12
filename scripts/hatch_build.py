@@ -30,10 +30,10 @@ from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
-    from hatchling.builders.hooks.plugin.interface import (  # ty: ignore[unresolved-import]  # build-time dep
+    from hatchling.builders.hooks.plugin.interface import (  # ty: ignore[import-not-found]  # build-time dep
         BuildHookInterface,
     )
-    from hatchling.metadata.plugin.interface import (  # ty: ignore[unresolved-import]  # build-time dep
+    from hatchling.metadata.plugin.interface import (  # ty: ignore[import-not-found]  # build-time dep
         MetadataHookInterface,
     )
 

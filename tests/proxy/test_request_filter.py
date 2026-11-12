@@ -17,16 +17,16 @@ from __future__ import annotations
 
 import json
 
-from graphql_operations import (  # ty:ignore[unresolved-import]
+from graphql_operations import (  # ty:ignore[import-not-found]
     GraphQLOperationFilter,
 )
-from host_match import UrlPrefixEntry  # ty:ignore[unresolved-import]
-from request_filter import (  # ty:ignore[unresolved-import]
+from host_match import UrlPrefixEntry  # ty:ignore[import-not-found]
+from request_filter import (  # ty:ignore[import-not-found]
     FilterAction,
     FilterRequest,
     FilterResult,
 )
-from tool_domains import (  # ty:ignore[unresolved-import]
+from tool_domains import (  # ty:ignore[import-not-found]
     ToolDomainFilter,
     is_anthropic_messages_request,
 )

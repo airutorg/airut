@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from graphql_operations import (  # ty:ignore[unresolved-import]
+from graphql_operations import (  # ty:ignore[import-not-found]
     OperationResult,
     OperationVerdict,
     check_operations,
@@ -722,13 +722,41 @@ class TestEdgeCases:
         assert result.detail == "<unparseable>"
 
     def test_empty_selection_set_is_parse_error(self) -> None:
-        """Empty selection set is a GraphQL syntax error."""
+        """Operation with an empty selection set is blocked.
+
+        graphql-core >= 3.3.2 parses empty selection sets (graphql-spec
+        #1227), so the filter must reject an operation without top-level
+        fields itself rather than rely on a parse error.
+        """
         result = check_operations(
             _body("mutation { }"),
             _STANDARD_CONFIG,
         )
         assert result.verdict is _BLOCKED
         assert result.detail == "<unparseable>"
+
+    def test_empty_inline_fragment_at_root_is_parse_error(self) -> None:
+        """Operation whose only root selection is an empty fragment."""
+        result = check_operations(
+            _body("query { ... on Query { } }"),
+            {"queries": ["*"]},
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "<unparseable>"
+
+    def test_empty_inline_fragment_does_not_hide_fields(self) -> None:
+        """An empty fragment next to a disallowed field still blocks."""
+        result = check_operations(
+            _body(
+                "mutation {"
+                "  ... on Mutation { }"
+                "  deleteRepository(input: {}) { clientMutationId }"
+                "}"
+            ),
+            _STANDARD_CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "deleteRepository"
 
     def test_oversized_body_blocked(self) -> None:
         """Request bodies exceeding 1 MiB are blocked."""

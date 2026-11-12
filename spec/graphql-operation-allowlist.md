@@ -189,7 +189,11 @@ When a request matches a URL pattern that has a `graphql` configuration:
    resolved — their field selections are collected as if they were top-level.
    Named fragment spreads at the operation root are not resolved → **BLOCKED**
    (fail-secure; these are not used in practice and resolving them adds
-   complexity).
+   complexity). If the operation yields no top-level fields (an empty selection
+   set, or only inline fragments that contain no fields) → **BLOCKED** as a
+   parse failure. `graphql-core` accepts empty selection sets, so the filter
+   rejects such operations itself rather than let an operation with nothing to
+   match pass step 8 vacuously.
 
 8. **Match against allowlist.** Determine the operation type (`query`,
    `mutation`, or `subscription`). Look up the corresponding pattern list from
@@ -212,6 +216,7 @@ When a request matches a URL pattern that has a `graphql` configuration:
 | `operationName` doesn't match any definition   | BLOCKED |
 | Body exceeds 1 MiB size limit                  | BLOCKED |
 | Named fragment spread at operation root        | BLOCKED |
+| Operation has no top-level fields              | BLOCKED |
 | Operation type has no patterns (omitted/empty) | BLOCKED |
 | Field name doesn't match any pattern           | BLOCKED |
 
@@ -317,7 +322,7 @@ Detail values:
 | ------------------------------- | ------------------------------------------------------- |
 | Unlisted field name             | The field name (e.g., `"deleteRepository"`)             |
 | Unlisted operation type         | `"<type>:<blocked>"` (e.g., `"subscription:<blocked>"`) |
-| Parse failure                   | `"<unparseable>"`                                       |
+| Parse failure or no fields      | `"<unparseable>"`                                       |
 | Body exceeds size limit         | `"<too-large>"`                                         |
 | Batched request (array body)    | `"<batched>"`                                           |
 | Missing/invalid `operationName` | `"<operation-name-invalid>"`                            |

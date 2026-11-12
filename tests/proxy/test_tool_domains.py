@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable
 
 import pytest
-from tool_domains import (  # ty:ignore[unresolved-import]
+from tool_domains import (  # ty:ignore[import-not-found]
     _MAX_BODY_SIZE,
     ToolConfigVerdict,
     check_and_trim_tools,

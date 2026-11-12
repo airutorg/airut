@@ -410,7 +410,7 @@ def _create_slack_adapter_factory(
                     slack_server.set_submit_callback(submit)
                     _original(submit)
 
-                listener.start = patched_start  # ty:ignore[invalid-assignment]
+                listener.start = patched_start
             else:
                 raise ValueError(
                     f"Unknown channel config: {type(channel_config).__name__}"
