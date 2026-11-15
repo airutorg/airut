@@ -14,6 +14,7 @@ valid scope for M365 IMAP/SMTP client credentials.
 """
 
 import logging
+import threading
 
 from msal import ConfidentialClientApplication
 
@@ -56,11 +57,12 @@ class MicrosoftOAuth2TokenProvider:
         """
         self.tenant_id = tenant_id
         self.client_id = client_id
-        self._app = ConfidentialClientApplication(
-            client_id,
-            authority=f"https://login.microsoftonline.com/{tenant_id}",
-            client_credential=client_secret,
-        )
+        self._client_secret = client_secret
+        # Created on first use: MSAL looks up the tenant over the network
+        # when constructed, and an identity platform that is unreachable
+        # at startup must not fail the repo (see ``_get_app``).
+        self._app: ConfidentialClientApplication | None = None
+        self._app_lock = threading.Lock()
         logger.debug(
             "Initialized Microsoft OAuth2 token provider: tenant=%s, client=%s",
             tenant_id,
@@ -77,9 +79,13 @@ class MicrosoftOAuth2TokenProvider:
             OAuth2 access token string.
 
         Raises:
-            MicrosoftOAuth2TokenError: If token acquisition fails.
+            MicrosoftOAuth2TokenError: If the identity platform refuses
+                to issue a token, or does not know the tenant.
+            OSError: If the identity platform cannot be reached or
+                answers with a server error (MSAL lets ``requests``
+                errors, which are ``OSError`` subclasses, through).
         """
-        result = self._app.acquire_token_for_client(scopes=_M365_SCOPE)
+        result = self._get_app().acquire_token_for_client(scopes=_M365_SCOPE)
 
         if "access_token" in result:
             logger.debug("Acquired Microsoft OAuth2 access token")
@@ -90,6 +96,31 @@ class MicrosoftOAuth2TokenProvider:
         raise MicrosoftOAuth2TokenError(
             f"Failed to acquire token: {error}: {description}"
         )
+
+    def _get_app(self) -> ConfidentialClientApplication:
+        """Return the MSAL application, creating it on first use.
+
+        Raises:
+            MicrosoftOAuth2TokenError: If the tenant is unknown.
+            OSError: If the tenant lookup cannot reach the identity
+                platform.  Creation is retried on the next call.
+        """
+        with self._app_lock:
+            if self._app is None:
+                try:
+                    self._app = ConfidentialClientApplication(
+                        self.client_id,
+                        authority=(
+                            f"https://login.microsoftonline.com/{self.tenant_id}"
+                        ),
+                        client_credential=self._client_secret,
+                    )
+                except ValueError as e:
+                    # MSAL's tenant lookup was refused (HTTP 4xx)
+                    raise MicrosoftOAuth2TokenError(
+                        f"Failed to look up tenant: {e}"
+                    ) from e
+            return self._app
 
     def generate_xoauth2_string(self, user: str) -> str:
         r"""Build the SASL XOAUTH2 authentication string.
@@ -107,6 +138,7 @@ class MicrosoftOAuth2TokenProvider:
 
         Raises:
             MicrosoftOAuth2TokenError: If token acquisition fails.
+            OSError: If the identity platform cannot be reached.
         """
         token = self.get_access_token()
         return f"user={user}\x01auth=Bearer {token}\x01\x01"

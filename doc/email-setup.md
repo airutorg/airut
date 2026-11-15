@@ -380,6 +380,19 @@ part after `+` is used as a model hint. If no subaddress is provided, the repo's
 
 ### IMAP Connection Issues
 
+If the IMAP server cannot be reached, the repo shows as degraded on the
+dashboard and the gateway keeps reconnecting (every 10 seconds at first, backing
+off to every 5 minutes); it goes live on its own once the server is reachable.
+
+If the server rejects the login before it has ever accepted it (at startup, or
+once an unreachable server comes back), the repo shows as failed and the login
+is not retried, so a server that blocks addresses after failed logins does not
+lock out the gateway. The repo's other channels, such as Slack, keep running.
+Fixing the credentials in the config reloads the repo; if the fix is on the
+server side (e.g. a mailbox permission that had not propagated yet), restart the
+gateway. A login rejected after earlier ones succeeded is retried with the
+backoff above.
+
 ```bash
 # Test IMAP manually
 openssl s_client -connect mail.example.com:993

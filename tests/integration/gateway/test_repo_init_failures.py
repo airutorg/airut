@@ -6,15 +6,19 @@
 """Integration tests for graceful repo initialization failure handling.
 
 Tests that the service handles repo initialization errors correctly:
-1. IMAP connection failures (bad credentials, unreachable server)
+1. IMAP failures (a rejected login fails the repo; an unreachable server
+   starts it degraded, retrying in the background)
 2. Git clone failures (invalid URL, missing credentials)
 3. Partial failures (some repos work, others fail)
 4. Dashboard visibility of repo status
 """
 
+import socket
 import sys
 import threading
+import types
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -22,7 +26,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from airut.dashboard.tracker import RepoStatus
+from airut.dashboard.tracker import BootPhase, RepoStatus
 from airut.gateway.config import (
     EmailAccountConfig,
     EmailAuthConfig,
@@ -35,12 +39,12 @@ from airut.gateway.config import (
 )
 
 from .conftest import MOCK_CONTAINER_COMMAND, wait_for_boot
-from .environment import IntegrationEnvironment, create_test_repo
+from .email_server import find_free_port
+from .environment import IntegrationEnvironment
+from .test_config_reload import wait_for_repo_status
 
 
-def _email_config(
-    *, imap_port: int = 9999, smtp_port: int = 25
-) -> EmailChannelConfig:
+def _email_config() -> EmailChannelConfig:
     """Build an EmailChannelConfig for integration tests."""
     return EmailChannelConfig(
         account=EmailAccountConfig(
@@ -50,12 +54,12 @@ def _email_config(
         ),
         imap=ImapConfig(
             server="127.0.0.1",
-            port=imap_port,
+            port=9999,
             use_idle=False,
             connect_retries=1,
             poll_interval=0.1,
         ),
-        smtp=SmtpConfig(server="127.0.0.1", port=smtp_port),
+        smtp=SmtpConfig(server="127.0.0.1", port=25),
         auth=EmailAuthConfig(
             authorized_senders=["user@test.local"],
             trusted_authserv_id="test.local",
@@ -63,105 +67,304 @@ def _email_config(
     )
 
 
+def _email_channel(
+    env: IntegrationEnvironment, repo_id: str
+) -> EmailChannelConfig:
+    """Return a repo's email channel config from *env*."""
+    channel = env.config.repos[repo_id].channels["email"]
+    assert isinstance(channel, EmailChannelConfig)
+    return channel
+
+
+class _TcpForwarder:
+    """Forwards connections on a local port to another local port.
+
+    Stands in for an IMAP server that becomes reachable only after the
+    gateway has started.  Listens from construction until the ``with``
+    block ends.
+
+    Attributes:
+        connections: Number of connections accepted so far.
+    """
+
+    def __init__(self, port: int, target_port: int) -> None:
+        self._target_port = target_port
+        self._server = socket.create_server(("127.0.0.1", port))
+        self._sockets = [self._server]
+        self.connections = 0
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def __enter__(self) -> "_TcpForwarder":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: types.TracebackType | None,
+    ) -> None:
+        for sock in self._sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Not connected, or already shut down
+            sock.close()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self._server.accept()
+            except OSError:
+                return  # Closed
+            self.connections += 1
+            upstream = socket.create_connection(
+                ("127.0.0.1", self._target_port)
+            )
+            self._sockets += [client, upstream]
+            for src, dst in ((client, upstream), (upstream, client)):
+                threading.Thread(
+                    target=self._pump, args=(src, dst), daemon=True
+                ).start()
+
+    @staticmethod
+    def _pump(src: socket.socket, dst: socket.socket) -> None:
+        try:
+            while data := src.recv(65536):
+                dst.sendall(data)
+        except OSError:
+            pass  # Either side closed
+        finally:
+            try:
+                dst.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
+
+
 class TestImapConnectionFailures:
-    """Test handling of IMAP connection failures during repo init."""
+    """Test handling of IMAP failures during repo init."""
 
-    def test_invalid_imap_port_fails_gracefully(
+    def test_unreachable_imap_server_starts_degraded(
+        self,
+        tmp_path: Path,
+        create_email,
+    ) -> None:
+        """A repo whose IMAP server refuses connections starts DEGRADED.
+
+        The service boots instead of failing the repo, and the repos
+        after it start and process mail as usual.
+        """
+        from .conftest import get_message_text
+
+        env = IntegrationEnvironment.create_multi_repo(
+            tmp_path,
+            repo_ids=["down", "working"],
+            container_command=MOCK_CONTAINER_COMMAND,
+        )
+
+        try:
+            # Nothing listens on the port: connections are refused.
+            imap = _email_channel(env, "down").imap
+            object.__setattr__(imap, "port", find_free_port())
+            object.__setattr__(imap, "connect_retries", 1)
+
+            service = env.create_service()
+            service_thread = threading.Thread(target=service.start, daemon=True)
+            service_thread.start()
+
+            wait_for_boot(service)
+
+            try:
+                boot = service._boot_store.get().value
+                assert boot.phase == BootPhase.READY
+                repo_states = {
+                    r.repo_id: r for r in service._repos_store.get().value
+                }
+                down = repo_states["down"]
+                assert down.status == RepoStatus.DEGRADED
+                assert down.error_type == "IMAPConnectionError"
+                assert down.error_message is not None
+                assert "refused" in down.error_message.lower()
+                assert repo_states["working"].status == RepoStatus.LIVE
+
+                mock_code = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Working repo response"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+                msg = create_email(
+                    subject="Test working repo",
+                    body=mock_code,
+                    recipient="working@test.local",
+                )
+                env.email_server.inject_message_to("working", msg)
+
+                response = env.email_server.wait_for_sent(
+                    lambda m: (
+                        "working repo response" in get_message_text(m).lower()
+                    ),
+                    timeout=15.0,
+                )
+                assert response is not None
+            finally:
+                service.stop()
+                service_thread.join(timeout=10.0)
+        finally:
+            env.cleanup()
+
+    def test_imap_server_reachable_after_startup_recovers(
+        self,
+        tmp_path: Path,
+        create_email,
+    ) -> None:
+        """A repo started DEGRADED goes LIVE once its server is reachable.
+
+        The listener keeps reconnecting in the background, so the repo
+        recovers without a restart and processes mail.
+        """
+        from .conftest import get_message_text
+
+        env = IntegrationEnvironment.create(
+            tmp_path,
+            authorized_senders=["user@test.local"],
+            container_command=MOCK_CONTAINER_COMMAND,
+        )
+
+        try:
+            imap = _email_channel(env, "test").imap
+            late_port = find_free_port()
+            object.__setattr__(imap, "port", late_port)
+            object.__setattr__(imap, "connect_retries", 1)
+
+            service = env.create_service()
+            service_thread = threading.Thread(target=service.start, daemon=True)
+
+            # Shorten the reconnect backoff (10s at first) to keep the
+            # test fast.
+            with patch(
+                "airut.gateway.email.channel_listener.reconnect_delay",
+                return_value=0.2,
+            ):
+                service_thread.start()
+                wait_for_boot(service)
+
+                try:
+                    (state,) = service._repos_store.get().value
+                    assert state.status == RepoStatus.DEGRADED
+
+                    with _TcpForwarder(late_port, env.email_server.imap_port):
+                        wait_for_repo_status(
+                            service, "test", "live", timeout=15.0
+                        )
+
+                        mock_code = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Recovered repo response"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+                        msg = create_email(
+                            subject="Test recovered repo",
+                            body=mock_code,
+                        )
+                        env.email_server.inject_message(msg)
+
+                        response = env.email_server.wait_for_sent(
+                            lambda m: (
+                                "recovered repo response"
+                                in get_message_text(m).lower()
+                            ),
+                            timeout=15.0,
+                        )
+                        assert response is not None
+                finally:
+                    service.stop()
+                    service_thread.join(timeout=10.0)
+        finally:
+            env.cleanup()
+
+    def test_imap_login_rejected_after_startup_fails_repo(
         self,
         tmp_path: Path,
     ) -> None:
-        """Repo with no IMAP server listening is marked as failed."""
-        # Create a valid environment first
-        master_repo = create_test_repo(tmp_path / "master_repo")
-        # Infrastructure files
-        docker_dir = tmp_path / "docker"
-        docker_dir.mkdir()
-        (docker_dir / "airut-entrypoint.sh").write_text(
-            '#!/usr/bin/env bash\nexec claude "$@"\n'
-        )
-        proxy_dir = tmp_path / "proxy"
-        proxy_dir.mkdir()
-        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
+        """A repo started DEGRADED fails once its server rejects the login.
 
-        # Create config pointing to a port with nothing listening
-        # Port 9999 is typically unused
-        global_config = GlobalConfig(
-            dashboard_enabled=False,
+        As at startup, the rejected login is not repeated.
+        """
+        env = IntegrationEnvironment.create(
+            tmp_path,
+            authorized_senders=["user@test.local"],
             container_command=MOCK_CONTAINER_COMMAND,
         )
-        repo_config = RepoServerConfig(
-            repo_id="test",
-            git_repo_url=str(master_repo),
-            channels={
-                "email": _email_config(),
-            },
-        )
-        config = ServerConfig(
-            global_config=global_config,
-            repos={"test": repo_config},
-        )
 
-        from airut.gateway.service import GatewayService
+        try:
+            channel = _email_channel(env, "test")
+            late_port = find_free_port()
+            object.__setattr__(channel.imap, "port", late_port)
+            object.__setattr__(channel.imap, "connect_retries", 1)
+            object.__setattr__(channel.account, "password", "wrong")
 
-        service = GatewayService(config, repo_root=tmp_path)
+            service = env.create_service()
+            service_thread = threading.Thread(target=service.start, daemon=True)
 
-        # Starting should fail since all repos fail
-        with pytest.raises(RuntimeError, match="All 1 repo"):
-            service.start()
+            # Shorten the reconnect backoff: a listener that kept retrying
+            # would reconnect many times before the repo turns FAILED.
+            with patch(
+                "airut.gateway.email.channel_listener.reconnect_delay",
+                return_value=0.2,
+            ):
+                service_thread.start()
+                wait_for_boot(service)
 
-        # Repo should be marked as failed with error details
-        repo_states = {r.repo_id: r for r in service._repos_store.get().value}
-        assert len(repo_states) == 1
-        assert repo_states["test"].status == RepoStatus.FAILED
-        assert repo_states["test"].error_message is not None
-        # Should mention connection or socket error
-        error_msg = repo_states["test"].error_message.lower()
-        assert (
-            "connect" in error_msg
-            or "refused" in error_msg
-            or "error" in error_msg
-        )
+                try:
+                    (state,) = service._repos_store.get().value
+                    assert state.status == RepoStatus.DEGRADED
 
-    def test_connection_refused_imap_server_fails_gracefully(
+                    with _TcpForwarder(
+                        late_port, env.email_server.imap_port
+                    ) as forwarder:
+                        wait_for_repo_status(
+                            service, "test", "failed", timeout=15.0
+                        )
+                        assert forwarder.connections == 1
+
+                    (state,) = service._repos_store.get().value
+                    assert state.error_type == "IMAPLoginError"
+                finally:
+                    service.stop()
+                    service_thread.join(timeout=10.0)
+        finally:
+            env.cleanup()
+
+    def test_rejected_imap_login_fails_repo(
         self,
         tmp_path: Path,
     ) -> None:
-        """Repo with IMAP connection refused is marked as failed."""
-        master_repo = create_test_repo(tmp_path / "master_repo")
-        # Infrastructure files
-        docker_dir = tmp_path / "docker"
-        docker_dir.mkdir()
-        (docker_dir / "airut-entrypoint.sh").write_text(
-            '#!/usr/bin/env bash\nexec claude "$@"\n'
-        )
-        proxy_dir = tmp_path / "proxy"
-        proxy_dir.mkdir()
-        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
-
-        global_config = GlobalConfig(
-            dashboard_enabled=False,
+        """A repo whose IMAP login is rejected is marked as failed."""
+        env = IntegrationEnvironment.create(
+            tmp_path,
+            authorized_senders=["user@test.local"],
             container_command=MOCK_CONTAINER_COMMAND,
         )
-        repo_config = RepoServerConfig(
-            repo_id="unreachable",
-            git_repo_url=str(master_repo),
-            channels={"email": _email_config(imap_port=1)},
-        )
-        config = ServerConfig(
-            global_config=global_config,
-            repos={"unreachable": repo_config},
-        )
 
-        from airut.gateway.service import GatewayService
+        try:
+            account = _email_channel(env, "test").account
+            object.__setattr__(account, "password", "wrong")
 
-        service = GatewayService(config, repo_root=tmp_path)
+            service = env.create_service()
 
-        # Starting should fail
-        with pytest.raises(RuntimeError, match="All 1 repo"):
-            service.start()
+            with pytest.raises(RuntimeError, match="All 1 repo"):
+                service.start()
 
-        repo_states = {r.repo_id: r for r in service._repos_store.get().value}
-        assert repo_states["unreachable"].status == RepoStatus.FAILED
+            repo_states = {
+                r.repo_id: r for r in service._repos_store.get().value
+            }
+            assert repo_states["test"].status == RepoStatus.FAILED
+            assert repo_states["test"].error_type == "IMAPLoginError"
+        finally:
+            env.cleanup()
 
 
 class TestGitCloneFailures:

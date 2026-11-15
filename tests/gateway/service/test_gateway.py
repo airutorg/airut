@@ -2653,3 +2653,34 @@ class TestChannelHealth:
         assert state.status == RepoStatus.RELOADING
         assert state.error_message is None
         assert state.error_type is None
+
+    def test_repo_starting_without_connection_is_degraded(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """A repo whose listener started unconnected boots DEGRADED.
+
+        The listener keeps retrying in the background, so the repo is
+        running rather than failed: the service boots even when it is
+        the only repo.
+        """
+        from airut.dashboard.tracker import BootPhase, RepoStatus
+        from airut.gateway.channel import ChannelHealth, ChannelStatus
+
+        svc, handler = make_service(email_config, tmp_path)
+        svc._shutdown_event = InterruptEvent()
+        handler.adapters["email"].listener.status = ChannelStatus(
+            health=ChannelHealth.DEGRADED,
+            message="IMAP reconnecting (attempt 1): Connection refused",
+            error_type="IMAPConnectionError",
+        )
+
+        svc.start()
+
+        assert svc._boot_store.get().value.phase == BootPhase.READY
+        (state,) = svc._repos_store.get().value
+        assert state.status == RepoStatus.DEGRADED
+        assert state.error_type == "IMAPConnectionError"
+        assert state.error_message == (
+            "email: IMAP reconnecting (attempt 1): Connection refused"
+        )
+        svc.stop()

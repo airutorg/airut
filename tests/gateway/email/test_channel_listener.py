@@ -24,7 +24,11 @@ from airut.gateway.email.channel_listener import (
     reconnect_delay,
 )
 from airut.gateway.email.incoming import IncomingEmail
-from airut.gateway.email.listener import IMAPConnectionError, IMAPIdleError
+from airut.gateway.email.listener import (
+    IMAPConnectionError,
+    IMAPIdleError,
+    IMAPLoginError,
+)
 
 
 def _make_config(
@@ -224,6 +228,248 @@ class TestStartStop:
             EmailChannelListener(config, repo_id="")
 
 
+class TestStartWithoutConnection:
+    """start() when the initial IMAP connection fails."""
+
+    def test_unreachable_server_starts_degraded_and_reconnects(self) -> None:
+        """An unreachable server does not fail start().
+
+        start() returns with the listener DEGRADED; the listener thread
+        then reconnects after the usual backoff and receives mail.
+        """
+        config = _make_config(use_idle=False, poll_interval=1)
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            config, email_listener=mock_el, repo_id="test"
+        )
+        refused = IMAPConnectionError(
+            "Failed to connect after 3 attempts: Connection refused"
+        )
+        mock_el.connect.side_effect = [refused, None]
+        mock_el.fetch_unread.return_value = [("1", _make_message())]
+        submit = MagicMock(return_value=True)
+        in_backoff = threading.Event()
+        end_backoff = threading.Event()
+        waits: list[float] = []
+
+        def fake_wait(timeout: float) -> bool:
+            waits.append(timeout)
+            if len(waits) == 1:  # Reconnect backoff: hold it for checks
+                in_backoff.set()
+                end_backoff.wait(timeout=5)
+                return False
+            cl._running = False  # Poll interval after the first fetch
+            return True
+
+        with patch.object(cl._stop_event, "wait", side_effect=fake_wait):
+            cl.start(submit)
+
+            assert cl.status == ChannelStatus(
+                health=ChannelHealth.DEGRADED,
+                message=f"IMAP reconnecting (attempt 1): {refused}",
+                error_type="IMAPConnectionError",
+            )
+            assert in_backoff.wait(timeout=5)
+            assert cl.status.health == ChannelHealth.DEGRADED
+            end_backoff.set()
+            assert cl._thread is not None
+            cl._thread.join(timeout=5)
+
+        assert waits[0] == 10
+        assert mock_el.connect.call_count == 2
+        submit.assert_called_once()
+        assert cl.status.health == ChannelHealth.CONNECTED
+
+        cl.stop()
+
+    def test_rejected_login_fails_start(self) -> None:
+        """A rejected login raises from start() and is not retried."""
+        config = _make_config()
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            config, email_listener=mock_el, repo_id="test"
+        )
+        mock_el.connect.side_effect = IMAPLoginError(
+            "IMAP login failed: [AUTHENTICATIONFAILED] Invalid credentials"
+        )
+
+        with pytest.raises(IMAPLoginError):
+            cl.start(MagicMock())
+
+        assert cl._thread is None
+        mock_el.connect.assert_called_once()
+
+    def test_stop_during_initial_connect_fails_start(self) -> None:
+        """start() raises if stop() interrupts the initial connection."""
+        config = _make_config()
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            config, email_listener=mock_el, repo_id="test"
+        )
+
+        def connect_until_stopped(**kwargs: object) -> None:
+            cl.stop()
+            raise IMAPConnectionError("Connection aborted: shutting down")
+
+        mock_el.connect.side_effect = connect_until_stopped
+
+        with pytest.raises(IMAPConnectionError, match="shutting down"):
+            cl.start(MagicMock())
+
+        assert cl._thread is None
+
+    def test_rejected_login_after_unreachable_start_fails(self) -> None:
+        """A listener whose first login is rejected later gives up.
+
+        The server was unreachable at startup; once reachable, it
+        rejects the credentials.  As at startup, that is not retried:
+        the listener stops, FAILED.
+        """
+        config = _make_config(use_idle=False)
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            config, email_listener=mock_el, repo_id="test"
+        )
+        rejected = IMAPLoginError("IMAP login failed: Invalid credentials")
+        mock_el.connect.side_effect = [
+            IMAPConnectionError("Connection refused"),
+            rejected,
+        ]
+
+        with patch.object(cl._stop_event, "wait", return_value=False):
+            cl.start(MagicMock())
+            assert cl._thread is not None
+            cl._thread.join(timeout=5)
+            assert not cl._thread.is_alive()
+
+        assert cl.status == ChannelStatus(
+            health=ChannelHealth.FAILED,
+            message=str(rejected),
+            error_type="IMAPLoginError",
+        )
+        assert mock_el.connect.call_count == 2
+        mock_el.fetch_unread.assert_not_called()
+
+        cl.stop()
+
+    def test_rejected_login_after_logging_in_is_retried(self) -> None:
+        """Once the credentials have worked, a rejected login backs off.
+
+        It may be temporary, so the listener keeps reconnecting as for
+        any lost connection.
+        """
+        config = _make_config(use_idle=False, poll_interval=1)
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            config, email_listener=mock_el, repo_id="test"
+        )
+        mock_el.connect.side_effect = [
+            None,  # start()
+            IMAPLoginError("IMAP login failed: Temporary failure"),
+            None,
+        ]
+        fetches = 0
+
+        def fake_fetch() -> list[tuple[bytes, IncomingEmail]]:
+            nonlocal fetches
+            fetches += 1
+            if fetches == 1:
+                raise IMAPConnectionError("lost")
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+        delays: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            delays.append(timeout)
+            return False
+
+        with patch.object(cl._stop_event, "wait", side_effect=record_wait):
+            cl.start(MagicMock())
+            assert cl._thread is not None
+            cl._thread.join(timeout=5)
+
+        assert mock_el.connect.call_count == 3
+        assert delays[:2] == [10, 30]
+        assert cl.status.health == ChannelHealth.CONNECTED
+
+        cl.stop()
+
+    def test_rejected_login_after_recovering_from_start_is_retried(
+        self,
+    ) -> None:
+        """Logging in on a reconnect counts as the credentials working.
+
+        The server was unreachable at startup, then accepted the login;
+        a later rejection backs off like any lost connection instead of
+        failing the listener.
+        """
+        config = _make_config(use_idle=False, poll_interval=1)
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            config, email_listener=mock_el, repo_id="test"
+        )
+        mock_el.connect.side_effect = [
+            IMAPConnectionError("Connection refused"),  # start()
+            None,
+            IMAPLoginError("IMAP login failed: Temporary failure"),
+            None,
+        ]
+        fetches = 0
+
+        def fake_fetch() -> list[tuple[bytes, IncomingEmail]]:
+            nonlocal fetches
+            fetches += 1
+            if fetches == 1:
+                raise IMAPConnectionError("lost")
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+        delays: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            delays.append(timeout)
+            return False
+
+        with patch.object(cl._stop_event, "wait", side_effect=record_wait):
+            cl.start(MagicMock())
+            assert cl._thread is not None
+            cl._thread.join(timeout=5)
+
+        assert mock_el.connect.call_count == 4
+        # Startup reconnect (attempt 1), then the lost connection keeps
+        # backing off from there (attempts 2 and 3).
+        assert delays[:3] == [10, 30, 90]
+        assert cl.status.health == ChannelHealth.CONNECTED
+
+        cl.stop()
+
+    def test_backoff_continues_from_initial_connection(self) -> None:
+        """Startup reconnect attempts count toward the loop's backoff.
+
+        The backoff resets only after a successful fetch, so a fetch
+        failing right after the startup reconnect keeps backing off.
+        """
+        cl, mock_el = _make_polling_listener()
+        cl._submit = MagicMock()
+        mock_el.connect.side_effect = [OSError("Connection refused"), None]
+        mock_el.fetch_unread.side_effect = IMAPConnectionError("lost")
+        delays: list[float] = []
+
+        def record_wait(timeout: float) -> bool:
+            delays.append(timeout)
+            if len(delays) == 3:
+                cl._running = False
+            return True
+
+        with patch.object(cl._stop_event, "wait", record_wait):
+            cl._listener_loop(IMAPConnectionError("Connection refused"))
+
+        assert delays == [10, 30, 90]
+
+
 class TestDispatch:
     def test_dispatches_to_polling(self) -> None:
         """Dispatches to polling loop when use_imap_idle=False."""
@@ -236,8 +482,8 @@ class TestDispatch:
         cl._running = True
 
         with patch.object(cl, "_polling_loop") as mock_pl:
-            cl._listener_loop()
-        mock_pl.assert_called_once()
+            cl._listener_loop(None)
+        mock_pl.assert_called_once_with(0)
 
     def test_dispatches_to_idle(self) -> None:
         """Dispatches to IDLE loop when use_imap_idle=True."""
@@ -250,8 +496,8 @@ class TestDispatch:
         cl._running = True
 
         with patch.object(cl, "_idle_loop") as mock_il:
-            cl._listener_loop()
-        mock_il.assert_called_once()
+            cl._listener_loop(None)
+        mock_il.assert_called_once_with(0)
 
 
 class TestPollingLoop:
@@ -273,7 +519,7 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         mock_el.delete_message.assert_called_once_with("1")
         submit.assert_called_once()
@@ -303,7 +549,7 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         raw_msg = submit.call_args[0][0]
         assert isinstance(raw_msg.sender, str)
@@ -330,7 +576,7 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         # Should NOT have attempted reconnection
         mock_el.disconnect.assert_not_called()
@@ -352,7 +598,7 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         mock_el.disconnect.assert_called_once()
         assert mock_el.connect.call_count == 1
@@ -383,7 +629,7 @@ class TestPollingLoop:
         ]
         mock_el.connect.side_effect = fake_connect
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         assert mock_el.connect.call_count == 21
         assert cl.status.health == ChannelHealth.CONNECTED
@@ -404,7 +650,7 @@ class TestPollingLoop:
         mock_el.connect.side_effect = IMAPConnectionError("refused")
 
         with patch.object(cl._stop_event, "wait", record_wait):
-            cl._polling_loop()
+            cl._polling_loop(0)
 
         assert waits == [10, 30, 90, 270, 300, 300, 300]
 
@@ -428,7 +674,7 @@ class TestPollingLoop:
         mock_el.fetch_unread.side_effect = IMAPConnectionError("fetch failed")
 
         with patch.object(cl._stop_event, "wait", record_wait):
-            cl._polling_loop()
+            cl._polling_loop(0)
 
         assert waits == [10, 30, 90]
 
@@ -452,7 +698,7 @@ class TestPollingLoop:
         ]
 
         with patch.object(cl._stop_event, "wait", record_wait):
-            cl._polling_loop()
+            cl._polling_loop(0)
 
         # 10s and 30s backoff, 1s poll interval, then 10s again.
         assert waits == [10, 30, 1, 10]
@@ -478,7 +724,7 @@ class TestPollingLoop:
         mock_el.fetch_unread.side_effect = fake_fetch
 
         with patch.object(cl._log, "error") as log_error:
-            cl._polling_loop()
+            cl._polling_loop(0)
 
         mock_el.disconnect.assert_called_once()
         mock_el.connect.assert_called_once()
@@ -508,7 +754,7 @@ class TestPollingLoop:
             return original_wait(timeout)
 
         with patch.object(cl._stop_event, "wait", interrupt_on_backoff):
-            cl._polling_loop()
+            cl._polling_loop(0)
 
         # Should NOT have attempted reconnection
         mock_el.disconnect.assert_not_called()
@@ -534,7 +780,7 @@ class TestPollingLoop:
             None,
         ]
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         assert mock_el.connect.call_count == 2
         assert cl.status.health == ChannelHealth.CONNECTED
@@ -553,7 +799,7 @@ class TestPollingLoop:
 
         mock_el.connect.side_effect = aborted_connect
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         mock_el.connect.assert_called_once()
 
@@ -579,7 +825,7 @@ class TestPollingLoop:
             None,
         ]
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
     def test_delete_connection_error_triggers_reconnect(self) -> None:
         """IMAPConnectionError during delete triggers reconnection.
@@ -604,7 +850,7 @@ class TestPollingLoop:
         mock_el.fetch_unread.side_effect = fake_fetch
         mock_el.delete_message.side_effect = IMAPConnectionError("socket died")
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         # Must have triggered reconnection, not just logged "submit error"
         mock_el.disconnect.assert_called_once()
@@ -632,7 +878,7 @@ class TestPollingLoop:
             cl.status.health
         )
 
-        cl._polling_loop()
+        cl._polling_loop(0)
 
         assert ChannelHealth.DEGRADED in statuses
 
@@ -653,7 +899,7 @@ class TestIdleLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
     def test_idle_wait_notification(self) -> None:
         """IDLE loop processes notification from idle_wait."""
@@ -671,7 +917,7 @@ class TestIdleLoop:
         mock_el.idle_start.return_value = False  # entered IDLE
         mock_el.idle_wait.return_value = True  # got notification
 
-        cl._idle_loop()
+        cl._idle_loop(0)
         mock_el.idle_start.assert_called()
         mock_el.idle_done.assert_called()
 
@@ -691,7 +937,7 @@ class TestIdleLoop:
         mock_el.idle_start.return_value = False
         mock_el.idle_wait.return_value = False  # timeout
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
     def test_periodic_reconnect(self) -> None:
         """IDLE loop performs periodic reconnect."""
@@ -714,7 +960,7 @@ class TestIdleLoop:
             return 100.0
 
         with patch("time.time", side_effect=fake_time):
-            cl._idle_loop()
+            cl._idle_loop(0)
         mock_el.disconnect.assert_called()
 
     def test_submit_exception_continues(self) -> None:
@@ -733,7 +979,7 @@ class TestIdleLoop:
         mock_el.fetch_unread.side_effect = fake_fetch
         mock_el.delete_message.side_effect = RuntimeError("fail")
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
     def test_delete_connection_error_triggers_reconnect(self) -> None:
         """IMAPConnectionError during delete triggers reconnection.
@@ -756,7 +1002,7 @@ class TestIdleLoop:
         mock_el.fetch_unread.side_effect = fake_fetch
         mock_el.delete_message.side_effect = IMAPConnectionError("socket died")
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         # Must have triggered reconnection
         mock_el.disconnect.assert_called_once()
@@ -787,7 +1033,7 @@ class TestIdleLoop:
         mock_el.idle_start.side_effect = [True, False]
         mock_el.idle_wait.return_value = False
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         submit = cl._submit
         assert isinstance(submit, MagicMock)
@@ -813,7 +1059,7 @@ class TestIdleLoop:
             False,
         ]
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         mock_el.connect.assert_called_once()
 
@@ -849,7 +1095,7 @@ class TestIdleLoop:
             patch.object(cl._stop_event, "wait", record_wait),
             patch.object(cl._log, "error") as log_error,
         ):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
         assert waits == [10, 30, 90, 270, 300]
         assert cl.status.health == ChannelHealth.CONNECTED
@@ -895,7 +1141,7 @@ class TestIdleLoop:
             patch.object(cl._stop_event, "wait", stop_wait),
             patch.object(cl._log, "error") as log_error,
         ):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
         stop_wait.assert_not_called()
         log_error.assert_not_called()
@@ -935,7 +1181,7 @@ class TestIdleLoop:
             patch("time.monotonic", side_effect=lambda: clock[0]),
             patch.object(cl._stop_event, "wait", record_wait),
         ):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
         assert waits == expected_waits
         mock_el.connect.assert_called_once()
@@ -972,7 +1218,7 @@ class TestIdleLoop:
             patch("time.monotonic", side_effect=lambda: clock[0]),
             patch.object(cl._stop_event, "wait", record_wait),
         ):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
         assert waits == [10, 10]
 
@@ -1006,7 +1252,7 @@ class TestIdleLoop:
             patch("time.monotonic", side_effect=lambda: clock[0]),
             patch.object(cl._log, "warning") as log_warning,
         ):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
         log_warning.assert_not_called()
         mock_el.disconnect.assert_not_called()
@@ -1038,7 +1284,7 @@ class TestIdleLoop:
         mock_el.connect.side_effect = fake_connect
 
         with patch.object(cl._stop_event, "wait", record_wait):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
         mock_el.idle_done.assert_called_once()
         assert waits == [10, 30, 10]
@@ -1056,7 +1302,7 @@ class TestIdleLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         mock_el.disconnect.assert_not_called()
         mock_el.connect.assert_not_called()
@@ -1076,7 +1322,7 @@ class TestIdleLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
     def test_never_gives_up_reconnecting(self) -> None:
         """IDLE loop keeps reconnecting however long the outage lasts."""
@@ -1095,7 +1341,7 @@ class TestIdleLoop:
         mock_el.fetch_unread.side_effect = IMAPConnectionError("lost")
         mock_el.connect.side_effect = fake_connect
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         assert mock_el.connect.call_count == 21
 
@@ -1115,7 +1361,7 @@ class TestIdleLoop:
         # Anything other than an IDLE or connection error is unexpected.
         mock_el.idle_start.side_effect = ValueError("unexpected")
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         mock_el.connect.assert_called_once()
 
@@ -1138,7 +1384,7 @@ class TestIdleLoop:
             None,
         ]
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
     def test_shutdown_skips_idle_done(self) -> None:
         """When shutting down during IDLE, skip idle_done()."""
@@ -1153,7 +1399,7 @@ class TestIdleLoop:
 
         mock_el.idle_wait.side_effect = stop_during_wait
 
-        cl._idle_loop()
+        cl._idle_loop(0)
         mock_el.idle_done.assert_not_called()
 
     def test_idle_timeout_zero(self) -> None:
@@ -1174,7 +1420,7 @@ class TestIdleLoop:
         mock_el.idle_start.return_value = False
 
         with patch("time.time", return_value=99999):
-            cl._idle_loop()
+            cl._idle_loop(0)
 
 
 class TestChannelStatus:
@@ -1193,7 +1439,7 @@ class TestChannelStatus:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        cl._idle_loop()
+        cl._idle_loop(0)
 
         assert cl.status.health == ChannelHealth.CONNECTED
 
@@ -1213,7 +1459,7 @@ class TestChannelStatus:
         mock_el.connect.side_effect = OSError("[Errno 111] Connection refused")
 
         with patch.object(cl._stop_event, "wait", record_wait):
-            cl._polling_loop()
+            cl._polling_loop(0)
 
         first, second = statuses
         assert first.health == ChannelHealth.DEGRADED
@@ -1237,7 +1483,7 @@ class TestChannelStatus:
 
         with patch.object(cl, loop, side_effect=SystemExit):
             with pytest.raises(SystemExit):
-                cl._listener_loop()
+                cl._listener_loop(None)
 
         assert cl.status == ChannelStatus(
             health=ChannelHealth.FAILED,
@@ -1250,7 +1496,7 @@ class TestChannelStatus:
         cl, _ = _make_polling_listener()
 
         with patch.object(cl, "_polling_loop", return_value=None):
-            cl._listener_loop()
+            cl._listener_loop(None)
 
         assert cl.status == ChannelStatus(
             health=ChannelHealth.FAILED,
@@ -1262,11 +1508,11 @@ class TestChannelStatus:
         cl, _ = _make_polling_listener()
         cl._status = ChannelStatus(health=ChannelHealth.CONNECTED)
 
-        def stop_loop() -> None:
+        def stop_loop(failures: int) -> None:
             cl._running = False
 
         with patch.object(cl, "_polling_loop", side_effect=stop_loop):
-            cl._listener_loop()
+            cl._listener_loop(None)
 
         assert cl.status.health == ChannelHealth.CONNECTED
 

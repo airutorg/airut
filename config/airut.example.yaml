@@ -92,7 +92,7 @@ repos:
         server: mail.example.com
         # IMAP port
         # port: 993
-        # IMAP connection attempts per connect (at startup, the repo fails after these)
+        # IMAP connection attempts per connect (then retried with backoff)
         # connect_retries: 3
         # Seconds between IMAP polls
         # poll_interval: 60

@@ -129,12 +129,16 @@ exit on boot failure.
 During service startup, each repository is initialized independently:
 
 1. Service attempts to start listener for each configured repo
-2. If a repo fails (e.g., IMAP auth error, git clone failure), error is recorded
-   and any of its listeners that did start are stopped
-3. Service continues with repos that succeeded
-4. If ALL repos fail, service raises RuntimeError and exits (unless resilient
+2. If a repo fails (e.g., IMAP login rejected, git clone failure), error is
+   recorded and any of its listeners that did start are stopped
+3. An unreachable IMAP server does not fail the repo: it starts degraded, its
+   listener reconnecting in the background, and goes live once connected. If the
+   server then rejects the login, the email listener stops and the repo is
+   failed; its other channels keep running
+4. Service continues with repos that started
+5. If ALL repos fail, service raises RuntimeError and exits (unless resilient
    mode)
-5. Dashboard displays status of all repos (live and failed)
+6. Dashboard displays status of all repos (live, degraded, and failed)
 
 This enables partial operation when some repos have issues (e.g., temporary
 credential problems) while others continue processing emails.

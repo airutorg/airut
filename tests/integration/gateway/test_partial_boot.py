@@ -85,8 +85,7 @@ class TestPartialBootListenerFailure:
 
             def failing_start():
                 raise ConnectionError(
-                    "Simulated listener startup failure: "
-                    "IMAP connection timed out"
+                    "Simulated listener startup failure: IMAP login rejected"
                 )
 
             repo_a_handler.start_listener = failing_start
