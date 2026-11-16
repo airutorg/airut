@@ -22,6 +22,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
 - [Configuration](#configuration)
   - [Enabling/Disabling the Sandbox](#enablingdisabling-the-sandbox)
   - [Upstream DNS](#upstream-dns)
+  - [Proxy Base Image](#proxy-base-image)
   - [Network Allowlist](#network-allowlist)
     - [Pattern Matching Rules](#pattern-matching-rules)
     - [HTTP Method Filtering](#http-method-filtering)
@@ -237,6 +238,27 @@ message asking you to set `network.upstream_dns` explicitly.
 This only affects the proxy container's resolution of real hostnames. Client
 containers never contact this DNS server — they only talk to the custom DNS
 responder.
+
+### Proxy Base Image
+
+The proxy image is built on `docker.io/library/python:3.13-slim`, pinned by
+digest in `airut/_bundled/proxy/proxy.dockerfile`, so every server builds the
+proxy, which holds the real credentials, on the same reviewed image. To build it
+on an image of your own instead (for example one built with Nix), name it in the
+server config:
+
+```yaml
+network:
+  proxy_base_image: localhost/proxy-base:1  # optional
+```
+
+The image needs Python 3.13 with a `pip` that can install packages as root (a
+virtual environment first on `PATH` where the system Python refuses), and a
+POSIX `/bin/sh`; [spec/image.md](../spec/image.md#proxy-base-image) lists the
+exact requirements. Use a fully qualified name, and a digest for an image from a
+registry. Do not start the name with `airut-`: Airut's image cleanup treats such
+images as its own and removes them when stale. Changes take effect when the
+service restarts.
 
 ### Network Allowlist
 

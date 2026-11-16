@@ -24,6 +24,7 @@
   - [Server Config Protection](#server-config-protection)
   - [Network Allowlist Protection](#network-allowlist-protection)
   - [Container Image Build Isolation](#container-image-build-isolation)
+  - [Proxy Image Inputs](#proxy-image-inputs)
 - [Fail-Secure Defaults](#fail-secure-defaults)
 - [Security Limitations](#security-limitations)
   - [Prompt Injection](#prompt-injection)
@@ -471,6 +472,17 @@ build dependency of the repository. This includes package managers that run code
 from their inputs: a Nix-based image evaluates the repository's flake inputs
 while building, and tasks that run Nix in the container do so with Nix's own
 build sandbox disabled (see [nix-images.md](nix-images.md#trust)).
+
+### Proxy Image Inputs
+
+The proxy container holds every task's real credentials. Its image is built from
+inputs pinned in the Airut release: the base image is named fully qualified and
+pinned by digest, so neither the host's short-name resolution nor a moved tag
+can change it, and the Python dependencies are installed from a lockfile with
+hashes. A test rejects bundled Dockerfiles whose base images are not pinned this
+way. An operator can replace the base image with `network.proxy_base_image` in
+the server config; that image is then trusted like the server itself (see
+[network-sandbox.md](network-sandbox.md#proxy-base-image)).
 
 ## Fail-Secure Defaults
 

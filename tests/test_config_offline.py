@@ -28,6 +28,8 @@ vars:
   shared_key: !file /nonexistent/shared-key
 dashboard:
   port: !env DASHBOARD_PORT_UNSET
+network:
+  proxy_base_image: !env PROXY_BASE_IMAGE_UNSET
 repos:
   test:
     repo_url: !env REPO_URL_UNSET
@@ -132,8 +134,12 @@ class TestOfflineConfigSource:
         ).value
 
         assert list(config.repos) == ["test"]
-        # Optional references take their defaults.
+        # Optional references take their defaults, or stand-in text for
+        # strings.
         assert config.global_config.dashboard_port == 5200
+        assert config.global_config.proxy_base_image == (
+            "<!env PROXY_BASE_IMAGE_UNSET>"
+        )
 
     def test_online_load_of_same_config_fails(self, tmp_path: Path) -> None:
         """The offline check is what makes this config checkable."""

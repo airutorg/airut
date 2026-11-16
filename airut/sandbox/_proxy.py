@@ -64,12 +64,22 @@ _EGRESS_METRIC = 5
 _INTERNAL_ROUTE_METRIC = 10
 
 
-def build_proxy_spec(proxy_dir: Path) -> ImageBuildSpec:
+#: Build argument of ``proxy.dockerfile`` naming the base image.  Its
+#: default in the Dockerfile is the pinned upstream image.
+PROXY_BASE_IMAGE_ARG = "BASE_IMAGE"
+
+
+def build_proxy_spec(
+    proxy_dir: Path, base_image: str | None = None
+) -> ImageBuildSpec:
     """Construct ImageBuildSpec for the proxy image.
 
     Args:
         proxy_dir: Directory containing ``proxy.dockerfile`` and
             supporting files.
+        base_image: Image to build the proxy on instead of the
+            Dockerfile's default (passed as the ``BASE_IMAGE`` build
+            argument).  ``None`` keeps the default.
 
     Returns:
         ImageBuildSpec for the proxy image.
@@ -86,10 +96,14 @@ def build_proxy_spec(proxy_dir: Path) -> ImageBuildSpec:
     for child in sorted(proxy_dir.iterdir()):
         if child.is_file() and child.name != "proxy.dockerfile":
             context_files[child.name] = child.read_bytes()
+    build_args: dict[str, str] = {}
+    if base_image is not None:
+        build_args[PROXY_BASE_IMAGE_ARG] = base_image
     return ImageBuildSpec(
         kind="proxy",
         dockerfile=dockerfile,
         context_files=context_files,
+        build_args=build_args,
     )
 
 
@@ -149,9 +163,11 @@ class ProxyManager:
         upstream_dns: str,
         resource_prefix: str = DEFAULT_RESOURCE_PREFIX,
         image_cache: ImageCache,
+        base_image: str | None = None,
     ) -> None:
         self._cmd = container_command
         self._proxy_dir = proxy_dir or Path(str(files("airut._bundled.proxy")))
+        self._base_image = base_image
         self._image_cache = image_cache
         self._proxy_image_tag: str | None = None
         self._resource_prefix = resource_prefix
@@ -468,7 +484,7 @@ class ProxyManager:
         Raises:
             ProxyError: If proxy Dockerfile is missing.
         """
-        return build_proxy_spec(self._proxy_dir)
+        return build_proxy_spec(self._proxy_dir, self._base_image)
 
     def _ensure_ca_cert(self) -> Path:
         """Ensure mitmproxy CA certificate exists.
@@ -495,7 +511,7 @@ class ProxyManager:
                 "run",
                 "--rm",
                 "--entrypoint",
-                "bash",
+                "/bin/sh",
                 "-v",
                 f"{MITMPROXY_CONFDIR}:{container_confdir}:rw",
                 self._proxy_image_tag,

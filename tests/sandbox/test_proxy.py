@@ -17,6 +17,7 @@ from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
 from airut.sandbox._proxy import (
     CA_CERT_FILENAME,
     DEFAULT_RESOURCE_PREFIX,
+    PROXY_BASE_IMAGE_ARG,
     ProxyError,
     ProxyManager,
     _ContextProxy,
@@ -38,6 +39,7 @@ def _make_pm(
     resource_prefix: str = DEFAULT_RESOURCE_PREFIX,
     image_cache: ImageCache | None = None,
     proxy_image_tag: str | None = "airut-proxy:test123",
+    base_image: str | None = None,
 ) -> ProxyManager:
     """Create ProxyManager with a mock ImageCache (convenience helper).
 
@@ -57,6 +59,8 @@ def _make_pm(
         kwargs["proxy_dir"] = proxy_dir
     if egress_network is not None:
         kwargs["egress_network"] = egress_network
+    if base_image is not None:
+        kwargs["base_image"] = base_image
     pm = ProxyManager(**kwargs)
     pm._proxy_image_tag = proxy_image_tag
     return pm
@@ -555,6 +559,19 @@ class TestBuildProxySpec:
         assert "dns_responder.py" in spec.context_files
         # Dockerfile itself should NOT be in context_files
         assert "proxy.dockerfile" not in spec.context_files
+        # The Dockerfile's default base image is used
+        assert spec.build_args == {}
+
+    def test_base_image_passed_as_build_arg(self, tmp_path: Path) -> None:
+        """A configured base image becomes the BASE_IMAGE build argument."""
+        (tmp_path / "proxy.dockerfile").write_text(
+            "ARG BASE_IMAGE=docker.io/library/python:3.13\nFROM ${BASE_IMAGE}\n"
+        )
+
+        pm = _make_pm(proxy_dir=tmp_path, base_image="localhost/base:1")
+        spec = pm._build_proxy_spec()
+
+        assert spec.build_args == {PROXY_BASE_IMAGE_ARG: "localhost/base:1"}
 
     def test_dockerfile_not_found(self, tmp_path: Path) -> None:
         """Raises ProxyError when Dockerfile is missing."""
@@ -618,7 +635,7 @@ class TestEnsureCaCert:
             patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
             patch(
                 "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
-            ),
+            ) as mock_popen,
             patch("airut.sandbox._proxy.time.sleep") as mock_sleep,
         ):
             # Simulate cert file appearing after a few polls
@@ -636,6 +653,9 @@ class TestEnsureCaCert:
         assert result == cert_path
         mock_proc.terminate.assert_called_once()
         mock_proc.wait.assert_called_once_with(timeout=10)
+        # POSIX sh, so base images without bash work (spec/image.md)
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[cmd.index("--entrypoint") + 1] == "/bin/sh"
 
     def test_raises_when_cert_never_appears(self, tmp_path: Path) -> None:
         """Raises ProxyError when cert is never generated."""

@@ -117,6 +117,42 @@ class TestContentHash:
         )
         assert content_hash(s1) != content_hash(s2)
 
+    def test_build_args_affect_hash(self) -> None:
+        """Build arguments, names and values, are part of the hash."""
+        specs = [
+            ImageBuildSpec(kind="proxy", dockerfile=b"FROM x\n"),
+            ImageBuildSpec(
+                kind="proxy",
+                dockerfile=b"FROM x\n",
+                build_args={"BASE_IMAGE": "a"},
+            ),
+            ImageBuildSpec(
+                kind="proxy",
+                dockerfile=b"FROM x\n",
+                build_args={"BASE_IMAGE": "b"},
+            ),
+            ImageBuildSpec(
+                kind="proxy",
+                dockerfile=b"FROM x\n",
+                build_args={"OTHER": "a"},
+            ),
+        ]
+        assert len({content_hash(spec) for spec in specs}) == len(specs)
+
+    def test_build_args_order_does_not_affect_hash(self) -> None:
+        """Build arguments are hashed in sorted order."""
+        s1 = ImageBuildSpec(
+            kind="proxy",
+            dockerfile=b"FROM x\n",
+            build_args={"A": "1", "B": "2"},
+        )
+        s2 = ImageBuildSpec(
+            kind="proxy",
+            dockerfile=b"FROM x\n",
+            build_args={"B": "2", "A": "1"},
+        )
+        assert content_hash(s1) == content_hash(s2)
+
 
 class TestImageBuildSpec:
     """Tests for ImageBuildSpec dataclass."""
@@ -368,6 +404,50 @@ class TestImageCacheEnsure:
         build_cmd = mock_run.call_args_list[1][0][0]
         assert build_cmd[0] == "podman"
         assert build_cmd[1] == "build"
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_build_args_passed_to_build(self, mock_run: MagicMock) -> None:
+        """Build arguments become sorted ``--build-arg`` options."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(
+            kind="proxy",
+            dockerfile=b"ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n",
+            build_args={"Z": "1", "BASE_IMAGE": "localhost/base:1"},
+        )
+        cache.ensure(spec)
+
+        build_cmd = mock_run.call_args_list[1][0][0]
+        start = build_cmd.index("--build-arg")
+        assert build_cmd[start : start + 4] == [
+            "--build-arg",
+            "BASE_IMAGE=localhost/base:1",
+            "--build-arg",
+            "Z=1",
+        ]
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_no_build_args_by_default(self, mock_run: MagicMock) -> None:
+        """Specs without build arguments pass no ``--build-arg``."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        cache.ensure(ImageBuildSpec(kind="repo", dockerfile=b"FROM x\n"))
+
+        assert "--build-arg" not in mock_run.call_args_list[1][0][0]
 
     @patch("airut.sandbox._image_cache.subprocess.run")
     def test_rejects_path_traversal_in_context_files(

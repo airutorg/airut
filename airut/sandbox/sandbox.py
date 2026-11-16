@@ -51,6 +51,9 @@ class SandboxConfig:
             Different prefixes isolate sandbox instances running on the
             same host (e.g. ``"airut"`` for the gateway, ``"airut-cli"``
             for the standalone CLI).
+        proxy_base_image: Base image for the proxy image, replacing the
+            pinned default of ``proxy.dockerfile``.  ``None`` keeps the
+            default.
     """
 
     container_command: str = "podman"
@@ -58,6 +61,7 @@ class SandboxConfig:
     upstream_dns: str = "1.1.1.1"
     max_image_age_hours: int = 24
     resource_prefix: str = "airut"
+    proxy_base_image: str | None = None
 
 
 class Sandbox:
@@ -101,6 +105,7 @@ class Sandbox:
             upstream_dns=config.upstream_dns,
             resource_prefix=config.resource_prefix,
             image_cache=self._image_cache,
+            base_image=config.proxy_base_image,
         )
 
     @property

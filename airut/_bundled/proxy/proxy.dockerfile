@@ -1,4 +1,11 @@
-FROM python:3.13-slim
+# The proxy holds every task's real credentials, so its base image is named
+# fully qualified (rootless podman resolves short names differently from host
+# to host) and pinned by the digest of the tag's multi-arch index (a rebuild
+# never picks up whatever the tag points at that day). Dependency updates
+# refresh the digest (uv run python -m scripts.check_image_pins --fix). The
+# server config's network.proxy_base_image replaces the image via this argument.
+ARG BASE_IMAGE=docker.io/library/python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+FROM ${BASE_IMAGE}
 
 # Install dependencies first — this layer is cached unless
 # requirements.txt changes (the most stable input).

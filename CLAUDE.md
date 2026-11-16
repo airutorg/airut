@@ -80,6 +80,8 @@ context that cannot be summarized here.
 
 - **Preparing a release** → `workflows/release.md`
   - Release notes, GitHub release creation (version derived from git tag)
+- **Updating dependencies** → `workflows/dependency-updates.md`
+  - Lockfiles (main, proxy, screenshots) and the proxy base image digest
 - **Maintaining sandbox-action** → `workflows/sandbox-action.md`
   - Setup, changes, releases for `airutorg/sandbox-action` GitHub Action
 - **Code review (automated)** → `workflows/code-review.md`
