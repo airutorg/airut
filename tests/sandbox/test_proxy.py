@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,13 +16,14 @@ import pytest
 
 from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
 from airut.sandbox._proxy import (
-    CA_CERT_FILENAME,
+    DEFAULT_PROXY_READY_TIMEOUT,
     DEFAULT_RESOURCE_PREFIX,
     PROXY_BASE_IMAGE_ARG,
     ProxyError,
     ProxyManager,
     _ContextProxy,
 )
+from airut.sandbox._proxy_ca import CaCertError
 
 
 # Derived constants matching the default prefix for test assertions.
@@ -33,6 +35,7 @@ CONTEXT_PROXY_PREFIX = f"{DEFAULT_RESOURCE_PREFIX}-proxy-"
 def _make_pm(
     *,
     upstream_dns: str = "1.1.1.1",
+    proxy_ready_timeout: float = DEFAULT_PROXY_READY_TIMEOUT,
     container_command: str = "podman",
     proxy_dir: Path | None = None,
     egress_network: str | None = None,
@@ -52,6 +55,7 @@ def _make_pm(
     kwargs: dict = {
         "container_command": container_command,
         "upstream_dns": upstream_dns,
+        "proxy_ready_timeout": proxy_ready_timeout,
         "resource_prefix": resource_prefix,
         "image_cache": image_cache,
     }
@@ -115,6 +119,7 @@ class TestProxyManagerInit:
         assert pm._proxy_dir.is_absolute()
         assert pm._egress_network == EGRESS_NETWORK
         assert pm._upstream_dns == "1.1.1.1"
+        assert pm._proxy_ready_timeout == 30.0
         assert pm._active_proxies == {}
         assert pm._allowlist_tmpfiles == {}
         assert pm._replacement_tmpfiles == {}
@@ -130,11 +135,13 @@ class TestProxyManagerInit:
             proxy_dir=Path("/custom/proxy"),
             egress_network="custom-egress",
             upstream_dns="8.8.8.8",
+            proxy_ready_timeout=90.0,
         )
         assert pm._cmd == "docker"
         assert pm._proxy_dir == Path("/custom/proxy")
         assert pm._egress_network == "custom-egress"
         assert pm._upstream_dns == "8.8.8.8"
+        assert pm._proxy_ready_timeout == 90.0
 
 
 class TestProxyManagerStartup:
@@ -607,112 +614,49 @@ class TestBuildProxySpec:
 
 
 class TestEnsureCaCert:
-    """Tests for ProxyManager._ensure_ca_cert()."""
+    """Tests for ProxyManager._ensure_ca_cert().
 
-    def test_returns_early_when_cert_exists(self, tmp_path: Path) -> None:
-        """Returns existing cert path without generating new one."""
-        cert = tmp_path / CA_CERT_FILENAME
-        cert.write_text("existing-cert")
+    CA generation itself is covered in ``test_proxy_ca.py``.
+    """
 
-        pm = _make_pm()
+    def test_generates_ca_in_confdir_from_proxy_image(
+        self, tmp_path: Path
+    ) -> None:
+        """Uses the shared confdir, proxy image and a prefixed name."""
+        pm = _make_pm(container_command="docker", resource_prefix="airut-cli")
+        cert = tmp_path / "mitmproxy-ca-cert.pem"
 
-        with patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path):
+        with (
+            patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
+            patch(
+                "airut.sandbox._proxy.ensure_ca_cert", return_value=cert
+            ) as mock_ensure,
+        ):
             result = pm._ensure_ca_cert()
 
         assert result == cert
+        mock_ensure.assert_called_once_with(
+            tmp_path,
+            container_command="docker",
+            image_tag="airut-proxy:test123",
+            container_name="airut-cli-ca-init",
+        )
 
-    def test_generates_cert_when_missing(self, tmp_path: Path) -> None:
-        """Generates CA cert via mitmdump when missing."""
+    def test_generation_failure_raises_proxy_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed generation fails startup with a ProxyError."""
         pm = _make_pm()
-
-        cert_path = tmp_path / CA_CERT_FILENAME
-
-        mock_proc = MagicMock()
-        mock_proc.terminate.return_value = None
-        mock_proc.wait.return_value = None
 
         with (
             patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
             patch(
-                "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
-            ) as mock_popen,
-            patch("airut.sandbox._proxy.time.sleep") as mock_sleep,
-        ):
-            # Simulate cert file appearing after a few polls
-            call_count = 0
-
-            def side_effect(duration: float) -> None:
-                nonlocal call_count
-                call_count += 1
-                if call_count >= 2:
-                    cert_path.write_text("generated-cert")
-
-            mock_sleep.side_effect = side_effect
-            result = pm._ensure_ca_cert()
-
-        assert result == cert_path
-        mock_proc.terminate.assert_called_once()
-        mock_proc.wait.assert_called_once_with(timeout=10)
-        # POSIX sh, so base images without bash work (spec/image.md)
-        cmd = mock_popen.call_args[0][0]
-        assert cmd[cmd.index("--entrypoint") + 1] == "/bin/sh"
-
-    def test_raises_when_cert_never_appears(self, tmp_path: Path) -> None:
-        """Raises ProxyError when cert is never generated."""
-        pm = _make_pm()
-
-        mock_proc = MagicMock()
-        mock_proc.terminate.return_value = None
-        mock_proc.wait.return_value = None
-
-        with (
-            patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
-            patch(
-                "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
+                "airut.sandbox._proxy.ensure_ca_cert",
+                side_effect=CaCertError("generation did not finish"),
             ),
-            patch("airut.sandbox._proxy.time.sleep"),
+            pytest.raises(ProxyError, match="^generation did not finish$"),
         ):
-            with pytest.raises(
-                ProxyError, match="Failed to generate CA certificate"
-            ):
-                pm._ensure_ca_cert()
-
-    def test_kills_process_when_wait_times_out(self, tmp_path: Path) -> None:
-        """Falls back to kill() when terminate + wait times out."""
-        pm = _make_pm()
-
-        cert_path = tmp_path / CA_CERT_FILENAME
-
-        mock_proc = MagicMock()
-        mock_proc.terminate.return_value = None
-        mock_proc.wait.side_effect = [
-            subprocess.TimeoutExpired("podman", 10),
-            None,  # second wait() after kill()
-        ]
-        mock_proc.kill.return_value = None
-
-        with (
-            patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
-            patch(
-                "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
-            ),
-            patch("airut.sandbox._proxy.time.sleep") as mock_sleep,
-        ):
-            call_count = 0
-
-            def side_effect(duration: float) -> None:
-                nonlocal call_count
-                call_count += 1
-                if call_count >= 2:
-                    cert_path.write_text("generated-cert")
-
-            mock_sleep.side_effect = side_effect
-            result = pm._ensure_ca_cert()
-
-        assert result == cert_path
-        mock_proc.terminate.assert_called_once()
-        mock_proc.kill.assert_called_once()
-        assert mock_proc.wait.call_count == 2
+            pm._ensure_ca_cert()
 
 
 class TestWriteTempFile:
@@ -897,55 +841,222 @@ class TestRunProxyContainer:
                 )
 
 
+class _FakeClock:
+    """Fake ``time.monotonic`` / ``time.sleep``: sleeping advances time."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _FakeProbe:
+    """Fake ``podman exec`` readiness probe on a fake clock.
+
+    Each probe takes *duration* seconds, or times out if its timeout is
+    shorter.  A probe succeeds once the proxy is ready, *ready_at*
+    seconds after the clock's start (never if None); before that it
+    fails with a refused connection.
+
+    Attributes:
+        calls: (start time, command, keyword arguments) of each probe.
+    """
+
+    REFUSED = (
+        "Traceback (most recent call last):\n"
+        "ConnectionRefusedError: [Errno 111] Connection refused\n"
+    )
+
+    def __init__(
+        self,
+        clock: _FakeClock,
+        *,
+        ready_at: float | None,
+        duration: float = 0.5,
+    ) -> None:
+        self._clock = clock
+        self._start = clock.now
+        self._ready_at = ready_at
+        self._duration = duration
+        self.calls: list[tuple[float, list[str], dict[str, object]]] = []
+
+    def __call__(
+        self, cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append((self._clock.now - self._start, cmd, kwargs))
+        timeout = kwargs["timeout"]
+        assert isinstance(timeout, float)
+        if self._duration > timeout:
+            self._clock.now += timeout
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        self._clock.now += self._duration
+        elapsed = self._clock.now - self._start
+        if self._ready_at is not None and elapsed >= self._ready_at:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise subprocess.CalledProcessError(1, cmd, "", self.REFUSED)
+
+
+def _wait(
+    pm: ProxyManager,
+    clock: _FakeClock,
+    probe: Callable[..., subprocess.CompletedProcess[str]],
+    container: str = "airut-proxy-task1",
+) -> None:
+    """Run _wait_for_proxy_ready() on *clock* with *probe* as exec."""
+    with (
+        patch("airut.sandbox._proxy.subprocess.run", probe),
+        patch("airut.sandbox._proxy.time.monotonic", clock.monotonic),
+        patch("airut.sandbox._proxy.time.sleep", clock.sleep),
+    ):
+        pm._wait_for_proxy_ready(container)
+
+
 class TestWaitForProxyReady:
     """Tests for ProxyManager._wait_for_proxy_ready()."""
 
-    def test_ready_immediately(self) -> None:
-        """Proxy ready on first probe."""
-        pm = _make_pm()
+    def test_probes_ports_in_container(self) -> None:
+        """Probes ports 80 and 443 inside the proxy container."""
+        clock = _FakeClock()
+        probe = _FakeProbe(clock, ready_at=0)
 
-        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            pm._wait_for_proxy_ready("airut-proxy-task1")
+        _wait(_make_pm(), clock, probe)
 
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "exec" in cmd
-        assert "airut-proxy-task1" in cmd
+        [(_, cmd, kwargs)] = probe.calls
+        assert cmd[:5] == [
+            "podman",
+            "exec",
+            "airut-proxy-task1",
+            "python3",
+            "-c",
+        ]
+        assert "('127.0.0.1', 80)" in cmd[5]
+        assert "('127.0.0.1', 443)" in cmd[5]
+        assert kwargs["check"] is True
 
-    def test_ready_after_retries(self) -> None:
-        """Proxy ready after several failed probes."""
-        pm = _make_pm()
+    def test_returns_as_soon_as_ready(self) -> None:
+        """Stops probing at the first successful probe."""
+        clock = _FakeClock()
+        probe = _FakeProbe(clock, ready_at=1.0)
 
-        with (
-            patch("airut.sandbox._proxy.subprocess.run") as mock_run,
-            patch("airut.sandbox._proxy.time.sleep"),
+        _wait(_make_pm(), clock, probe)
+
+        # Probes at 0.0 (fails, 0.5) and 0.7 (succeeds, 1.2): no more
+        # probes and no waiting for the timeout.
+        assert [start for start, _, _ in probe.calls] == pytest.approx(
+            [0.0, 0.7]
+        )
+        assert clock.now - 1000.0 == pytest.approx(1.2)
+
+    def test_slow_start_within_default_timeout(self) -> None:
+        """A proxy taking seconds to start on a slow host is waited for."""
+        clock = _FakeClock()
+        # Slow host: each exec takes 1.5 s, the proxy listens after 6 s.
+        probe = _FakeProbe(clock, ready_at=6.0, duration=1.5)
+
+        _wait(_make_pm(), clock, probe)
+
+        assert len(probe.calls) == 4
+        assert clock.now - 1000.0 < 10.0
+
+    def test_honours_configured_timeout(self) -> None:
+        """A longer configured timeout waits past the default."""
+        clock = _FakeClock()
+        probe = _FakeProbe(clock, ready_at=45.0)
+
+        _wait(_make_pm(proxy_ready_timeout=60.0), clock, probe)
+
+        assert clock.now - 1000.0 == pytest.approx(45.0, abs=0.7)
+
+    def test_fails_when_configured_timeout_runs_out(self) -> None:
+        """A shorter configured timeout fails once it has elapsed."""
+        clock = _FakeClock()
+        probe = _FakeProbe(clock, ready_at=None)
+
+        with pytest.raises(ProxyError):
+            _wait(_make_pm(proxy_ready_timeout=12.0), clock, probe)
+
+        starts = [start for start, _, _ in probe.calls]
+        # Probed until the deadline, and not past it.
+        assert starts[-1] < 12.0 <= starts[-1] + 0.5 + 0.2
+        assert clock.now - 1000.0 >= 12.0
+
+    def test_probe_may_run_until_deadline(self) -> None:
+        """A slow probe is not cut short before the overall deadline."""
+        clock = _FakeClock()
+        probe = _FakeProbe(clock, ready_at=None)
+
+        with pytest.raises(ProxyError):
+            _wait(_make_pm(proxy_ready_timeout=12.0), clock, probe)
+
+        timeouts = [kwargs["timeout"] for _, _, kwargs in probe.calls]
+        assert timeouts[0] == pytest.approx(12.0)
+        assert timeouts[1] == pytest.approx(12.0 - 0.7)
+
+    def test_timeout_message_names_proxy_and_last_failure(self) -> None:
+        """The error says which proxy, how long, and why it was not ready."""
+        clock = _FakeClock()
+        probe = _FakeProbe(clock, ready_at=None)
+
+        with pytest.raises(ProxyError) as exc_info:
+            _wait(_make_pm(proxy_ready_timeout=12.0), clock, probe)
+
+        assert str(exc_info.value) == (
+            "Proxy airut-proxy-task1 did not accept connections on ports "
+            "80 and 443 within 12s (last probe failure: "
+            "ConnectionRefusedError: [Errno 111] Connection refused)"
+        )
+
+    def test_timeout_message_survives_cut_off_final_probe(self) -> None:
+        """A probe cut off at the deadline does not hide the last failure."""
+        clock = _FakeClock()
+        # Probes start every 1.7 s; the one starting at 11.9 is cut off
+        # at the deadline, 12.
+        probe = _FakeProbe(clock, ready_at=None, duration=1.5)
+
+        with pytest.raises(
+            ProxyError,
+            match=r"\(last probe failure: ConnectionRefusedError: .*\)$",
         ):
-            # Fail twice, then succeed
-            mock_run.side_effect = [
-                subprocess.CalledProcessError(1, ["podman"]),
-                subprocess.TimeoutExpired(["podman"], 3),
-                MagicMock(returncode=0),
-            ]
-            pm._wait_for_proxy_ready("airut-proxy-task1")
+            _wait(_make_pm(proxy_ready_timeout=12.0), clock, probe)
 
-        assert mock_run.call_count == 3
+        assert clock.now - 1000.0 == pytest.approx(12.0)
 
-    def test_timeout_raises_proxy_error(self) -> None:
-        """Raises ProxyError after timeout."""
-        pm = _make_pm()
+    def test_timeout_message_without_stderr(self) -> None:
+        """A failed probe without stderr is reported by exit status."""
+        clock = _FakeClock()
 
-        with (
-            patch("airut.sandbox._proxy.subprocess.run") as mock_run,
-            patch("airut.sandbox._proxy.time.sleep"),
-            patch("airut.sandbox._proxy.time.monotonic") as mock_time,
+        def probe(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            clock.now += 1.0
+            raise subprocess.CalledProcessError(125, cmd, "", "")
+
+        with pytest.raises(
+            ProxyError,
+            match=r"within 5s \(last probe failure: exit status 125\)$",
         ):
-            # Simulate time progressing past deadline
-            mock_time.side_effect = [0.0, 0.1, 6.0]
-            mock_run.side_effect = subprocess.CalledProcessError(1, ["podman"])
+            _wait(_make_pm(proxy_ready_timeout=5.0), clock, probe)
 
-            with pytest.raises(ProxyError, match="not ready after"):
-                pm._wait_for_proxy_ready("airut-proxy-task1", timeout=5.0)
+    def test_timeout_message_after_hung_probe(self) -> None:
+        """A probe still running at the deadline is reported as such."""
+        clock = _FakeClock()
+
+        def probe(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            timeout = kwargs["timeout"]
+            assert isinstance(timeout, float)
+            clock.now += timeout
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+        with pytest.raises(
+            ProxyError, match=r"within 30s \(no probe finished\)$"
+        ):
+            _wait(_make_pm(), clock, probe)
 
 
 class TestRemoveContainer:

@@ -61,6 +61,7 @@ YAML_GLOBAL_STRUCTURE: dict[str, tuple[str, ...]] = {
     "dashboard_base_url": ("dashboard", "base_url"),
     "upstream_dns": ("network", "upstream_dns"),
     "proxy_base_image": ("network", "proxy_base_image"),
+    "proxy_ready_timeout_seconds": ("network", "proxy_ready_timeout"),
 }
 
 #: Maps EmailChannelConfig field names to nested YAML paths

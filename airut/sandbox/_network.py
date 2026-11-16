@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from airut.sandbox._proxy import CA_CERT_FILENAME, MITMPROXY_CONFDIR
+from airut.sandbox._proxy_ca import CA_CERT_FILENAME, MITMPROXY_CONFDIR
 
 
 logger = logging.getLogger(__name__)

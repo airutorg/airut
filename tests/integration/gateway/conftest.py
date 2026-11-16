@@ -34,6 +34,7 @@ import pytest
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from airut.sandbox._proxy_ca import CA_FILENAMES
 from tests import dkim_signing
 
 from .environment import IntegrationEnvironment
@@ -43,8 +44,8 @@ from .environment import IntegrationEnvironment
 def _mock_proxy_infra(tmp_path: Path):
     """Mock proxy infrastructure for integration tests.
 
-    Creates fake mitmproxy config directory and CA cert so that
-    proxy and network modules work without real infrastructure.
+    Creates fake mitmproxy config directory and a complete fake CA so
+    that proxy and network modules work without real infrastructure.
 
     Also points ``AIRUT_STATE_DIR`` at ``tmp_path`` so that
     ``get_storage_dir()`` returns paths under ``tmp_path`` for test
@@ -52,7 +53,8 @@ def _mock_proxy_infra(tmp_path: Path):
     """
     confdir = tmp_path / "mitmproxy-confdir"
     confdir.mkdir(exist_ok=True)
-    (confdir / "mitmproxy-ca-cert.pem").write_text("FAKE CA CERT")
+    for name in CA_FILENAMES:
+        (confdir / name).write_text(f"FAKE {name}")
     state_dir = tmp_path / "mock_podman_state"
     state_dir.mkdir(exist_ok=True)
     # Redirect the state dir to tmp_path so get_storage_dir("repo_id")

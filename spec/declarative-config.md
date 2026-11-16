@@ -457,8 +457,9 @@ Settings that affect server-wide infrastructure or shared resources:
 - `execution.image_prune` — GC policy
 - `dashboard.*` — HTTP server lifecycle
 - `container_command` — container runtime binary (test-only, hidden from editor)
-- `upstream_dns` — proxy DNS configuration
-- `proxy_base_image` — proxy image build input
+- `network.upstream_dns` — proxy DNS configuration
+- `network.proxy_base_image` — proxy image build input
+- `network.proxy_ready_timeout` — wait for each task's proxy to start
 
 ### `Scope.REPO` — Reloadable Per-Repo
 

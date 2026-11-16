@@ -291,6 +291,7 @@ class GatewayService:
             proxy_dir=Path(str(proxy_dir)),
             upstream_dns=upstream_dns,
             proxy_base_image=self.global_config.proxy_base_image,
+            proxy_ready_timeout=self.global_config.proxy_ready_timeout_seconds,
         )
         self.sandbox = Sandbox(
             sandbox_config,
@@ -1257,11 +1258,11 @@ class GatewayService:
             self.global_config = new_global
             self._start_dashboard_early()
 
-        # Note: container_command, upstream_dns, proxy_base_image, and
-        # resource_limits (global default) require a service restart to
-        # apply.  These fields are detected as changed but take effect on
-        # next restart.  Sandbox recreation is deferred to a future
-        # release.
+        # Note: container_command, upstream_dns, proxy_base_image,
+        # proxy_ready_timeout_seconds, and resource_limits (global
+        # default) require a service restart to apply.  These fields are
+        # detected as changed but take effect on next restart.  Sandbox
+        # recreation is deferred to a future release.
         #
         # conversation_max_age_days and image_prune are re-read by the
         # GC thread each iteration, so they take effect on reload.

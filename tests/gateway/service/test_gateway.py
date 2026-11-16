@@ -2621,6 +2621,37 @@ class TestUpstreamDnsResolution:
                 GatewayService(server_config, repo_root=tmp_path)
 
 
+class TestProxyReadyTimeout:
+    """Wiring of network.proxy_ready_timeout into the sandbox."""
+
+    def test_passes_configured_timeout_to_sandbox(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """The configured timeout reaches the SandboxConfig."""
+        from airut.gateway.config import GlobalConfig, ServerConfig
+
+        global_config = GlobalConfig(
+            dashboard_enabled=False,
+            upstream_dns="8.8.8.8",
+            proxy_ready_timeout_seconds=75.0,
+        )
+        server_config = ServerConfig(
+            global_config=global_config, repos={"test": email_config}
+        )
+
+        with (
+            patch("airut.gateway.service.repo_handler.create_adapters"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox") as mock_sandbox,
+        ):
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
+            GatewayService(server_config, repo_root=tmp_path)
+
+        assert mock_sandbox.call_args[0][0].proxy_ready_timeout == 75.0
+
+
 class TestChannelHealth:
     """Gateway wiring of the channel health monitor."""
 

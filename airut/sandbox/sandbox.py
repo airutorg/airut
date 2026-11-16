@@ -19,7 +19,7 @@ from pathlib import Path
 
 from airut.sandbox._entrypoint import get_entrypoint_content
 from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
-from airut.sandbox._proxy import ProxyManager
+from airut.sandbox._proxy import DEFAULT_PROXY_READY_TIMEOUT, ProxyManager
 from airut.sandbox.task import (
     AgentTask,
     CommandTask,
@@ -46,6 +46,8 @@ class SandboxConfig:
         container_command: Container runtime command (podman or docker).
         proxy_dir: Path to directory containing proxy.dockerfile.
         upstream_dns: Upstream DNS server for the proxy.
+        proxy_ready_timeout: Seconds to wait for a task's proxy to accept
+            connections before the task fails.
         max_image_age_hours: Maximum image age before rebuild.
         resource_prefix: Prefix for container/network resources.
             Different prefixes isolate sandbox instances running on the
@@ -59,6 +61,7 @@ class SandboxConfig:
     container_command: str = "podman"
     proxy_dir: Path = field(default_factory=default_proxy_dir)
     upstream_dns: str = "1.1.1.1"
+    proxy_ready_timeout: float = DEFAULT_PROXY_READY_TIMEOUT
     max_image_age_hours: int = 24
     resource_prefix: str = "airut"
     proxy_base_image: str | None = None
@@ -103,6 +106,7 @@ class Sandbox:
             proxy_dir=config.proxy_dir,
             egress_network=egress_network,
             upstream_dns=config.upstream_dns,
+            proxy_ready_timeout=config.proxy_ready_timeout,
             resource_prefix=config.resource_prefix,
             image_cache=self._image_cache,
             base_image=config.proxy_base_image,

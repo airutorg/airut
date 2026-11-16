@@ -67,6 +67,9 @@
 #
 #   # Base image for the network proxy (bundled pinned image if empty)
 #   proxy_base_image: localhost/proxy-base:1
+#
+#   # Seconds to wait for a task's network proxy to start (raise on slow hosts)
+#   proxy_ready_timeout: 30.0
 
 # ---------------------------------------------------------------------------
 # Repositories

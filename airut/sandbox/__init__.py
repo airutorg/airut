@@ -21,7 +21,11 @@ from airut.sandbox._image_cache import (
     ImageBuildSpec,
     content_hash,
 )
-from airut.sandbox._proxy import ProxyError, build_proxy_spec
+from airut.sandbox._proxy import (
+    DEFAULT_PROXY_READY_TIMEOUT,
+    ProxyError,
+    build_proxy_spec,
+)
 from airut.sandbox.claude_binary import (
     CLAUDE_BINARY_CONTAINER_PATH,
     ClaudeBinaryCache,
@@ -61,6 +65,8 @@ __all__ = [
     "Sandbox",
     "SandboxConfig",
     "default_proxy_dir",
+    # proxy
+    "DEFAULT_PROXY_READY_TIMEOUT",
     # task
     "AgentTask",
     "CommandTask",

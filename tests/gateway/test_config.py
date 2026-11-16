@@ -309,6 +309,7 @@ def test_global_config_defaults() -> None:
     assert config.container_command == "podman"
     assert config.upstream_dns is None
     assert config.proxy_base_image is None
+    assert config.proxy_ready_timeout_seconds == 30.0
 
 
 def test_global_config_with_custom_values() -> None:
@@ -325,6 +326,7 @@ def test_global_config_with_custom_values() -> None:
         container_command="docker",
         upstream_dns="8.8.8.8",
         proxy_base_image="localhost/proxy-base:1",
+        proxy_ready_timeout_seconds=90.5,
     )
 
     assert config.max_concurrent_executions == 5
@@ -338,6 +340,7 @@ def test_global_config_with_custom_values() -> None:
     assert config.container_command == "docker"
     assert config.upstream_dns == "8.8.8.8"
     assert config.proxy_base_image == "localhost/proxy-base:1"
+    assert config.proxy_ready_timeout_seconds == 90.5
 
 
 def test_global_config_empty_proxy_base_image() -> None:
@@ -366,6 +369,18 @@ def test_global_config_invalid_conversation_max_age() -> None:
         ValueError, match="Conversation max age must be >= 1 day: 0"
     ):
         GlobalConfig(conversation_max_age_days=0)
+
+
+@pytest.mark.parametrize(
+    "timeout", [0, 0.0, -1.0, float("nan"), float("inf"), float("-inf")]
+)
+def test_global_config_invalid_proxy_ready_timeout(timeout: float) -> None:
+    """The proxy-ready timeout must be a positive, finite number."""
+    with pytest.raises(
+        ValueError,
+        match="Proxy ready timeout must be a positive number of seconds",
+    ):
+        GlobalConfig(proxy_ready_timeout_seconds=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -1206,6 +1221,7 @@ class TestFromYaml:
         assert config.global_config.container_command == "podman"
         assert config.global_config.upstream_dns is None
         assert config.global_config.proxy_base_image is None
+        assert config.global_config.proxy_ready_timeout_seconds == 30.0
 
         # Repo config
         email_ch = repo.channels["email"]
@@ -1286,6 +1302,34 @@ class TestFromYaml:
         assert rl.memory == "8g"
         assert rl.cpus == 4
         assert rl.pids_limit == 512
+
+    @pytest.mark.parametrize(("raw", "expected"), [("90", 90.0), ("7.5", 7.5)])
+    def test_network_proxy_ready_timeout(
+        self, master_repo: Path, tmp_path: Path, raw: str, expected: float
+    ) -> None:
+        """network.proxy_ready_timeout is parsed as seconds (a float)."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + f"network:\n  proxy_ready_timeout: {raw}\n"
+        )
+        config = ServerConfig.from_yaml(yaml_path).value
+        timeout = config.global_config.proxy_ready_timeout_seconds
+        assert timeout == expected
+        assert isinstance(timeout, float)
+
+    @pytest.mark.parametrize("raw", ["0", "-5", ".inf", ".nan", "soon"])
+    def test_network_proxy_ready_timeout_invalid(
+        self, master_repo: Path, tmp_path: Path, raw: str
+    ) -> None:
+        """A proxy_ready_timeout that is not a positive number is rejected."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + f"network:\n  proxy_ready_timeout: {raw}\n"
+        )
+        with pytest.raises(ConfigError):
+            ServerConfig.from_yaml(yaml_path)
 
     def test_network_sandbox_enabled_default(
         self, master_repo: Path, tmp_path: Path

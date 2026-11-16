@@ -23,6 +23,7 @@ gateway can be deployed independently.
 """
 
 import logging
+import math
 import os
 import secrets as secrets_module
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ from airut._json_types import JsonDict, JsonValue
 from airut.config.schema import Scope, meta
 from airut.gateway.channel import ChannelConfig
 from airut.logging import SecretFilter
+from airut.sandbox import DEFAULT_PROXY_READY_TIMEOUT
 from airut.sandbox.types import ResourceLimits
 from airut.xdg import user_config_path, user_state_path
 from airut.yaml_env import (
@@ -810,6 +812,8 @@ class GlobalConfig:
             ``None`` means auto-detect from ``/etc/resolv.conf``.
         proxy_base_image: Base image for the network proxy image.
             ``None`` means the pinned image in the bundled Dockerfile.
+        proxy_ready_timeout_seconds: Seconds to wait for a task's network
+            proxy to accept connections before the task fails.
     """
 
     max_concurrent_executions: int = field(
@@ -884,6 +888,14 @@ class GlobalConfig:
             Scope.SERVER,
         ),
     )
+    proxy_ready_timeout_seconds: float = field(
+        default=DEFAULT_PROXY_READY_TIMEOUT,
+        metadata=meta(
+            "Seconds to wait for a task's network proxy to start"
+            " (raise on slow hosts)",
+            Scope.SERVER,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -908,6 +920,14 @@ class GlobalConfig:
             )
         if self.proxy_base_image == "":
             raise ValueError("Proxy base image must not be empty")
+        if not (
+            math.isfinite(self.proxy_ready_timeout_seconds)
+            and self.proxy_ready_timeout_seconds > 0
+        ):
+            raise ValueError(
+                f"Proxy ready timeout must be a positive number of "
+                f"seconds: {self.proxy_ready_timeout_seconds}"
+            )
 
 
 @dataclass(frozen=True)
@@ -1800,6 +1820,11 @@ class ServerConfig:
         container_command = _resolve(raw.get("container_command"), str)
         if container_command is not None:
             gc_overrides["container_command"] = container_command
+        proxy_ready_timeout = _resolve(
+            network.get("proxy_ready_timeout"), float
+        )
+        if proxy_ready_timeout is not None:
+            gc_overrides["proxy_ready_timeout_seconds"] = proxy_ready_timeout
 
         global_config = GlobalConfig(
             **gc_overrides,

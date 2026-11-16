@@ -218,8 +218,8 @@ config replaces the default, passed to the build as `BASE_IMAGE`; for example an
 image the operator builds with Nix and loads into podman. The build arguments
 are part of the content hash, so a new value builds a new proxy image (once the
 service restarts, like the other sandbox settings). The image must provide what
-`proxy.dockerfile`, `proxy-entrypoint.sh` and the CA certificate generation
-(`/bin/sh -c` running `mitmdump`) use:
+`proxy.dockerfile`, `proxy-entrypoint.sh`, the CA certificate generation and the
+readiness probe (both `python3` on `PATH`, importing mitmproxy for the CA) use:
 
 - `pip` on `PATH`, able to install the hash-locked `requirements.txt` as root
   into the environment of `python3` on `PATH` (Python 3.13, which the proxy lock
@@ -554,8 +554,8 @@ immutable cache entry.
 | Partial (repo miss)   | ~6 s proxy load + ~45 s build   | **-12 s**          |
 
 The CA certificate is **not cached** -- it is generated from the proxy image in
-~3--5 s and contains the CA private key. The small time saving does not justify
-persisting a private key in GitHub's cache storage.
+a few seconds and contains the CA private key. The small time saving does not
+justify persisting a private key in GitHub's cache storage.
 
 ## Image Cleanup
 

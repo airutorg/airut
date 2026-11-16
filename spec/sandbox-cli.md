@@ -502,7 +502,8 @@ startup. The gateway's orphan cleanup removes only `airut-conv-*` and
 The following resources are safely shared between gateway and CLI:
 
 - **mitmproxy CA certificate** (`~/.airut-mitmproxy/`) -- same CA, shared trust
-  store
+  store. Generation is serialized by a lock file, so concurrent first starts of
+  the gateway and CLI do not mix two CAs (see `spec/network-sandbox.md`).
 
 Note: container images are **not** shared between gateway and CLI. The CLI uses
 `resource_prefix="airut-cli"`, producing tags like `airut-cli-repo:*`,
