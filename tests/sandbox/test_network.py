@@ -18,7 +18,7 @@ from airut.sandbox._network import (
     get_ca_cert_path,
     get_network_args,
 )
-from airut.sandbox._proxy import CA_CERT_FILENAME
+from airut.sandbox._proxy_ca import CA_CERT_FILENAME
 
 
 class TestGetCaCertPath:

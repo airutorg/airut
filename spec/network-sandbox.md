@@ -99,6 +99,7 @@ attacker-controlled nameservers). The proxy handles all access control.
 | `airut/_bundled/proxy/tool_domains.py`     | Anthropic server-side-tool domain trimming             |
 | `airut/sandbox/_network.py`                | Podman args for sandbox integration (--dns, CA cert)   |
 | `airut/sandbox/_proxy.py`                  | Per-task proxy lifecycle management                    |
+| `airut/sandbox/_proxy_ca.py`               | mitmproxy CA generation (shared by all proxies)        |
 
 ## Proxy Lifecycle
 
@@ -109,26 +110,48 @@ The proxy is managed by `ProxyManager` in `airut/sandbox/_proxy.py`:
 - On startup: clean orphans, build image, ensure CA cert, create egress network
 - On shutdown: stop task proxies, remove egress network
 
+**CA certificate** (`airut/sandbox/_proxy_ca.py`): the CA in
+`~/.airut-mitmproxy/` is shared by every sandbox instance of the user (gateway
+and CLI). Startup reuses it only when it is complete (every file mitmproxy's
+`CertStore` writes, each non-empty). Otherwise it generates a new CA from the
+proxy image with a command that writes the files and exits:
+
+- The wait for generation is bounded. Generation that fails, does not finish in
+  time, or does not write every file fails startup with an error.
+- A new CA is installed only once every file is complete, replacing any
+  incomplete one, so a failed or interrupted generation never leaves a partial
+  CA that a later start would trust.
+- Generation is serialized between processes sharing the directory, so
+  concurrent first starts cannot mix files of two CAs.
+
 **Conversation lifecycle** (per-conversation resources):
 
 - `start_proxy()`: allocate subnet, create internal network with route, start
-  dual-homed proxy container, health check. Subnet allocation retries
+  dual-homed proxy container, wait until it is ready. Subnet allocation retries
   automatically when the chosen /24 subnet conflicts with one already held on
   the host (e.g. by another airut instance sharing the same machine).
   Conflicting octets are released so future calls can retry them once the
   external holder finishes.
 - `stop_proxy()`: remove container and network
 
+**Readiness wait**: `start_proxy()` waits until mitmproxy accepts connections on
+ports 80 and 443, and returns as soon as it does. The wait is bounded by the
+proxy-ready timeout (`SandboxConfig.proxy_ready_timeout`; for the gateway,
+`network.proxy_ready_timeout` in the server config; default 30 s). When it runs
+out, `start_proxy()` fails with an error naming the proxy, the timeout and the
+last probe failure. The default leaves a slow host (e.g. one under software
+emulation) ample margin and costs a fast host nothing.
+
 ## Resource Scoping
 
-| Resource                             | Scope   | Created                  | Destroyed       |
-| ------------------------------------ | ------- | ------------------------ | --------------- |
-| Egress network (`airut-egress`)      | Gateway | `startup()`              | `shutdown()`    |
-| Proxy image (`airut-proxy`)          | Gateway | `startup()`              | Never (cached)  |
-| CA certificate                       | Gateway | `startup()` (if missing) | Never           |
-| Internal network (`airut-conv-{id}`) | Task    | `start_proxy()`          | `stop_proxy()`  |
-| Proxy container (`airut-proxy-{id}`) | Task    | `start_proxy()`          | `stop_proxy()`  |
-| Network log (`network-sandbox.log`)  | Task    | `start_proxy()`          | Session pruning |
+| Resource                             | Scope   | Created                                | Destroyed       |
+| ------------------------------------ | ------- | -------------------------------------- | --------------- |
+| Egress network (`airut-egress`)      | Gateway | `startup()`                            | `shutdown()`    |
+| Proxy image (`airut-proxy`)          | Gateway | `startup()`                            | Never (cached)  |
+| CA certificate                       | Gateway | `startup()` (if missing or incomplete) | Never           |
+| Internal network (`airut-conv-{id}`) | Task    | `start_proxy()`                        | `stop_proxy()`  |
+| Proxy container (`airut-proxy-{id}`) | Task    | `start_proxy()`                        | `stop_proxy()`  |
+| Network log (`network-sandbox.log`)  | Task    | `start_proxy()`                        | Session pruning |
 
 ## CA Certificate Trust
 

@@ -23,6 +23,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
   - [Enabling/Disabling the Sandbox](#enablingdisabling-the-sandbox)
   - [Upstream DNS](#upstream-dns)
   - [Proxy Base Image](#proxy-base-image)
+  - [Proxy Start-up Timeout](#proxy-start-up-timeout)
   - [Network Allowlist](#network-allowlist)
     - [Pattern Matching Rules](#pattern-matching-rules)
     - [HTTP Method Filtering](#http-method-filtering)
@@ -259,6 +260,23 @@ exact requirements. Use a fully qualified name, and a digest for an image from a
 registry. Do not start the name with `airut-`: Airut's image cleanup treats such
 images as its own and removes them when stale. Changes take effect when the
 service restarts.
+
+### Proxy Start-up Timeout
+
+Each task starts its own proxy container and waits for it to accept connections
+before starting the task's container. The wait ends as soon as the proxy is
+ready, typically in under a second. If the proxy is not ready within
+`network.proxy_ready_timeout` seconds (default 30), the task fails with an error
+saying the proxy "did not accept connections on ports 80 and 443".
+
+```yaml
+network:
+  proxy_ready_timeout: 60  # optional: seconds to wait for each task's proxy
+```
+
+Raise it on a host where the proxy is slow to start, such as one under heavy
+load or software emulation. The value must be a positive number. Like
+`upstream_dns`, it takes effect when the service restarts.
 
 ### Network Allowlist
 

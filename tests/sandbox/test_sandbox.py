@@ -25,6 +25,7 @@ class TestSandboxConfig:
         assert config.proxy_dir.name == "proxy"
         assert config.proxy_dir.is_absolute()
         assert config.upstream_dns == "1.1.1.1"
+        assert config.proxy_ready_timeout == 30.0
         assert config.max_image_age_hours == 24
         assert config.proxy_base_image is None
 
@@ -34,11 +35,13 @@ class TestSandboxConfig:
             container_command="docker",
             proxy_dir=Path("/tmp/proxy"),
             upstream_dns="8.8.8.8",
+            proxy_ready_timeout=90.0,
             max_image_age_hours=48,
         )
         assert config.container_command == "docker"
         assert config.proxy_dir == Path("/tmp/proxy")
         assert config.upstream_dns == "8.8.8.8"
+        assert config.proxy_ready_timeout == 90.0
         assert config.max_image_age_hours == 48
 
 
@@ -83,6 +86,17 @@ class TestSandboxInit:
 
         call_kwargs = mock_pm_class.call_args.kwargs
         assert call_kwargs["base_image"] == "localhost/base:1"
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_init_passes_proxy_ready_timeout(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
+        """Sandbox passes the proxy-ready timeout to ProxyManager."""
+        Sandbox(SandboxConfig(proxy_ready_timeout=90.0))
+
+        pm_call_kwargs = mock_pm_class.call_args.kwargs
+        assert pm_call_kwargs["proxy_ready_timeout"] == 90.0
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     @patch("airut.sandbox.sandbox.ImageCache")

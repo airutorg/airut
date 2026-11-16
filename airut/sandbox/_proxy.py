@@ -39,17 +39,25 @@ from importlib.resources import files
 from pathlib import Path
 
 from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
+from airut.sandbox._proxy_ca import (
+    MITMPROXY_CONFDIR,
+    CaCertError,
+    ensure_ca_cert,
+)
 
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_RESOURCE_PREFIX = "airut"
-MITMPROXY_CONFDIR = Path.home() / ".airut-mitmproxy"
-CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
 
-# Maximum time to wait for the proxy to start accepting connections.
-HEALTH_CHECK_TIMEOUT = 5.0
-HEALTH_CHECK_INTERVAL = 0.2
+#: Default maximum time to wait for a proxy to accept connections.  A
+#: proxy is ready in under a second on a fast host and in about 4 s on a
+#: slow one (e.g. under software emulation); the wait ends as soon as
+#: the proxy is ready, so the margin costs a fast host nothing.
+DEFAULT_PROXY_READY_TIMEOUT = 30.0
+
+# Pause between readiness probes.
+_READY_PROBE_INTERVAL = 0.2
 
 # Subnet allocation for per-context internal networks.
 # Each context gets a /24 subnet from 10.199.{N}.0/24.
@@ -161,6 +169,7 @@ class ProxyManager:
         egress_network: str | None = None,
         *,
         upstream_dns: str,
+        proxy_ready_timeout: float,
         resource_prefix: str = DEFAULT_RESOURCE_PREFIX,
         image_cache: ImageCache,
         base_image: str | None = None,
@@ -179,6 +188,7 @@ class ProxyManager:
             else f"{resource_prefix}-egress"
         )
         self._upstream_dns = upstream_dns
+        self._proxy_ready_timeout = proxy_ready_timeout
         self._lock = threading.Lock()
         self._active_proxies: dict[str, _ContextProxy] = {}
         self._allowlist_tmpfiles: dict[str, Path] = {}
@@ -487,7 +497,7 @@ class ProxyManager:
         return build_proxy_spec(self._proxy_dir, self._base_image)
 
     def _ensure_ca_cert(self) -> Path:
-        """Ensure mitmproxy CA certificate exists.
+        """Ensure the mitmproxy CA exists, generating it if needed.
 
         Returns:
             Path to the CA certificate PEM file.
@@ -495,54 +505,16 @@ class ProxyManager:
         Raises:
             ProxyError: If certificate generation fails.
         """
-        ca_cert_path = MITMPROXY_CONFDIR / CA_CERT_FILENAME
-        if ca_cert_path.exists():
-            logger.debug("CA certificate exists: %s", ca_cert_path)
-            return ca_cert_path
-
-        logger.info("Generating mitmproxy CA certificate")
-        MITMPROXY_CONFDIR.mkdir(parents=True, exist_ok=True)
-
         assert self._proxy_image_tag is not None
-        container_confdir = "/tmp/mitmproxy-confdir"
-        proc = subprocess.Popen(
-            [
-                self._cmd,
-                "run",
-                "--rm",
-                "--entrypoint",
-                "/bin/sh",
-                "-v",
-                f"{MITMPROXY_CONFDIR}:{container_confdir}:rw",
-                self._proxy_image_tag,
-                "-c",
-                f"mitmdump --set confdir={container_confdir} "
-                "--listen-port 0 & sleep 3; kill $!",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
         try:
-            for _ in range(20):
-                if ca_cert_path.exists():
-                    break
-                time.sleep(0.5)
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-
-        if not ca_cert_path.exists():
-            raise ProxyError(
-                f"Failed to generate CA certificate at {ca_cert_path}"
+            return ensure_ca_cert(
+                MITMPROXY_CONFDIR,
+                container_command=self._cmd,
+                image_tag=self._proxy_image_tag,
+                container_name=f"{self._resource_prefix}-ca-init",
             )
-
-        logger.info("CA certificate generated: %s", ca_cert_path)
-        return ca_cert_path
+        except CaCertError as e:
+            raise ProxyError(str(e)) from e
 
     # ------------------------------------------------------------------
     # Temp file operations
@@ -670,24 +642,27 @@ class ProxyManager:
 
         logger.debug("Proxy container started: %s", container_name)
 
-    def _wait_for_proxy_ready(
-        self,
-        container_name: str,
-        timeout: float = HEALTH_CHECK_TIMEOUT,
-    ) -> None:
+    def _wait_for_proxy_ready(self, container_name: str) -> None:
         """Poll until mitmproxy is listening on ports 80 and 443.
 
+        Returns as soon as a probe succeeds.  Each probe may run until
+        the deadline, so a slow ``exec`` is not cut short.  On timeout,
+        the error reports the last probe that finished.
+
         Raises:
-            ProxyError: If the proxy is not ready within *timeout*.
+            ProxyError: If the proxy is not ready within the configured
+                proxy-ready timeout.
         """
+        timeout = self._proxy_ready_timeout
         deadline = time.monotonic() + timeout
         probe_script = (
             "import socket; "
             "socket.create_connection(('127.0.0.1', 80), timeout=1).close(); "
             "socket.create_connection(('127.0.0.1', 443), timeout=1).close()"
         )
+        last_failure: str | None = None
 
-        while time.monotonic() < deadline:
+        while (remaining := deadline - time.monotonic()) > 0:
             try:
                 subprocess.run(
                     [
@@ -700,17 +675,31 @@ class ProxyManager:
                     ],
                     check=True,
                     capture_output=True,
-                    timeout=3,
+                    text=True,
+                    timeout=remaining,
                 )
                 logger.info("Proxy %s is ready", container_name)
                 return
-            except (
-                subprocess.CalledProcessError,
-                subprocess.TimeoutExpired,
-            ):
-                time.sleep(HEALTH_CHECK_INTERVAL)
+            except subprocess.CalledProcessError as e:
+                lines = e.stderr.strip().splitlines()
+                last_failure = (
+                    lines[-1] if lines else f"exit status {e.returncode}"
+                )
+            except subprocess.TimeoutExpired:
+                # Cut off at the deadline.  Report the last probe that
+                # finished, which says more than the cut-off.
+                break
+            time.sleep(_READY_PROBE_INTERVAL)
 
-        raise ProxyError(f"Proxy {container_name} not ready after {timeout}s")
+        reason = (
+            f"last probe failure: {last_failure}"
+            if last_failure is not None
+            else "no probe finished"
+        )
+        raise ProxyError(
+            f"Proxy {container_name} did not accept connections on ports "
+            f"80 and 443 within {timeout:g}s ({reason})"
+        )
 
     def _remove_container(self, name: str) -> None:
         """Force-remove a container (idempotent)."""
