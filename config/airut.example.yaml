@@ -64,6 +64,9 @@
 # network:
 #   # Upstream DNS server for proxy resolution (auto-detected if empty)
 #   upstream_dns: "1.1.1.1"
+#
+#   # Base image for the network proxy (bundled pinned image if empty)
+#   proxy_base_image: localhost/proxy-base:1
 
 # ---------------------------------------------------------------------------
 # Repositories

@@ -2559,6 +2559,35 @@ class TestUpstreamDnsResolution:
             mock_resolver.assert_not_called()
             # Sandbox should receive the explicit DNS via SandboxConfig
             assert mock_sandbox.call_args[0][0].upstream_dns == "8.8.8.8"
+            # No proxy base image configured: the Dockerfile's default
+            assert mock_sandbox.call_args[0][0].proxy_base_image is None
+
+    def test_passes_proxy_base_image(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """The configured proxy base image reaches SandboxConfig."""
+        from airut.gateway.config import GlobalConfig, ServerConfig
+
+        global_config = GlobalConfig(
+            dashboard_enabled=False,
+            upstream_dns="8.8.8.8",
+            proxy_base_image="localhost/proxy-base:1",
+        )
+        server_config = ServerConfig(
+            global_config=global_config, repos={"test": email_config}
+        )
+
+        with (
+            patch("airut.gateway.service.repo_handler.create_adapters"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox") as mock_sandbox,
+        ):
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
+            GatewayService(server_config, repo_root=tmp_path)
+            sandbox_config = mock_sandbox.call_args[0][0]
+            assert sandbox_config.proxy_base_image == "localhost/proxy-base:1"
 
     def test_system_resolver_error_propagates(
         self, email_config, tmp_path: Path

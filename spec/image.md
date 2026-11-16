@@ -148,8 +148,9 @@ All image management is handled by `ImageCache`
 (`airut/sandbox/_image_cache.py`) — a unified cache that manages repo, overlay,
 and proxy images through a single interface. Each image is described by an
 `ImageBuildSpec` (frozen dataclass with `kind`, `dockerfile`, and optional
-`context_files` and `executable_files`), and tagged as
-`{resource_prefix}-{kind}:{sha256}`.
+`context_files`, `executable_files` and `build_args`), and tagged as
+`{resource_prefix}-{kind}:{sha256}`. The hash covers the Dockerfile, the context
+files, and the executable bits and build arguments when there are any.
 
 | Condition                                        | Action                                               |
 | ------------------------------------------------ | ---------------------------------------------------- |
@@ -158,7 +159,7 @@ and proxy images through a single interface. Each image is described by an
 | Image exists, age >= `max_age_hours`             | Rebuild with `--no-cache` (pick up upstream updates) |
 | `max_age_hours=0`                                | Always rebuild with `--no-cache`                     |
 | `force=True` passed to `ensure()`                | Rebuild with `--no-cache` regardless of age          |
-| Dockerfile or context files changed (diff hash)  | New tag → fresh build (no `--no-cache`)              |
+| Dockerfile, context or build args changed (hash) | New tag → fresh build (no `--no-cache`)              |
 | Generated entrypoint changed                     | Rebuild overlay only (repo image reused)             |
 | Different entrypoint variant (agent/passthrough) | Different overlay tag (repo image reused)            |
 
@@ -181,6 +182,60 @@ build simultaneously:
 
 Builds produce new tags (content-addressed), so they don't affect running
 containers.
+
+## Proxy Base Image
+
+The proxy container holds every task's real credentials, so its image is built
+only from pinned inputs. `proxy.dockerfile` takes its base image from the
+`BASE_IMAGE` build argument, whose default is the upstream Python image, fully
+qualified and pinned by digest:
+
+```dockerfile
+ARG BASE_IMAGE=docker.io/library/python:3.13-slim@sha256:<digest>
+FROM ${BASE_IMAGE}
+```
+
+- **Fully qualified:** rootless podman resolves a short name such as
+  `python:3.13-slim` through the host's `registries.conf`, which differs from
+  host to host and may search registries other than Docker Hub.
+- **Pinned by digest:** with a tag alone, every build (including the periodic
+  `--no-cache` rebuilds) would trust whatever the tag points at that day. The
+  digest is that of the tag's multi-arch index, so the pin works on every
+  platform. The tag stays in the reference to record what the digest stands for.
+
+`tests/test_bundled_dockerfiles.py` fails if any `FROM` in a bundled Dockerfile,
+with build arguments resolved to their defaults, lacks a registry, tag or sha256
+digest (parsing in `scripts/image_pins.py`).
+
+**Updating the digest:** dependency updates refresh it with
+`scripts/check_image_pins.py` (see
+[workflows/dependency-updates.md](../workflows/dependency-updates.md)). A new
+digest changes the Dockerfile, and with it the proxy image's content hash, so
+servers build the proxy on the new base as soon as they are upgraded.
+
+**Operator-supplied base image:** `network.proxy_base_image` in the server
+config replaces the default, passed to the build as `BASE_IMAGE`; for example an
+image the operator builds with Nix and loads into podman. The build arguments
+are part of the content hash, so a new value builds a new proxy image (once the
+service restarts, like the other sandbox settings). The image must provide what
+`proxy.dockerfile`, `proxy-entrypoint.sh` and the CA certificate generation
+(`/bin/sh -c` running `mitmdump`) use:
+
+- `pip` on `PATH`, able to install the hash-locked `requirements.txt` as root
+  into the environment of `python3` on `PATH` (Python 3.13, which the proxy lock
+  is resolved for). Distribution Pythons that refuse system-wide installs
+  (marked externally managed) and read-only interpreters such as Nix's need a
+  virtual environment that is first on `PATH`.
+- That environment's scripts directory on `PATH`, where `mitmdump` is installed.
+- A POSIX `/bin/sh` with `sleep`, and running as root (the entrypoint rewrites
+  `/etc/resolv.conf`).
+
+It should be named fully qualified (`localhost/...` for a local image) and, if
+it comes from a registry, pinned by digest. Its name must not start with
+`airut-`: image cleanup removes stale images whose names match the gateway's
+resource prefix (see [Image Cleanup](#image-cleanup)), and would remove a local
+base image that cannot be pulled again. A tag that is rebuilt in place is only
+picked up by the next periodic rebuild of the proxy image.
 
 ## Proxy Dependency Management
 

@@ -48,12 +48,15 @@ class ImageBuildSpec:
             alongside the Dockerfile for the build.
         executable_files: Paths in ``context_files`` written with the
             executable bit set.
+        build_args: Build arguments (``--build-arg NAME=VALUE``) for
+            ``ARG`` instructions in the Dockerfile.
     """
 
     kind: str
     dockerfile: bytes
     context_files: dict[str, bytes] = field(default_factory=dict)
     executable_files: frozenset[str] = frozenset()
+    build_args: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         unknown = self.executable_files - self.context_files.keys()
@@ -65,11 +68,12 @@ class ImageBuildSpec:
 def content_hash(spec: ImageBuildSpec) -> str:
     """SHA-256 of dockerfile + sorted context file paths and contents.
 
-    The executable bit is hashed only when set, so contexts without
-    executable files keep their hash from before it was tracked.  Like
-    the unseparated path/content concatenation, the marker is not
-    collision-proof against crafted content; the inputs come from the
-    repository being built, which gains nothing from a collision.
+    The executable bit and build arguments are hashed only when present,
+    so specs without them keep their hash from before they were
+    tracked.  Like the unseparated path/content concatenation, the
+    markers are not collision-proof against crafted content; the inputs
+    come from the repository or server config being built, which gains
+    nothing from a collision.
     """
     h = hashlib.sha256()
     h.update(spec.dockerfile)
@@ -78,6 +82,8 @@ def content_hash(spec: ImageBuildSpec) -> str:
         h.update(spec.context_files[name])
         if name in spec.executable_files:
             h.update(b"\0executable")
+    for name in sorted(spec.build_args):
+        h.update(f"\0build-arg\0{name}={spec.build_args[name]}".encode())
     return h.hexdigest()
 
 
@@ -370,6 +376,8 @@ class ImageCache:
                     path.chmod(0o755)
 
             cmd = [self._cmd, "build", "-t", tag, "-f", str(df_path)]
+            for name, value in sorted(spec.build_args.items()):
+                cmd.extend(["--build-arg", f"{name}={value}"])
             if no_cache:
                 cmd.append("--no-cache")
             cmd.append(tmpdir)

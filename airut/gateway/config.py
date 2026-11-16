@@ -808,6 +808,8 @@ class GlobalConfig:
             requires podman).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
+        proxy_base_image: Base image for the network proxy image.
+            ``None`` means the pinned image in the bundled Dockerfile.
     """
 
     max_concurrent_executions: int = field(
@@ -875,6 +877,13 @@ class GlobalConfig:
             Scope.SERVER,
         ),
     )
+    proxy_base_image: str | None = field(
+        default=None,
+        metadata=meta(
+            "Base image for the network proxy (bundled pinned image if empty)",
+            Scope.SERVER,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -897,6 +906,8 @@ class GlobalConfig:
                 f"Conversation max age must be >= 1 day: "
                 f"{self.conversation_max_age_days}"
             )
+        if self.proxy_base_image == "":
+            raise ValueError("Proxy base image must not be empty")
 
 
 @dataclass(frozen=True)
@@ -1794,6 +1805,7 @@ class ServerConfig:
             **gc_overrides,
             dashboard_base_url=_resolve(dashboard.get("base_url"), str),
             upstream_dns=_resolve(network.get("upstream_dns"), str),
+            proxy_base_image=_resolve(network.get("proxy_base_image"), str),
         )
 
         # Parse repos

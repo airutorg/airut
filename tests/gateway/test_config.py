@@ -308,6 +308,7 @@ def test_global_config_defaults() -> None:
     assert config.dashboard_base_url is None
     assert config.container_command == "podman"
     assert config.upstream_dns is None
+    assert config.proxy_base_image is None
 
 
 def test_global_config_with_custom_values() -> None:
@@ -323,6 +324,7 @@ def test_global_config_with_custom_values() -> None:
         dashboard_base_url="https://dashboard.example.com",
         container_command="docker",
         upstream_dns="8.8.8.8",
+        proxy_base_image="localhost/proxy-base:1",
     )
 
     assert config.max_concurrent_executions == 5
@@ -335,6 +337,13 @@ def test_global_config_with_custom_values() -> None:
     assert config.dashboard_base_url == "https://dashboard.example.com"
     assert config.container_command == "docker"
     assert config.upstream_dns == "8.8.8.8"
+    assert config.proxy_base_image == "localhost/proxy-base:1"
+
+
+def test_global_config_empty_proxy_base_image() -> None:
+    """An empty proxy base image is rejected rather than built FROM ''."""
+    with pytest.raises(ValueError, match="Proxy base image must not be"):
+        GlobalConfig(proxy_base_image="")
 
 
 def test_global_config_invalid_max_concurrent() -> None:
@@ -1053,6 +1062,9 @@ dashboard:
   host: 0.0.0.0
   port: 8080
   base_url: https://dashboard.example.com
+network:
+  upstream_dns: 8.8.8.8
+  proxy_base_image: localhost/proxy-base:1
 container_command: docker
 repos:
   test:
@@ -1192,6 +1204,8 @@ class TestFromYaml:
         assert config.global_config.dashboard_port == 5200
         assert config.global_config.dashboard_base_url is None
         assert config.global_config.container_command == "podman"
+        assert config.global_config.upstream_dns is None
+        assert config.global_config.proxy_base_image is None
 
         # Repo config
         email_ch = repo.channels["email"]
@@ -1231,6 +1245,8 @@ class TestFromYaml:
             == "https://dashboard.example.com"
         )
         assert config.global_config.container_command == "docker"
+        assert config.global_config.upstream_dns == "8.8.8.8"
+        assert config.global_config.proxy_base_image == "localhost/proxy-base:1"
 
         # Repo config
         email_ch = repo.channels["email"]

@@ -80,7 +80,7 @@
   <div class="card">
     <h2>Network</h2>
     {% for f in schema %}
-    {% if f.path in ['network.upstream_dns'] %}
+    {% if f.path in ['network.upstream_dns', 'network.proxy_base_image'] %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}

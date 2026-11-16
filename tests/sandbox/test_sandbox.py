@@ -26,6 +26,7 @@ class TestSandboxConfig:
         assert config.proxy_dir.is_absolute()
         assert config.upstream_dns == "1.1.1.1"
         assert config.max_image_age_hours == 24
+        assert config.proxy_base_image is None
 
     def test_custom_values(self) -> None:
         """Custom configuration values."""
@@ -70,6 +71,18 @@ class TestSandboxInit:
 
         pm_call_kwargs = mock_pm_class.call_args.kwargs
         assert pm_call_kwargs["image_cache"] is mock_cache_class.return_value
+        assert pm_call_kwargs["base_image"] is None
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_init_passes_proxy_base_image(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
+        """Sandbox passes the configured proxy base image to ProxyManager."""
+        Sandbox(SandboxConfig(proxy_base_image="localhost/base:1"))
+
+        call_kwargs = mock_pm_class.call_args.kwargs
+        assert call_kwargs["base_image"] == "localhost/base:1"
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     @patch("airut.sandbox.sandbox.ImageCache")

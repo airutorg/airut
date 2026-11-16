@@ -83,6 +83,7 @@ _EXAMPLE_VALUES: dict[str, str] = {
     # Optional None-default overrides (illustrative)
     "GlobalConfig.dashboard_base_url": "dashboard.example.com",
     "GlobalConfig.upstream_dns": '"1.1.1.1"',
+    "GlobalConfig.proxy_base_image": "localhost/proxy-base:1",
     "ResourceLimits.timeout": "!var default_resource_timeout",
     "ResourceLimits.memory": "!var default_resource_memory",
     "ResourceLimits.cpus": "!var default_resource_cpus",

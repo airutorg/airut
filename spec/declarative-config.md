@@ -458,6 +458,7 @@ Settings that affect server-wide infrastructure or shared resources:
 - `dashboard.*` — HTTP server lifecycle
 - `container_command` — container runtime binary (test-only, hidden from editor)
 - `upstream_dns` — proxy DNS configuration
+- `proxy_base_image` — proxy image build input
 
 ### `Scope.REPO` — Reloadable Per-Repo
 
