@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from airut.dashboard.tracker import RepoState, RepoStatus, TaskTracker
+from airut.gateway.channel import ChannelHealth, ChannelStatus
 from airut.gateway.config import (
     EmailAccountConfig,
     EmailAuthConfig,
@@ -58,6 +59,14 @@ def _make_email_config(
     }
     kwargs.update(overrides)
     return RepoServerConfig(**kwargs)
+
+
+#: Status of an email listener started while its server is unreachable.
+_UNCONNECTED = ChannelStatus(
+    health=ChannelHealth.DEGRADED,
+    message="IMAP reconnecting (attempt 1): Connection refused",
+    error_type="IMAPConnectionError",
+)
 
 
 def _make_service(
@@ -583,6 +592,33 @@ class TestAddRemoveRepo:
 
         assert "new-repo" in svc.repo_handlers
 
+    def test_add_repo_status_from_listener_health(self, tmp_path: Path) -> None:
+        """An added repo is LIVE or DEGRADED as its listeners report.
+
+        A listener can start without a connection (e.g. its IMAP server
+        is unreachable) and keep retrying in the background.
+        """
+        svc = _make_service(tmp_path)
+        email, slack = MagicMock(), MagicMock()
+        email.listener.status = _UNCONNECTED
+        slack.listener.status = ChannelStatus(health=ChannelHealth.CONNECTED)
+
+        with (
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters",
+                return_value={"email": email, "slack": slack},
+            ),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            svc._add_repo("new-repo", _make_email_config(repo_id="new-repo"))
+
+        (state,) = [
+            r for r in svc._repos_store.get().value if r.repo_id == "new-repo"
+        ]
+        assert state.status == RepoStatus.DEGRADED
+        assert state.error_type == "IMAPConnectionError"
+        assert state.error_message == f"email: {_UNCONNECTED.message}"
+
     def test_add_repo_calls_scheduler_rebuild(self, tmp_path: Path) -> None:
         svc = _make_service(tmp_path)
         svc._scheduler = MagicMock()
@@ -1047,6 +1083,46 @@ class TestApplySingleRepoReload:
             svc._apply_single_repo_reload("test")
 
         svc._scheduler.rebuild_repo.assert_called_once_with("test")
+
+    def test_reload_status_from_listener_health(self, tmp_path: Path) -> None:
+        """A reloaded repo is LIVE or DEGRADED as its listeners report."""
+        svc = _make_service(tmp_path)
+        svc._repos_store.update(
+            (RepoState(repo_id="test", status=RepoStatus.LIVE),)
+        )
+        email = MagicMock()
+        email.listener.status = _UNCONNECTED
+
+        with patch(
+            "airut.gateway.service.gateway.create_adapters",
+            return_value={"email": email},
+        ):
+            svc._apply_single_repo_reload("test")
+
+        (state,) = svc._repos_store.get().value
+        assert state.status == RepoStatus.DEGRADED
+        assert state.error_type == "IMAPConnectionError"
+        assert state.error_message == f"email: {_UNCONNECTED.message}"
+
+    def test_reload_rollback_status_from_listener_health(
+        self, tmp_path: Path
+    ) -> None:
+        """A repo rolled back after a failed reload gets its health too."""
+        svc = _make_service(tmp_path)
+        svc._repos_store.update(
+            (RepoState(repo_id="test", status=RepoStatus.LIVE),)
+        )
+        rolled_back = MagicMock()
+        rolled_back.listener.status = _UNCONNECTED
+
+        with patch(
+            "airut.gateway.service.gateway.create_adapters",
+            side_effect=[RuntimeError("fail"), {"email": rolled_back}],
+        ):
+            svc._apply_single_repo_reload("test")
+
+        (state,) = svc._repos_store.get().value
+        assert state.status == RepoStatus.DEGRADED
 
     def test_reload_failure_triggers_rollback(self, tmp_path: Path) -> None:
         """Failed reload rolls back to old config."""

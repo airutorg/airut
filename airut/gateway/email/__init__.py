@@ -19,6 +19,7 @@ from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
+    IMAPLoginError,
 )
 from airut.gateway.email.parsing import (
     OutboxContent,
@@ -47,6 +48,7 @@ __all__ = [
     "EmailListener",
     "IMAPConnectionError",
     "IMAPIdleError",
+    "IMAPLoginError",
     # parsing
     "OutboxContent",
     "ParseError",

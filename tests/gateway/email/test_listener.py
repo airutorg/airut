@@ -12,12 +12,15 @@ from email.message import Message
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
+    IMAPLoginError,
 )
+from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
 
 def test_listener_init(email_config):
@@ -148,7 +151,7 @@ def test_connect_closes_socket_on_login_failure(email_config):
     """Test that connect() closes the SSL socket when login() fails.
 
     If IMAP4_SSL() succeeds but login() fails, the partially-connected
-    socket must be closed before retrying to prevent resource leaks.
+    socket must be closed to prevent resource leaks.
     """
     listener = EmailListener(email_config.channels["email"])
 
@@ -157,16 +160,104 @@ def test_connect_closes_socket_on_login_failure(email_config):
         failed_conn.login.side_effect = imaplib.IMAP4.error("auth failed")
         failed_sock = MagicMock()
         failed_conn.socket.return_value = failed_sock
+        mock_imap.return_value = failed_conn
 
-        good_conn = MagicMock()
-        mock_imap.side_effect = [failed_conn, good_conn]
-
-        with patch("time.sleep"):
+        with pytest.raises(IMAPLoginError):
             listener.connect(max_retries=2)
 
         # The failed connection's socket must have been closed
         failed_sock.close.assert_called_once()
-        assert listener.connection is good_conn
+        assert listener.connection is None
+
+
+def test_connect_login_rejected_not_retried(email_config):
+    """A rejected login is raised at once, without further attempts.
+
+    Repeating it risks the server blocking the gateway's address.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap, patch("time.sleep") as sleep:
+        mock_imap.return_value.login.side_effect = imaplib.IMAP4.error(
+            "[AUTHENTICATIONFAILED] Invalid credentials"
+        )
+
+        with pytest.raises(
+            IMAPLoginError,
+            match=r"IMAP login failed: \[AUTHENTICATIONFAILED\]",
+        ):
+            listener.connect(max_retries=3)
+
+    assert mock_imap.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_connect_xoauth2_rejected_not_retried(microsoft_oauth2_email_config):
+    """A rejected XOAUTH2 AUTHENTICATE is a login failure too."""
+    listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
+    assert listener._token_provider is not None
+
+    with (
+        patch("imaplib.IMAP4_SSL") as mock_imap,
+        patch.object(
+            listener._token_provider,
+            "generate_xoauth2_string",
+            return_value="user=test@company.com\x01auth=Bearer tok\x01\x01",
+        ),
+        patch("time.sleep"),
+    ):
+        mock_imap.return_value.authenticate.side_effect = imaplib.IMAP4.error(
+            "AUTHENTICATE failed."
+        )
+
+        with pytest.raises(IMAPLoginError, match="AUTHENTICATE failed"):
+            listener.connect(max_retries=3)
+
+    assert mock_imap.call_count == 1
+
+
+def test_connect_retries_temporarily_unavailable_login(email_config):
+    """A login refused with [UNAVAILABLE] (RFC 5530) is retried.
+
+    The code marks a temporary failure on the server's side, not
+    rejected credentials (e.g. Gmail's "Temporary System Problem").
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap:
+        unavailable_conn = MagicMock()
+        unavailable_conn.login.side_effect = imaplib.IMAP4.error(
+            b"[UNAVAILABLE] Temporary System Problem.  Try again later"
+        )
+        good_conn = MagicMock()
+        mock_imap.side_effect = [unavailable_conn, good_conn]
+
+        with patch("time.sleep"):
+            listener.connect(max_retries=2)
+
+    assert listener.connection is good_conn
+
+
+def test_connect_retries_connection_lost_during_login(email_config):
+    """The server dropping the connection during login is retried.
+
+    imaplib signals a lost connection with ``IMAP4.abort``, a subclass
+    of ``IMAP4.error``; it is a connection error, not a rejected login.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap:
+        dropped_conn = MagicMock()
+        dropped_conn.login.side_effect = imaplib.IMAP4.abort(
+            "socket error: EOF"
+        )
+        good_conn = MagicMock()
+        mock_imap.side_effect = [dropped_conn, good_conn]
+
+        with patch("time.sleep"):
+            listener.connect(max_retries=2)
+
+    assert listener.connection is good_conn
 
 
 def test_connect_handles_socket_close_error(email_config):
@@ -179,7 +270,7 @@ def test_connect_handles_socket_close_error(email_config):
 
     with patch("imaplib.IMAP4_SSL") as mock_imap:
         failed_conn = MagicMock()
-        failed_conn.login.side_effect = imaplib.IMAP4.error("auth failed")
+        failed_conn.login.side_effect = OSError("Connection reset by peer")
         failed_sock = MagicMock()
         failed_sock.close.side_effect = OSError("already closed")
         failed_conn.socket.return_value = failed_sock
@@ -1561,10 +1652,14 @@ def test_connect_stop_event_not_set_retries_normally(email_config):
     stop_event.wait.assert_called_once_with(1)  # 2^(1-1) = 1s backoff
 
 
-def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
-    """Test OAuth2 token errors are retried in connect()."""
-    from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
+def test_connect_oauth2_token_request_failure_retries(
+    microsoft_oauth2_email_config,
+):
+    """A token request that fails to get an answer is retried.
 
+    MSAL lets network errors, and HTTP errors for 5xx responses, through
+    as ``requests`` exceptions, which are ``OSError`` subclasses.
+    """
     listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
     assert listener._token_provider is not None
 
@@ -1574,7 +1669,9 @@ def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
             listener._token_provider,
             "generate_xoauth2_string",
             side_effect=[
-                MicrosoftOAuth2TokenError("transient error"),
+                requests.exceptions.ConnectionError(
+                    "Name or service not known"
+                ),
                 "user=test@company.com\x01auth=Bearer tok\x01\x01",
             ],
         ),
@@ -1589,10 +1686,10 @@ def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
         mock_conn.authenticate.assert_called_once()
 
 
-def test_connect_oauth2_token_error_exhausted(microsoft_oauth2_email_config):
-    """Test OAuth2 token errors raise IMAPConnectionError after retries."""
-    from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
-
+def test_connect_oauth2_token_refused_not_retried(
+    microsoft_oauth2_email_config,
+):
+    """A refused token request is a login failure, raised at once."""
     listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
     assert listener._token_provider is not None
 
@@ -1602,13 +1699,16 @@ def test_connect_oauth2_token_error_exhausted(microsoft_oauth2_email_config):
             listener._token_provider,
             "generate_xoauth2_string",
             side_effect=MicrosoftOAuth2TokenError("invalid_client: Bad secret"),
-        ),
+        ) as mock_gen,
         patch("time.sleep"),
     ):
         mock_conn = MagicMock()
         mock_imap.return_value = mock_conn
 
         with pytest.raises(
-            IMAPConnectionError, match="Failed to connect after 3 attempts"
+            IMAPLoginError, match="IMAP login failed: invalid_client"
         ):
             listener.connect(max_retries=3)
+
+    mock_gen.assert_called_once()
+    mock_conn.authenticate.assert_not_called()

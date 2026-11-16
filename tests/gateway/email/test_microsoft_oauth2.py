@@ -8,6 +8,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
@@ -16,21 +17,75 @@ from airut.gateway.email.microsoft_oauth2 import (
 
 
 @patch("airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication")
-def test_init_creates_msal_app(mock_msal_cls):
-    """Test provider initializes MSAL ConfidentialClientApplication."""
+def test_msal_app_created_on_first_use(mock_msal_cls):
+    """The MSAL app is created by the first token request, then reused.
+
+    MSAL looks up the tenant over the network when constructed, so
+    creating it up front would fail the repo whenever the identity
+    platform is unreachable at startup.
+    """
+    mock_msal_cls.return_value.acquire_token_for_client.return_value = {
+        "access_token": "tok",
+    }
     provider = MicrosoftOAuth2TokenProvider(
         tenant_id="test-tenant",
         client_id="test-client",
         client_secret="test-secret",
     )
 
+    mock_msal_cls.assert_not_called()
+    assert provider.tenant_id == "test-tenant"
+    assert provider.client_id == "test-client"
+
+    provider.get_access_token()
+    provider.get_access_token()
+
     mock_msal_cls.assert_called_once_with(
         "test-client",
         authority="https://login.microsoftonline.com/test-tenant",
         client_credential="test-secret",
     )
-    assert provider.tenant_id == "test-tenant"
-    assert provider.client_id == "test-client"
+
+
+@patch("airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication")
+def test_unknown_tenant_raises_token_error(mock_msal_cls):
+    """MSAL refusing the tenant lookup is a token error (bad config)."""
+    mock_msal_cls.side_effect = ValueError(
+        "Unable to get authority configuration for "
+        "https://login.microsoftonline.com/nonexistent"
+    )
+    provider = MicrosoftOAuth2TokenProvider(
+        tenant_id="nonexistent", client_id="c", client_secret="s"
+    )
+
+    with pytest.raises(
+        MicrosoftOAuth2TokenError, match="Failed to look up tenant"
+    ):
+        provider.get_access_token()
+
+
+@patch("airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication")
+def test_unreachable_identity_platform_retried_on_next_use(mock_msal_cls):
+    """A failed tenant lookup propagates and is retried next time.
+
+    MSAL lets network errors through as ``requests`` exceptions, which
+    are ``OSError`` subclasses.
+    """
+    app = MagicMock()
+    app.acquire_token_for_client.return_value = {"access_token": "tok"}
+    mock_msal_cls.side_effect = [
+        requests.exceptions.ConnectionError("Name or service not known"),
+        app,
+    ]
+    provider = MicrosoftOAuth2TokenProvider(
+        tenant_id="t", client_id="c", client_secret="s"
+    )
+
+    with pytest.raises(OSError, match="Name or service not known"):
+        provider.get_access_token()
+
+    assert provider.get_access_token() == "tok"
+    assert mock_msal_cls.call_count == 2
 
 
 @patch("airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication")

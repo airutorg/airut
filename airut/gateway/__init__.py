@@ -43,6 +43,7 @@ from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
+    IMAPLoginError,
 )
 from airut.gateway.email.parsing import (
     ParseError,
@@ -91,6 +92,7 @@ __all__ = [
     "EmailListener",
     "IMAPConnectionError",
     "IMAPIdleError",
+    "IMAPLoginError",
     # parsing
     "ParseError",
     "decode_subject",

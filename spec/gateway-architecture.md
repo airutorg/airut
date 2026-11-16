@@ -154,8 +154,8 @@ a `-N` suffix instead.
   through the adapter.
 - **EmailChannelListener** — Implements `ChannelListener` for email. Manages the
   IMAP polling/IDLE loop in an internal thread with automatic reconnection
-  (retried indefinitely) and health tracking. Wraps the low-level
-  `EmailListener`.
+  (retried indefinitely, unless the login is rejected before it has ever
+  succeeded) and health tracking. Wraps the low-level `EmailListener`.
 - **EmailListener** — Low-level IMAP operations (connect, fetch, IDLE, close)
 - **EmailResponder** — SMTP reply construction with threading support
 - **SenderAuthenticator** — DMARC and DKIM verification (trusted headers, and
@@ -764,6 +764,22 @@ the message with arguments of any type, exception tracebacks, and stack traces.
   at the shortest delay. Unexpected errors in the listener loop are retried the
   same way rather than stopping the listener. The channel reports `DEGRADED`,
   with the latest error, until it reconnects.
+- **IMAP unreachable at startup**: If the listener's first connection fails with
+  a connection error (refused, timed out, name lookup, connection dropped; with
+  Microsoft OAuth2, also the identity platform being unreachable) after
+  `connect_retries` attempts, the listener starts anyway, `DEGRADED`, and
+  reconnects in the background with the same backoff as after a disconnect.
+  Startup moves on to the repo's other channels and to the next repos.
+- **IMAP login rejected**: The IMAP server refusing the login (other than with
+  the temporary-failure code `[UNAVAILABLE]`), or Microsoft OAuth2 refusing to
+  issue a token, is not retried within a connect. Until the credentials have
+  worked once, it fails the repo: at startup the repo fails to start, and a
+  listener that started without a connection stops, `FAILED`, on its first
+  rejected login (which makes the repo `FAILED`; as with any listener that fails
+  after starting, the repo's other channels keep running). This is a
+  configuration error, and repeating the login risks the server blocking the
+  gateway's address for every repo. A listener that has logged in before backs
+  off as for a disconnect.
 - **IMAP IDLE error** (including the server closing the connection in IDLE):
   After at least a minute in IDLE (e.g. the server dropped a long-idle
   connection), reconnect right away. Sooner than that, back off as for a
@@ -798,6 +814,9 @@ and are cleared once it is live again. Reload states (`RELOAD_PENDING`,
 `RELOADING`) take precedence, and a `FAILED` repo stays failed until a reload or
 restart replaces its listeners. A repo whose listener fails to start is `FAILED`
 from the outset (see [dashboard.md](dashboard.md#graceful-repo-initialization)).
+Once a repo's listeners have started, its status is set from their health right
+away, so a repo whose listener started without a connection is `DEGRADED` from
+the outset.
 
 ### Conversation Limit
 

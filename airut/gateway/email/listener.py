@@ -28,6 +28,10 @@ from airut.gateway.email.microsoft_oauth2 import (
 
 logger = logging.getLogger(__name__)
 
+#: Response code (RFC 5530) of a login refused because of a temporary
+#: server-side failure rather than the credentials.
+_TEMPORARY_FAILURE = "[UNAVAILABLE]"
+
 
 class IMAPIdleError(Exception):
     """Raised when IMAP IDLE operation fails."""
@@ -35,6 +39,17 @@ class IMAPIdleError(Exception):
 
 class IMAPConnectionError(Exception):
     """Raised when IMAP connection/operation fails."""
+
+
+class IMAPLoginError(IMAPConnectionError):
+    """Raised when the credentials are rejected while connecting.
+
+    Either the IMAP server refused the login, or (with Microsoft OAuth2)
+    the identity platform refused to issue an access token.  This is a
+    configuration error rather than an outage, so ``connect()`` raises it
+    without further attempts: repeating a rejected login risks the
+    server blocking the gateway's address.
+    """
 
 
 class EmailListener:
@@ -91,6 +106,10 @@ class EmailListener:
     ) -> None:
         """Connect to IMAP server with retry logic.
 
+        Connection errors (refused, timed out, name lookup, the server
+        dropping the connection) are retried up to *max_retries* times.
+        A rejected login is not retried (see ``IMAPLoginError``).
+
         Args:
             max_retries: Maximum connection attempts.
             stop_event: When set, aborts the retry loop immediately
@@ -98,6 +117,7 @@ class EmailListener:
                 full backoff delay.
 
         Raises:
+            IMAPLoginError: If the credentials are rejected.
             IMAPConnectionError: If connection fails after retries,
                 or if *stop_event* is set during a retry delay.
         """
@@ -110,32 +130,11 @@ class EmailListener:
                 )
 
                 # Use 10s connection timeout to fail fast on unreachable hosts
-                self.connection = imaplib.IMAP4_SSL(
+                connection = imaplib.IMAP4_SSL(
                     self.config.imap.server, self.config.imap.port, timeout=10
                 )
-
-                if self._token_provider:
-                    # Microsoft OAuth2: XOAUTH2 SASL mechanism
-                    auth_string = self._token_provider.generate_xoauth2_string(
-                        self.config.account.username
-                    ).encode("utf-8")
-
-                    def _xoauth2_callback(challenge: bytes) -> bytes:
-                        # XOAUTH2 protocol: server sends empty challenge
-                        # for initial auth.  If auth fails, server sends a
-                        # non-empty JSON error as a second challenge —
-                        # respond with empty bytes to get the final error.
-                        if challenge:
-                            return b""
-                        return auth_string
-
-                    self.connection.authenticate("XOAUTH2", _xoauth2_callback)
-                else:
-                    assert self.config.account.password is not None
-                    self.connection.login(
-                        self.config.account.username,
-                        self.config.account.password,
-                    )
+                self.connection = connection
+                self._log_in(connection)
 
                 logger.info(
                     "Connected to IMAP server: %s",
@@ -143,23 +142,13 @@ class EmailListener:
                 )
                 return
 
-            except (
-                imaplib.IMAP4.error,
-                OSError,
-                MicrosoftOAuth2TokenError,
-            ) as e:
-                # Close any partially-connected socket to prevent
-                # resource leaks when the constructor succeeded but
-                # login/authenticate failed.
-                if self.connection is not None:
-                    try:
-                        sock = self.connection.socket()
-                        if sock:
-                            sock.close()
-                    except Exception:
-                        pass
-                    self.connection = None
+            except IMAPLoginError as e:
+                self._drop_connection()
+                logger.warning("%s", e)
+                raise
 
+            except (imaplib.IMAP4.error, OSError) as e:
+                self._drop_connection()
                 logger.warning(
                     "IMAP connection attempt %d/%d failed: %s",
                     attempt,
@@ -181,6 +170,69 @@ class EmailListener:
                     raise IMAPConnectionError(
                         f"Failed to connect after {max_retries} attempts: {e}"
                     )
+
+    def _drop_connection(self) -> None:
+        """Close the connection's socket, without logging out, and forget it.
+
+        Prevents resource leaks from a connection that failed to log in
+        or could not be logged out of.
+        """
+        if self.connection is not None:
+            try:
+                sock = self.connection.socket()
+                if sock:
+                    sock.close()
+            except Exception:
+                pass
+            self.connection = None
+
+    def _log_in(self, connection: imaplib.IMAP4_SSL) -> None:
+        """Authenticate *connection* with the configured credentials.
+
+        Uses XOAUTH2 with a Microsoft OAuth2 token if configured, plain
+        LOGIN otherwise.
+
+        Raises:
+            IMAPLoginError: If the server rejects the login, or the
+                identity platform refuses to issue a token.
+            imaplib.IMAP4.error: If the server refuses the login because
+                of a temporary failure on its side (``[UNAVAILABLE]``),
+                or drops the connection (``IMAP4.abort``).
+            OSError: If the connection fails meanwhile, including the
+                token request failing to reach the identity platform or
+                a server error there.
+        """
+        try:
+            if self._token_provider:
+                # Microsoft OAuth2: XOAUTH2 SASL mechanism
+                auth_string = self._token_provider.generate_xoauth2_string(
+                    self.config.account.username
+                ).encode("utf-8")
+
+                def _xoauth2_callback(challenge: bytes) -> bytes:
+                    # XOAUTH2 protocol: server sends empty challenge
+                    # for initial auth.  If auth fails, server sends a
+                    # non-empty JSON error as a second challenge —
+                    # respond with empty bytes to get the final error.
+                    if challenge:
+                        return b""
+                    return auth_string
+
+                connection.authenticate("XOAUTH2", _xoauth2_callback)
+            else:
+                assert self.config.account.password is not None
+                connection.login(
+                    self.config.account.username,
+                    self.config.account.password,
+                )
+        except imaplib.IMAP4.abort:
+            raise  # The connection was lost, not the login rejected
+        except imaplib.IMAP4.error as e:
+            if _TEMPORARY_FAILURE in str(e):
+                raise  # A server-side outage, retried like one
+            raise IMAPLoginError(f"IMAP login failed: {e}") from e
+        except MicrosoftOAuth2TokenError as e:
+            raise IMAPLoginError(f"IMAP login failed: {e}") from e
 
     def fetch_unread(self) -> list[tuple[bytes, IncomingEmail]]:
         """Fetch unread messages from INBOX.
@@ -313,13 +365,7 @@ class EmailListener:
                 # ResourceWarning about unclosed ssl.SSLSocket.
                 # logout() normally handles this, but when interrupted
                 # or when logout() raises, the socket may remain open.
-                try:
-                    sock = self.connection.socket()
-                    if sock:
-                        sock.close()
-                except Exception:
-                    pass
-                self.connection = None
+                self._drop_connection()
 
     def interrupt(self) -> None:
         """Interrupt any blocking IDLE wait or readline.

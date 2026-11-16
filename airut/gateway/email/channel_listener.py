@@ -6,8 +6,9 @@
 """Email channel listener implementing the ChannelListener protocol.
 
 Wraps the low-level EmailListener (IMAP operations) with polling/IDLE
-loops, reconnection logic, and health tracking.  A lost connection is
-retried indefinitely with capped exponential backoff.
+loops, reconnection logic, and health tracking.  A lost connection, or
+a server that cannot be reached at startup, is retried indefinitely with
+capped exponential backoff.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
+    IMAPLoginError,
 )
 
 
@@ -62,6 +64,15 @@ def reconnect_delay(attempt: int) -> int:
     # long an outage lasts; the cap is reached from attempt 5 on.
     exponent = min(attempt - 1, 4)
     return min(_RECONNECT_BASE_DELAY * 3**exponent, _RECONNECT_MAX_DELAY)
+
+
+def _reconnecting_status(attempt: int, error: Exception) -> ChannelStatus:
+    """Status while waiting to make reconnect *attempt* after *error*."""
+    return ChannelStatus(
+        health=ChannelHealth.DEGRADED,
+        message=f"IMAP reconnecting (attempt {attempt}): {error}",
+        error_type=type(error).__name__,
+    )
 
 
 def _raw_message(email: IncomingEmail) -> RawMessage[IncomingEmail]:
@@ -114,6 +125,9 @@ class EmailChannelListener(ChannelListener):
         self._running = False
         self._stop_event = threading.Event()
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
+        # Whether the credentials have worked: until they have, a
+        # rejected login is a configuration error, not retried.
+        self._has_logged_in = False
 
     def start(
         self, submit: Callable[[RawMessage[IncomingEmail]], bool]
@@ -121,14 +135,24 @@ class EmailChannelListener(ChannelListener):
         """Connect to IMAP and start the listener thread.
 
         The initial IMAP connection is synchronous (may block with
-        retries). After connecting, the polling/IDLE loop runs in a
-        background thread.
+        retries). After it, the polling/IDLE loop runs in a background
+        thread.  If the server cannot be reached, the listener starts
+        DEGRADED anyway and the thread keeps reconnecting with the same
+        backoff as after losing a connection (see ``_reconnect``), so
+        an outage at startup recovers without a restart and does not
+        hold up whatever starts next.  Should the server then reject
+        the login, the listener stops, FAILED, as start() would have
+        failed.
 
         Args:
             submit: Callback invoked with each RawMessage.
 
         Raises:
-            IMAPConnectionError: If the initial connection fails.
+            IMAPLoginError: If the credentials are rejected.  The
+                listener does not start: this is a configuration error,
+                and retrying it risks the server blocking the gateway.
+            IMAPConnectionError: If ``stop()`` interrupted the initial
+                connection.
         """
         self._submit = submit
         self._running = True
@@ -139,17 +163,29 @@ class EmailChannelListener(ChannelListener):
             self._config.imap.server,
             self._config.imap.port,
         )
-        self._email_listener.connect(
-            max_retries=self._config.imap.connect_retries,
-            stop_event=self._stop_event,
-        )
-        self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
+        connect_error: IMAPConnectionError | None = None
+        try:
+            self._email_listener.connect(
+                max_retries=self._config.imap.connect_retries,
+                stop_event=self._stop_event,
+            )
+        except IMAPLoginError:
+            raise
+        except IMAPConnectionError as e:
+            if not self._running:
+                raise  # stop() interrupted the connection
+            connect_error = e
+            self._status = _reconnecting_status(1, e)
+        else:
+            self._has_logged_in = True
+            self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
 
         thread_name = (
             f"EmailListener-{self._repo_id}-{self._config.imap.server}"
         )
         self._thread = threading.Thread(
             target=self._listener_loop,
+            args=(connect_error,),
             daemon=True,
             name=thread_name,
         )
@@ -181,18 +217,39 @@ class EmailChannelListener(ChannelListener):
         """Current health of this listener."""
         return self._status
 
-    def _listener_loop(self) -> None:
+    def _listener_loop(self, connect_error: IMAPConnectionError | None) -> None:
         """Main listener loop, dispatching to IDLE or polling mode.
 
         The loops only return once ``stop()`` is called.  Should one end
         any other way, the listener can no longer receive mail, so it is
         marked FAILED rather than left looking connected.
+
+        Args:
+            connect_error: Why the initial connection failed, or None if
+                it succeeded.  If it failed, the listener reconnects
+                first.
         """
         try:
+            failures = (
+                0
+                if connect_error is None
+                else self._reconnect(0, connect_error)
+            )
             if self._config.imap.use_idle:
-                self._idle_loop()
+                self._idle_loop(failures)
             else:
-                self._polling_loop()
+                self._polling_loop(failures)
+        except IMAPLoginError as e:
+            # Raised by _reconnect only if the credentials have never
+            # worked: a configuration error, and retrying it risks the
+            # server blocking the gateway's address.
+            self._running = False
+            self._log.error("IMAP login rejected, not retrying: %s", e)
+            self._status = ChannelStatus(
+                health=ChannelHealth.FAILED,
+                message=str(e),
+                error_type=type(e).__name__,
+            )
         finally:
             if self._running:
                 self._log.critical("Email listener loop exited unexpectedly")
@@ -206,10 +263,11 @@ class EmailChannelListener(ChannelListener):
     def _reconnect(self, failures: int, error: Exception) -> int:
         """Reconnect to IMAP, retrying until connected or stopped.
 
-        Never gives up: waits with capped exponential backoff (see
-        ``reconnect_delay``) between attempts and reports DEGRADED until
-        the connection is back, so an outage of any length recovers
-        without a restart.
+        Waits with capped exponential backoff (see ``reconnect_delay``)
+        between attempts and reports DEGRADED until the connection is
+        back, so an outage of any length recovers without a restart.
+        Gives up only on a rejected login before the listener has ever
+        logged in.
 
         Args:
             failures: Consecutive failed attempts so far.  The loops reset
@@ -217,10 +275,15 @@ class EmailChannelListener(ChannelListener):
                 fetch, or for IDLE errors a completed IDLE cycle or a
                 one-off error), so one that fails again right after
                 reconnecting keeps backing off.
-            error: The error that lost the connection.
+            error: The error that lost the connection, or that the
+                initial connection failed with.
 
         Returns:
             Updated count of consecutive failed attempts.
+
+        Raises:
+            IMAPLoginError: If the login is rejected before the listener
+                has ever logged in.
         """
         while self._running:
             failures += 1
@@ -238,11 +301,7 @@ class EmailChannelListener(ChannelListener):
                     else error
                 ),
             )
-            self._status = ChannelStatus(
-                health=ChannelHealth.DEGRADED,
-                message=f"IMAP reconnecting (attempt {failures}): {error}",
-                error_type=type(error).__name__,
-            )
+            self._status = _reconnecting_status(failures, error)
 
             self._stop_event.wait(delay)
             if not self._running:
@@ -254,10 +313,16 @@ class EmailChannelListener(ChannelListener):
                     max_retries=self._config.imap.connect_retries,
                     stop_event=self._stop_event,
                 )
+            except IMAPLoginError as e:
+                if not self._has_logged_in:
+                    raise
+                error = e
+                continue
             except Exception as e:
                 error = e
                 continue
 
+            self._has_logged_in = True
             self._log.info("Reconnected to IMAP")
             self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
             break
@@ -287,13 +352,16 @@ class EmailChannelListener(ChannelListener):
             except Exception as e:
                 self._log.exception("Failed to submit message: %s", e)
 
-    def _polling_loop(self) -> None:
+    def _polling_loop(self, failures: int) -> None:
         """Polling-based message loop.
 
         Any error outside per-message handling, expected or not, is
         treated as a lost connection and retried by ``_reconnect``.
+
+        Args:
+            failures: Consecutive failed connection attempts before the
+                loop started (see ``_reconnect``).
         """
-        failures = 0
         el = self._email_listener
 
         while self._running:
@@ -308,7 +376,7 @@ class EmailChannelListener(ChannelListener):
                     return  # Shutting down; don't attempt reconnection
                 failures = self._reconnect(failures, e)
 
-    def _idle_loop(self) -> None:
+    def _idle_loop(self, failures: int) -> None:
         """IDLE-based message loop.
 
         Errors are handled as in ``_polling_loop``.  An IDLE error after
@@ -319,8 +387,11 @@ class EmailChannelListener(ChannelListener):
         separately from ``failures``, which every successful fetch
         resets, and the count resets once an IDLE cycle completes or a
         one-off error occurs.
+
+        Args:
+            failures: Consecutive failed connection attempts before the
+                loop started (see ``_reconnect``).
         """
-        failures = 0
         idle_failures = 0
         last_reconnect = time.time()
         reconnect_interval = self._config.imap.idle_reconnect_interval

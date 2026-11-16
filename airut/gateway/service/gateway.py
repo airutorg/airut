@@ -66,7 +66,10 @@ from airut.gateway.config import (
 from airut.gateway.dotenv_loader import reset_dotenv_state
 from airut.gateway.scheduler.service import Scheduler
 from airut.gateway.service.adapter_factory import create_adapters
-from airut.gateway.service.channel_health import ChannelHealthMonitor
+from airut.gateway.service.channel_health import (
+    ChannelHealthMonitor,
+    repo_health,
+)
 from airut.gateway.service.message_processing import (
     process_message,
 )
@@ -97,6 +100,30 @@ def _build_channel_infos(
             detail=channel_config.channel_detail,
         )
         for channel_type, channel_config in config.channels.items()
+    )
+
+
+def _started_repo_state(repo_id: str, handler: RepoHandler) -> RepoState:
+    """Build the state of a repo whose listeners have just started.
+
+    The status comes from the listeners' health, so a repo with a
+    listener that started without a connection, and keeps retrying it
+    in the background, is DEGRADED from the outset rather than LIVE.
+
+    Args:
+        repo_id: Repository identifier.
+        handler: The repo's handler, with its listeners started.
+    """
+    config = handler.config
+    status, error_type, error_message = repo_health(handler.channel_statuses())
+    return RepoState(
+        repo_id=repo_id,
+        status=status,
+        error_message=error_message,
+        error_type=error_type,
+        git_repo_url=config.git_repo_url,
+        channels=_build_channel_infos(config),
+        storage_dir=str(config.storage_dir),
     )
 
 
@@ -514,15 +541,6 @@ class GatewayService:
             )
             try:
                 repo_handler.start_listener()
-                started_count += 1
-                repo_states[repo_id] = RepoState(
-                    repo_id=repo_id,
-                    status=RepoStatus.LIVE,
-                    git_repo_url=config.git_repo_url,
-                    channels=_build_channel_infos(config),
-                    storage_dir=str(config.storage_dir),
-                )
-                logger.info("Repo '%s': started successfully", repo_id)
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e)
@@ -541,19 +559,31 @@ class GatewayService:
                     error_type,
                     error_msg,
                 )
+                continue
+
+            started_count += 1
+            state = _started_repo_state(repo_id, repo_handler)
+            repo_states[repo_id] = state
+            if state.status == RepoStatus.LIVE:
+                logger.info("Repo '%s': started successfully", repo_id)
+            else:
+                logger.warning(
+                    "Repo '%s': started, but %s: %s",
+                    repo_id,
+                    state.status.value,
+                    state.error_message,
+                )
 
         # Publish all repo states atomically
         self._repos_store.update(tuple(repo_states.values()))
 
-        # Check if any repos started successfully
-        live_repos = [
-            r for r in repo_states.values() if r.status == RepoStatus.LIVE
-        ]
+        # Check if any repos started (a DEGRADED one is still running,
+        # retrying its connection in the background)
         failed_repos = [
             r for r in repo_states.values() if r.status == RepoStatus.FAILED
         ]
 
-        if not live_repos and failed_repos:
+        if not started_count and failed_repos:
             raise RuntimeError(
                 f"All {len(failed_repos)} repo(s) failed to initialize. "
                 "Check credentials, network connectivity, and configuration."
@@ -994,23 +1024,18 @@ class GatewayService:
     def _add_repo(self, repo_id: str, repo_config: RepoServerConfig) -> None:
         """Add a new repo handler and start its listeners.
 
-        On success the repo is recorded as LIVE.  On failure it is
-        recorded as FAILED so the dashboard shows the error — matching
-        the behaviour during boot.  ``_reconcile_repo_handlers`` will
-        retry on subsequent reloads.
+        On success the repo's status comes from its listeners' health
+        (see ``_started_repo_state``).  On failure it is recorded as
+        FAILED so the dashboard shows the error — matching the behaviour
+        during boot.  ``_reconcile_repo_handlers`` will retry on
+        subsequent reloads.
         """
         try:
             handler = RepoHandler(repo_config, self)
             handler.start_listener()
             self.repo_handlers[repo_id] = handler
 
-            repo_state = RepoState(
-                repo_id=repo_id,
-                status=RepoStatus.LIVE,
-                git_repo_url=repo_config.git_repo_url,
-                channels=_build_channel_infos(repo_config),
-                storage_dir=str(repo_config.storage_dir),
-            )
+            repo_state = _started_repo_state(repo_id, handler)
             if self._scheduler:
                 self._scheduler.rebuild_repo(repo_id)
             self._update_repos_store_entry(repo_id, repo_state)
@@ -1087,7 +1112,7 @@ class GatewayService:
             handler.start_listener()
             if self._scheduler:
                 self._scheduler.rebuild_repo(repo_id)
-            self._set_repo_status(repo_id, RepoStatus.LIVE)
+            self._set_started_repo_status(repo_id, handler)
             logger.info("Repo '%s': reload complete", repo_id)
         except Exception:
             logger.exception(
@@ -1104,7 +1129,7 @@ class GatewayService:
             try:
                 handler.adapters = create_adapters(old_config)
                 handler.start_listener()
-                self._set_repo_status(repo_id, RepoStatus.LIVE)
+                self._set_started_repo_status(repo_id, handler)
             except Exception:
                 logger.exception("Repo '%s': rollback also failed", repo_id)
                 self._set_repo_status(repo_id, RepoStatus.FAILED)
@@ -1243,20 +1268,40 @@ class GatewayService:
 
         logger.info("Server-scope reload applied")
 
-    def _set_repo_status(self, repo_id: str, status: RepoStatus) -> None:
+    def _set_repo_status(
+        self,
+        repo_id: str,
+        status: RepoStatus,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
         """Update a single repo's status in the repos store.
 
-        Clears any error recorded with the previous status: the error
+        Replaces any error recorded with the previous status: the error
         fields describe the status they were recorded with.
         """
         self._repos_store.modify(
             lambda current: tuple(
-                replace(r, status=status, error_message=None, error_type=None)
+                replace(
+                    r,
+                    status=status,
+                    error_message=error_message,
+                    error_type=error_type,
+                )
                 if r.repo_id == repo_id
                 else r
                 for r in current
             )
         )
+
+    def _set_started_repo_status(
+        self, repo_id: str, handler: RepoHandler
+    ) -> None:
+        """Set a restarted repo's status from its listeners' health."""
+        status, error_type, error_message = repo_health(
+            handler.channel_statuses()
+        )
+        self._set_repo_status(repo_id, status, error_type, error_message)
 
     def _update_repos_store_entry(
         self, repo_id: str, new_state: RepoState
