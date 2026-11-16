@@ -176,6 +176,18 @@ url_prefixes:
     path: /chrome-for-testing-public/*
     methods: [GET, HEAD]
 
+  # Docker Hub — digest lookups for the pinned proxy base image
+  # (scripts/check_image_pins.py).  HEAD on a manifest returns the tag's
+  # current digest without downloading anything, and does not count against
+  # Docker Hub's pull rate limit; auth.docker.io issues the anonymous
+  # pull token the registry requires even for that.
+  - host: auth.docker.io
+    path: /token*
+    methods: [GET]
+  - host: registry-1.docker.io
+    path: /v2/library/python/manifests/*
+    methods: [HEAD]
+
   # Claude Code install/download — binary cache and integration tests
   - host: claude.ai
     path: /install.sh
