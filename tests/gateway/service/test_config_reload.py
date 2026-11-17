@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import dataclasses
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import DEFAULT, MagicMock, patch
 
 from airut.dashboard.tracker import RepoState, RepoStatus, TaskTracker
 from airut.gateway.channel import ChannelHealth, ChannelStatus
@@ -1378,6 +1379,258 @@ class TestApplyServerReload:
 
         mock_dashboard.stop.assert_called_once()
         mock_ds.assert_called_once()
+
+
+def _with_new_pool_size(svc: GatewayService) -> ServerConfig:
+    """Return the service's config with a different pool size."""
+    size = svc.config.global_config.max_concurrent_executions + 1
+    return dataclasses.replace(
+        svc.config,
+        global_config=dataclasses.replace(
+            svc.config.global_config, max_concurrent_executions=size
+        ),
+    )
+
+
+class TestPoolSwapRace:
+    """A server reload replacing the executor pool vs. concurrent submits.
+
+    The reload's idle check is not atomic with new work arriving: a
+    scheduler fire or an incoming message can add a tracker task right
+    after the check passed.  That work must land on a live pool, never
+    on the one the reload is shutting down, or its tracker task stays
+    active forever and blocks every later deferred reload.
+    """
+
+    def test_scheduled_dispatch_survives_pool_swap(
+        self, tmp_path: Path
+    ) -> None:
+        from datetime import UTC, datetime
+        from zoneinfo import ZoneInfo
+
+        from airut.dashboard.tracker import CompletionReason
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+        from airut.gateway.scheduler.cron import CronExpression
+        from airut.gateway.scheduler.service import (
+            Scheduler,
+            _ResolvedSchedule,
+        )
+
+        svc = _make_service(tmp_path)
+        old_pool = svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        sched = _ResolvedSchedule(
+            repo_id="test",
+            name="hourly",
+            config=ScheduleConfig(
+                cron="0 * * * *",
+                deliver=ScheduleDelivery(to="a@test.local", channel="email"),
+                prompt="hi",
+            ),
+            cron=CronExpression("0 * * * *"),
+            tz=ZoneInfo("UTC"),
+            next_fire=datetime.now(tz=UTC),
+        )
+        ran = threading.Event()
+
+        def fake_execute(service: GatewayService, *args: object) -> None:
+            task_id = str(args[-1])
+            service.tracker.set_executing(task_id)
+            service.tracker.complete_task(task_id, CompletionReason.SUCCESS)
+            ran.set()
+
+        def reload_first(*args: object, **kwargs: object) -> object:
+            # The reload's idle check passed just before the scheduler
+            # added its tracker task, and the pool is swapped before the
+            # run is submitted.
+            svc._apply_server_reload(_with_new_pool_size(svc))
+            assert svc._executor_pool is not old_pool
+            return DEFAULT
+
+        try:
+            with (
+                patch.object(
+                    svc.tracker,
+                    "add_task",
+                    wraps=svc.tracker.add_task,
+                    side_effect=reload_first,
+                ),
+                patch(
+                    "airut.gateway.scheduler.execution.execute_scheduled_task",
+                    fake_execute,
+                ),
+            ):
+                Scheduler(svc)._dispatch(sched)
+
+            assert ran.wait(timeout=5)
+        finally:
+            assert svc._executor_pool is not None
+            svc._executor_pool.shutdown(wait=True)
+
+        assert not svc.tracker.has_active_tasks_for_repo("test")
+
+    def test_submission_holds_pool_lock(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        pool = ThreadPoolExecutor(max_workers=1)
+        svc._executor_pool = pool
+        locked: list[bool] = []
+
+        def record_lock(*args: object) -> object:
+            locked.append(svc._pool_lock.locked())
+            return DEFAULT
+
+        handler = svc.repo_handlers["test"]
+        try:
+            with (
+                patch.object(
+                    pool, "submit", wraps=pool.submit, side_effect=record_lock
+                ),
+                patch.object(svc, "_process_message_worker"),
+            ):
+                svc.submit_message(
+                    MagicMock(), handler, handler.adapters["email"]
+                )
+        finally:
+            pool.shutdown(wait=True)
+
+        assert locked == [True]
+
+    def test_pool_swapped_under_lock_before_shutdown(
+        self, tmp_path: Path
+    ) -> None:
+        svc = _make_service(tmp_path)
+        old_pool = ThreadPoolExecutor(max_workers=1)
+        svc._executor_pool = old_pool
+        events: list[tuple[str, object]] = []
+
+        class RecordingLock:
+            def __enter__(self) -> None:
+                events.append(("lock", svc._executor_pool))
+
+            def __exit__(self, *exc: object) -> None:
+                events.append(("unlock", svc._executor_pool))
+
+        def record_shutdown(**kwargs: object) -> object:
+            events.append(("shutdown", svc._executor_pool))
+            return DEFAULT
+
+        with (
+            patch.object(svc, "_pool_lock", RecordingLock()),
+            patch.object(
+                old_pool,
+                "shutdown",
+                wraps=old_pool.shutdown,
+                side_effect=record_shutdown,
+            ),
+        ):
+            svc._apply_server_reload(_with_new_pool_size(svc))
+
+        new_pool = svc._executor_pool
+        assert new_pool is not None
+        assert new_pool is not old_pool
+        # Swapped under the lock; the old pool is shut down only after.
+        assert events == [
+            ("lock", old_pool),
+            ("unlock", new_pool),
+            ("shutdown", new_pool),
+        ]
+        new_pool.shutdown(wait=True)
+
+    def test_run_queued_on_old_pool_still_runs(self, tmp_path: Path) -> None:
+        """Work queued on the old pool before the swap is not cancelled."""
+        from airut.dashboard.tracker import CompletionReason
+
+        svc = _make_service(tmp_path)
+        old_pool = ThreadPoolExecutor(max_workers=1)
+        svc._executor_pool = old_pool
+        release = threading.Event()
+        old_pool.submit(release.wait)  # Occupy the only worker.
+        ran = threading.Event()
+
+        def worker(raw: object, task_id: str, *args: object) -> None:
+            svc.tracker.set_authenticating(task_id)
+            svc.tracker.set_executing(task_id)
+            svc.tracker.complete_task(task_id, CompletionReason.SUCCESS)
+            ran.set()
+
+        handler = svc.repo_handlers["test"]
+        try:
+            with patch.object(
+                svc, "_process_message_worker", side_effect=worker
+            ):
+                assert svc.submit_message(
+                    MagicMock(), handler, handler.adapters["email"]
+                )
+                svc._apply_server_reload(_with_new_pool_size(svc))
+                assert svc._executor_pool is not old_pool
+                release.set()
+                assert ran.wait(timeout=5)
+        finally:
+            release.set()
+            old_pool.shutdown(wait=True)
+            assert svc._executor_pool is not None
+            svc._executor_pool.shutdown(wait=True)
+
+        assert not svc.tracker.has_active_tasks_for_repo("test")
+
+
+class TestSubmitWithoutPool:
+    """Work that cannot be submitted completes its tracker task.
+
+    Uses the real tracker: a task left active here would block every
+    later deferred reload of its repo.
+    """
+
+    def _assert_failed(self, svc: GatewayService) -> None:
+        from airut.dashboard.tracker import CompletionReason, TaskStatus
+
+        (task,) = svc.tracker.get_all_tasks()
+        assert task.status is TaskStatus.COMPLETED
+        assert task.completion_reason is CompletionReason.INTERNAL_ERROR
+        assert not svc.tracker.has_active_tasks_for_repo("test")
+
+    def test_message_task_completed(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        handler = svc.repo_handlers["test"]
+
+        assert not svc.submit_message(
+            MagicMock(), handler, handler.adapters["email"]
+        )
+
+        self._assert_failed(svc)
+
+    def test_scheduled_task_completed(self, tmp_path: Path) -> None:
+        from datetime import UTC, datetime
+        from zoneinfo import ZoneInfo
+
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+        from airut.gateway.scheduler.cron import CronExpression
+        from airut.gateway.scheduler.service import (
+            Scheduler,
+            _ResolvedSchedule,
+        )
+
+        svc = _make_service(tmp_path)
+        svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        svc.stop()
+
+        Scheduler(svc)._dispatch(
+            _ResolvedSchedule(
+                repo_id="test",
+                name="hourly",
+                config=ScheduleConfig(
+                    cron="0 * * * *",
+                    deliver=ScheduleDelivery(
+                        to="a@test.local", channel="email"
+                    ),
+                    prompt="hi",
+                ),
+                cron=CronExpression("0 * * * *"),
+                tz=ZoneInfo("UTC"),
+                next_fire=datetime.now(tz=UTC),
+            )
+        )
+
+        self._assert_failed(svc)
 
 
 class TestTryImmediateServerReload:

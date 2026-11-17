@@ -101,10 +101,40 @@ class TestGatewayServiceInit:
 
 class TestSubmitMessage:
     def test_no_pool(self, email_config, tmp_path: Path) -> None:
+        """A message that cannot be submitted completes its task."""
+        from airut.dashboard.tracker import CompletionReason
+
         svc, handler = make_service(email_config, tmp_path)
         msg = make_message()
         adapter = handler.adapters["email"]
         assert svc.submit_message(msg, handler, adapter) is False
+
+        task_id = svc.tracker.add_task.call_args[0][0]
+        # complete_task() needs the task past QUEUED.
+        svc.tracker.set_authenticating.assert_called_once_with(task_id)
+        svc.tracker.complete_task.assert_called_once_with(
+            task_id,
+            CompletionReason.INTERNAL_ERROR,
+            "executor pool not running",
+        )
+        assert not svc._pending_futures
+
+    def test_after_stop(self, email_config, tmp_path: Path) -> None:
+        """A message arriving after stop() completes its task."""
+        from airut.dashboard.tracker import CompletionReason
+
+        svc, handler = make_service(email_config, tmp_path)
+        svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        svc.stop()
+
+        msg = make_message()
+        adapter = handler.adapters["email"]
+        assert svc.submit_message(msg, handler, adapter) is False
+        svc.tracker.complete_task.assert_called_once_with(
+            svc.tracker.add_task.call_args[0][0],
+            CompletionReason.INTERNAL_ERROR,
+            "executor pool not running",
+        )
 
     def test_submits_successfully(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
@@ -728,10 +758,10 @@ class TestDrainPending:
         svc.tracker.complete_task.assert_called_once_with(
             "pending-task-1",
             CompletionReason.INTERNAL_ERROR,
-            "executor pool shut down",
+            "executor pool not running",
         )
 
-    def test_shut_down_executor_pool_marks_internal_error(
+    def test_after_stop_marks_internal_error(
         self, email_config, tmp_path: Path
     ) -> None:
         """A task outliving the grace period cannot drain into the pool.
@@ -744,8 +774,7 @@ class TestDrainPending:
 
         svc, handler = make_service(email_config, tmp_path)
         svc._executor_pool = ThreadPoolExecutor(max_workers=1)
-        svc._executor_pool.shutdown()
-        svc._stopped = True
+        svc.stop()
 
         parsed = MagicMock(conversation_id="conv1")
         svc._pending_messages["conv1"] = PendingMessage(
@@ -760,28 +789,9 @@ class TestDrainPending:
         svc.tracker.complete_task.assert_called_once_with(
             "pending-task-1",
             CompletionReason.INTERNAL_ERROR,
-            "executor pool shut down",
+            "executor pool not running",
         )
         assert not svc._pending_futures
-
-    def test_shut_down_executor_pool_while_running_raises(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        """A pool shut down while the gateway is running is a bug."""
-        svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = ThreadPoolExecutor(max_workers=1)
-        svc._executor_pool.shutdown()
-
-        parsed = MagicMock(conversation_id="conv1")
-        svc._pending_messages["conv1"] = PendingMessage(
-            parsed=parsed,
-            task_id="pending-task-1",
-            repo_handler=handler,
-            adapter=handler.adapters["email"],
-        )
-
-        with pytest.raises(RuntimeError, match="after shutdown"):
-            svc._drain_pending("conv1")
 
 
 class TestProcessPendingMessage:
@@ -1053,7 +1063,7 @@ class TestStartStop:
     def test_stop_cancels_not_done(self, email_config, tmp_path: Path) -> None:
         """Futures pending at the deadline are cancelled before teardown."""
         svc, _ = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
+        pool = svc._executor_pool = MagicMock()
         update_global(svc, shutdown_timeout_seconds=1)
 
         future: Future[None] = Future()
@@ -1068,9 +1078,9 @@ class TestStartStop:
             svc.stop()
 
         assert cancelled_at_teardown == [True]
-        svc._executor_pool.shutdown.assert_called_once_with(
-            wait=False, cancel_futures=True
-        )
+        pool.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+        # Detached, so later submissions find no pool.
+        assert svc._executor_pool is None
 
     def test_stop_with_scheduler(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
@@ -1169,6 +1179,35 @@ class TestStartStop:
             svc.start()
 
         mock_ds.return_value.stop.assert_called_once()
+
+    def test_stop_before_pool_created_shuts_pool_down(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """start() shuts down a pool that stop() ran too early to see.
+
+        stop() runs on another thread than start(); when it lands after
+        boot's shutdown check but before the pool exists, it has no pool
+        to shut down.
+        """
+        svc, _ = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+        pool = MagicMock()
+
+        def stop_then_create(**kwargs: object) -> MagicMock:
+            svc.stop()
+            return pool
+
+        with (
+            patch(
+                "airut.gateway.service.gateway.ThreadPoolExecutor",
+                side_effect=stop_then_create,
+            ),
+            patch("airut.gateway.service.gateway.Scheduler"),
+        ):
+            svc.start()
+
+        pool.shutdown.assert_called_once_with(wait=False)
+        assert svc._executor_pool is None
 
     def test_stop_during_boot_stops_scheduler_and_watcher(
         self, email_config, tmp_path: Path

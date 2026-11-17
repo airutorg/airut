@@ -23,6 +23,7 @@ import time
 import traceback
 import types
 import uuid
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from importlib.resources import files
@@ -220,7 +221,22 @@ class GatewayService:
         self.repo_root = repo_root
 
         # Shared resources
+        # Shared worker pool.  Every submission goes through
+        # submit_task(), which reads the pool and submits under
+        # ``_pool_lock``.  A pool is shut down only after _swap_pool()
+        # has replaced it (server reload) or detached it (stop()) under
+        # that lock, so a pool read under the lock is always live.  Boot
+        # assigns the first pool without the lock: replacing None cannot
+        # strand work, and a signal-driven stop() on the main thread
+        # must never find the lock held by boot.
+        #
+        # ``_pool_lock`` is a leaf: nothing else is acquired while it is
+        # held (only the executor's internal locks).  The reload takes it
+        # nested inside ``_reload_lock``.  The main thread takes it only
+        # in stop() and the boot re-stop path, after ``_stopped`` is set,
+        # so a nested stop() from a signal returns before reaching it.
         self._executor_pool: ThreadPoolExecutor | None = None
+        self._pool_lock = threading.Lock()
         self._pending_futures: set[Future[None]] = set()
         self._futures_lock = threading.Lock()
 
@@ -239,6 +255,7 @@ class GatewayService:
         #
         # Lock ordering invariant (nested acquisition):
         #   _reload_lock → _pending_messages_lock → tracker._lock
+        #   _reload_lock → _pool_lock
         #
         # ``_pending_messages_lock`` and the tracker's internal
         # ``_lock`` must NEVER be held at the same time.  Code that
@@ -399,8 +416,9 @@ class GatewayService:
                 self._scheduler.stop()
             for repo_handler in self.repo_handlers.values():
                 repo_handler.stop()
-            if self._executor_pool:
-                self._executor_pool.shutdown(wait=False)
+            pool = self._swap_pool(None)
+            if pool:
+                pool.shutdown(wait=False)
             if self.dashboard:
                 self.dashboard.stop()
             return
@@ -685,9 +703,11 @@ class GatewayService:
             # Shutdown thread pool with timeout
             if self._executor_pool:
                 self._wait_for_pending_executions()
+            pool = self._swap_pool(None)
+            if pool:
                 # cancel_futures: a task finishing after the drain's last
                 # snapshot may still have queued a follow-up.
-                self._executor_pool.shutdown(wait=False, cancel_futures=True)
+                pool.shutdown(wait=False, cancel_futures=True)
                 logger.info("Execution pool shut down")
 
             # Shutdown sandbox only after the grace period.  Tearing it down
@@ -703,6 +723,22 @@ class GatewayService:
             logger.info("Service stopped")
         finally:
             self._stop_done.set()
+
+    def _swap_pool(
+        self, new: ThreadPoolExecutor | None
+    ) -> ThreadPoolExecutor | None:
+        """Install ``new`` as the executor pool under ``_pool_lock``.
+
+        Once this returns, no submission can reach the old pool, so the
+        caller may shut it down.  ``None`` detaches the pool: later
+        submissions find none.
+
+        Returns:
+            The previous pool, for the caller to shut down.
+        """
+        with self._pool_lock:
+            old, self._executor_pool = self._executor_pool, new
+        return old
 
     def _wait_for_pending_executions(self) -> None:
         """Wait for pending executions until none remain or time runs out.
@@ -781,7 +817,8 @@ class GatewayService:
         at a time).
 
         Lock ordering:
-        ``_reload_lock`` → ``_pending_messages_lock`` → ``tracker._lock``
+        ``_reload_lock`` → ``_pending_messages_lock`` → ``tracker._lock``,
+        and ``_reload_lock`` → ``_pool_lock`` (server reload)
         """
         if self._config_source is None:
             return
@@ -1233,12 +1270,19 @@ class GatewayService:
             old_global.max_concurrent_executions
             != new_global.max_concurrent_executions
         ):
-            if self._executor_pool:
-                self._executor_pool.shutdown(wait=False)
-            self._executor_pool = ThreadPoolExecutor(
-                max_workers=new_global.max_concurrent_executions,
-                thread_name_prefix="ClaudeWorker",
+            old_pool = self._swap_pool(
+                ThreadPoolExecutor(
+                    max_workers=new_global.max_concurrent_executions,
+                    thread_name_prefix="ClaudeWorker",
+                )
             )
+            if old_pool:
+                # Work submitted just before the swap is still queued on
+                # the old pool.  Its workers finish that queue, so
+                # concurrency can briefly exceed the new limit.  Never
+                # pass cancel_futures here: a cancelled run would leave
+                # its tracker task active forever.
+                old_pool.shutdown(wait=False)
             logger.info(
                 "Recreated execution pool with %d workers",
                 new_global.max_concurrent_executions,
@@ -1389,12 +1433,9 @@ class GatewayService:
             adapter: The originating channel adapter.
 
         Returns:
-            True if message was submitted, False if pool not ready.
+            True if message was submitted, False if the executor pool
+            is not running.
         """
-        if not self._executor_pool:
-            logger.error("Executor pool not initialized")
-            return False
-
         task_id = uuid.uuid4().hex[:12]
         repo_id = repo_handler.config.repo_id
         # Use display_title from RawMessage for immediate tracker display;
@@ -1410,19 +1451,70 @@ class GatewayService:
             repo_id=repo_id,
         )
 
-        future = self._executor_pool.submit(
+        future = self.submit_task(
+            task_id,
             self._process_message_worker,
             raw_message,
             task_id,
             repo_handler,
             adapter,
         )
+        return future is not None
+
+    def submit_task[**P](
+        self,
+        task_id: str,
+        fn: Callable[P, None],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> Future[None] | None:
+        """Run a tracked task's work on the shared executor pool.
+
+        Reads the pool and submits under ``_pool_lock``, the lock that
+        ``_swap_pool()`` holds when a server reload replaces the pool or
+        stop() detaches it, so work never lands on a pool that has been
+        shut down.  The future is tracked
+        for the shutdown drain.
+
+        If the pool is not running (not created yet, or detached by
+        ``stop()``), the task is completed as ``INTERNAL_ERROR`` rather
+        than left active: an active task blocks deferred config
+        reloads.
+
+        Args:
+            task_id: Tracker task the work belongs to.
+            fn: Worker function.
+            *args: Positional arguments for ``fn``.
+            **kwargs: Keyword arguments for ``fn``.
+
+        Returns:
+            The submitted future, or None if the pool is not running.
+        """
+        future: Future[None] | None = None
+        with self._pool_lock:
+            pool = self._executor_pool
+            if pool is not None:
+                future = pool.submit(fn, *args, **kwargs)
+
+        if future is None:
+            logger.error(
+                "Executor pool not running, task %s not started", task_id
+            )
+            # complete_task() does not accept QUEUED tasks; for tasks
+            # already past QUEUED this is a no-op.
+            self.tracker.set_authenticating(task_id)
+            self.tracker.complete_task(
+                task_id,
+                CompletionReason.INTERNAL_ERROR,
+                "executor pool not running",
+            )
+            return None
 
         with self._futures_lock:
             self._pending_futures.add(future)
-
         future.add_done_callback(self._on_future_complete)
-        return True
+        return future
 
     def _on_future_complete(self, future: Future[None]) -> None:
         """Callback when a future completes."""
@@ -1601,39 +1693,18 @@ class GatewayService:
             if pending is None:
                 return
 
-        future: Future[None] | None = None
-        if self._executor_pool:
-            try:
-                future = self._executor_pool.submit(
-                    self._process_pending_message,
-                    pending,
-                )
-            except RuntimeError:
-                # Pool already shut down: the gateway is stopping and
-                # this task outlived the shutdown grace period.
-                if not self._stopped:
-                    raise
-        if future is None:
-            logger.error(
-                "Cannot drain pending message for %s: executor pool "
-                "not running",
-                conv_id,
-            )
-            self.tracker.complete_task(
-                pending.task_id,
-                CompletionReason.INTERNAL_ERROR,
-                "executor pool shut down",
-            )
-            return
-
-        logger.info(
-            "Draining pending message for conversation %s (task %s)",
-            conv_id,
-            pending.task_id,
+        # The pool is not running once the gateway is stopping and this
+        # task outlived the shutdown grace period; submit_task() then
+        # completes the pending task.
+        future = self.submit_task(
+            pending.task_id, self._process_pending_message, pending
         )
-        with self._futures_lock:
-            self._pending_futures.add(future)
-        future.add_done_callback(self._on_future_complete)
+        if future is not None:
+            logger.info(
+                "Draining pending message for conversation %s (task %s)",
+                conv_id,
+                pending.task_id,
+            )
 
     def _execute_and_complete(
         self,

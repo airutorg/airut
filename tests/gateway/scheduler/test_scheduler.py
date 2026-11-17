@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -43,13 +43,23 @@ def _make_schedule_config(
 
 
 def _make_service() -> MagicMock:
-    """Create a mock GatewayService."""
+    """Create a mock GatewayService whose submit_task runs on its pool.
+
+    ``submit_task`` returns None, as the real one does, when the pool
+    is not running.
+    """
     svc = MagicMock()
     svc.repo_handlers = {}
-    svc._executor_pool = MagicMock()
-    svc._futures_lock = threading.Lock()
-    svc._pending_futures = set()
+    svc.pool = MagicMock()
     svc.tracker = MagicMock()
+
+    def submit_task(
+        task_id: str, fn: Callable[..., None], /, *args: object
+    ) -> Future[None] | None:
+        pool = svc.pool
+        return None if pool is None else pool.submit(fn, *args)
+
+    svc.submit_task.side_effect = submit_task
     return svc
 
 
@@ -214,7 +224,7 @@ class TestSchedulerDispatch:
     def test_tick_dispatches_due_schedules(self) -> None:
         svc = _make_service()
         future = MagicMock()
-        svc._executor_pool.submit.return_value = future
+        svc.pool.submit.return_value = future
 
         scheduler = Scheduler(svc)
         # Create a schedule that fires immediately
@@ -236,8 +246,9 @@ class TestSchedulerDispatch:
 
         svc.tracker.add_task.assert_called_once()
         svc.tracker.set_authenticating.assert_called_once()
-        svc._executor_pool.submit.assert_called_once()
-        assert future in svc._pending_futures
+        svc.pool.submit.assert_called_once()
+        task_id = svc.tracker.add_task.call_args[0][0]
+        assert svc.submit_task.call_args[0][0] == task_id
 
     def test_tick_skips_future_schedules(self) -> None:
         svc = _make_service()
@@ -255,23 +266,23 @@ class TestSchedulerDispatch:
         scheduler._schedules = {"test-repo": {"daily": resolved}}
 
         scheduler._tick()
-        svc._executor_pool.submit.assert_not_called()
+        svc.submit_task.assert_not_called()
 
-    def test_dispatch_no_executor_pool(self) -> None:
+    def test_dispatch_not_submitted_is_not_tracked(self) -> None:
+        """A run the pool did not accept does not block later fires.
+
+        Completing its tracker task is submit_task()'s job, covered with
+        a real tracker in test_config_reload.py.
+        """
         svc = _make_service()
-        svc._executor_pool = None
+        svc.pool = None
+        svc.repo_handlers = {"test-repo": MagicMock()}
 
         scheduler = Scheduler(svc)
-        resolved = _ResolvedSchedule(
-            repo_id="test-repo",
-            name="daily",
-            config=_make_schedule_config(),
-            cron=CronExpression("* * * * *"),
-            tz=ZoneInfo("UTC"),
-            next_fire=datetime.now(tz=UTC),
-        )
-        scheduler._dispatch(resolved)
-        # Should not raise, just log error
+        scheduler._dispatch(_make_resolved("daily"))
+
+        svc.submit_task.assert_called_once()
+        assert scheduler._dispatched == {}
 
     def test_dispatch_no_handler(self) -> None:
         svc = _make_service()
@@ -286,7 +297,7 @@ class TestSchedulerDispatch:
             next_fire=datetime.now(tz=UTC),
         )
         scheduler._dispatch(resolved)
-        svc._executor_pool.submit.assert_not_called()
+        svc.submit_task.assert_not_called()
 
     def test_compute_sleep_empty(self) -> None:
         svc = _make_service()
@@ -365,7 +376,7 @@ class _Busy:
 def busy() -> Iterator[_Busy]:
     svc = _make_service()
     pool = ThreadPoolExecutor(max_workers=1)
-    svc._executor_pool = pool
+    svc.pool = pool
     svc.repo_handlers = {"test-repo": MagicMock()}
     state = _Busy(svc, pool, Scheduler(svc), threading.Event())
     try:
@@ -452,7 +463,7 @@ class TestSchedulerQueueBound:
             assert busy.scheduler._dispatched == {}
 
             busy.pool = ThreadPoolExecutor(max_workers=1)
-            busy.svc._executor_pool = busy.pool
+            busy.svc.pool = busy.pool
             busy.scheduler._dispatch(sched)
 
         assert busy.svc.tracker.add_task.call_count == 2
@@ -515,7 +526,7 @@ class TestSchedulerExceptionPaths:
         """RuntimeError from next_fire_time is caught gracefully."""
         svc = _make_service()
         future = MagicMock()
-        svc._executor_pool.submit.return_value = future
+        svc.pool.submit.return_value = future
         handler = MagicMock()
         svc.repo_handlers = {"test": handler}
 
@@ -539,7 +550,7 @@ class TestSchedulerExceptionPaths:
         scheduler._tick()
 
         # Dispatch still happened
-        svc._executor_pool.submit.assert_called_once()
+        svc.submit_task.assert_called_once()
 
 
 class TestLocalTimezone:

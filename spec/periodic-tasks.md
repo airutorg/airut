@@ -202,7 +202,9 @@ The shutdown event interrupts the sleep for clean exit.
 The scheduler submits `execute_scheduled_task` to the gateway's shared
 `ThreadPoolExecutor`. Scheduled tasks share the `max_concurrent_executions`
 limit with interactive tasks. If all workers are busy, the scheduled task queues
-until a worker is free.
+until a worker is free. If the pool is not running, the run's dashboard task is
+completed as `INTERNAL_ERROR` (see
+[gateway-architecture.md](gateway-architecture.md#thread-pool-architecture)).
 
 **At most one queued run per schedule.** When a schedule fires while its
 previous run is still queued (submitted, but not yet picked up by a worker), the

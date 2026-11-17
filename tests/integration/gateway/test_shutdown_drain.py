@@ -72,9 +72,10 @@ class TestSubmitMessageBeforePool:
     ) -> None:
         """submit_message returns False when pool is not initialized.
 
-        Validates the guard clause in submit_message() that checks
-        ``if not self._executor_pool``.
+        submit_task() finds no pool and completes the message's task as
+        INTERNAL_ERROR instead of leaving it active.
         """
+        from airut.dashboard.tracker import CompletionReason, TaskStatus
         from airut.gateway.channel import RawMessage
 
         service = integration_env.create_service()
@@ -91,6 +92,10 @@ class TestSubmitMessageBeforePool:
         adapter = repo_handler.adapters["email"]
         result = service.submit_message(raw, repo_handler, adapter)
         assert result is False
+
+        (task,) = service.tracker.get_all_tasks()
+        assert task.status is TaskStatus.COMPLETED
+        assert task.completion_reason is CompletionReason.INTERNAL_ERROR
 
 
 class TestShutdownWithActiveTask:
@@ -159,7 +164,7 @@ def sync_between_events(event_num):
 
         # After shutdown, verify service state
         assert service._stopped is True
-        assert service._executor_pool is not None  # Pool was created
+        assert service._executor_pool is None  # Detached by stop()
         # Pool shutdown was called
         # All tracking should be consistent
 
@@ -278,9 +283,8 @@ class TestDrainAfterPoolShutdown:
     ) -> None:
         """_drain_pending marks task as INTERNAL_ERROR when pool is gone.
 
-        Validates the guard clause in _drain_pending() that checks
-        ``if not self._executor_pool`` and completes the pending task
-        with INTERNAL_ERROR.
+        submit_task() finds no pool and completes the pending task with
+        INTERNAL_ERROR instead of leaving it PENDING.
         """
         from airut.gateway.service.gateway import PendingMessage
 

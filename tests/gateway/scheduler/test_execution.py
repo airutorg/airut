@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -70,9 +69,6 @@ def _make_sandbox_result(
 def _make_service() -> MagicMock:
     svc = MagicMock()
     svc.tracker = MagicMock()
-    svc._executor_pool = MagicMock()
-    svc._futures_lock = threading.Lock()
-    svc._pending_futures = set()
     return svc
 
 
