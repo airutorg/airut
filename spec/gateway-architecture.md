@@ -882,6 +882,14 @@ thread pool.
   gateway process alone (as with the systemd unit's `KillMode=mixed`); Ctrl-C in
   a terminal signals the whole process group, including the `podman run`
   clients, which forward it to the task containers.
+- **Signal handling**: The `SIGINT`/`SIGTERM` handler calls `stop()` on the main
+  thread, as does `main()`'s cleanup. A signal handler can run while the main
+  thread holds a lock, and the locks are not re-entrant, so main-thread code
+  outside `stop()` must not hold, or `Event.wait()` on, anything `stop()`
+  acquires. `stop()` records its entry before taking any lock, so a signal that
+  lands inside `stop()` returns at once. After boot, the main thread idles by
+  acquiring a plain lock that `stop()` releases, rather than waiting on the
+  shutdown event, whose internal lock `stop()` takes to set it.
 - **Submission**: Every task's work (incoming message, drained follow-up,
   scheduled run) goes through `GatewayService.submit_task()`. It reads and
   submits to the pool under the lock that a server reload holds while it

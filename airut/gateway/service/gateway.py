@@ -198,6 +198,8 @@ class GatewayService:
         self.config = config
         self.global_config = config.global_config
         self._running = True
+        # Set on entry to stop(), before it takes any lock (see stop()).
+        self._stop_entered = False
         self._stopped = False
         # Set once stop() has finished (or failed) stopping components.
         self._stop_done = threading.Event()
@@ -242,6 +244,15 @@ class GatewayService:
 
         # Shutdown event for interruptible sleeps in background threads
         self._shutdown_event = threading.Event()
+        # Held until stop() releases it; start()'s main thread idles by
+        # acquiring it.  Not _shutdown_event.wait(): the SIGINT/SIGTERM
+        # handler runs stop() on the main thread, and stop() sets the
+        # event, which takes the event's internal lock.  wait() holds
+        # that lock for a moment as it begins, so a signal landing then
+        # would deadlock.  A thread blocked acquiring a plain lock holds
+        # no lock, and the handler runs inside acquire().
+        self._shutdown_latch = threading.Lock()
+        self._shutdown_latch.acquire()
 
         # Per-conversation locks to prevent parallel processing
         self._conversation_locks: dict[str, threading.Lock] = {}
@@ -269,10 +280,15 @@ class GatewayService:
         # ``_check_pending_repo_reload`` and
         # ``_check_pending_server_reload`` (worker threads wait briefly
         # for any in-progress reload to finish) and in ``stop()``.
-        # ``stop()`` runs in the main thread's signal handler and takes
-        # it alone, never nested; the main thread must not hold
+        # ``stop()`` runs on the main thread (signal handler and main()'s
+        # finally) and takes it alone, never nested.  A signal arriving
+        # while stop() holds it re-enters stop(), which returns before
+        # touching the lock.  The main thread must not hold
         # ``_reload_lock`` anywhere else, as the lock is not re-entrant
-        # and a signal arriving while it is held would deadlock.
+        # and a signal arriving while it is held would deadlock.  More
+        # generally, main-thread code outside stop() must not hold, or
+        # Event.wait() on, anything stop() acquires; that is why the main
+        # thread idles on ``_shutdown_latch`` (see above).
         self._pending_messages: dict[str, PendingMessage] = {}
         self._pending_messages_lock = threading.Lock()
 
@@ -423,9 +439,9 @@ class GatewayService:
                 self.dashboard.stop()
             return
 
-        # Block main thread until shutdown
+        # Block main thread until stop() releases the latch
         try:
-            self._shutdown_event.wait()
+            self._shutdown_latch.acquire()
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
 
@@ -673,11 +689,24 @@ class GatewayService:
 
     def stop(self) -> None:
         """Stop the service gracefully."""
+        # stop() runs on the main thread, in the SIGINT/SIGTERM handler
+        # and in main()'s finally block.  A signal arriving while it holds
+        # ``_reload_lock`` below runs stop() again on that same thread,
+        # and blocking on the non-reentrant lock there would deadlock.
+        # Flag entry before taking any lock so the nested call returns.
+        # A signal landing before the flag is set comes before this
+        # thread takes the lock, so the nested call can take it.
+        if self._stop_entered:
+            return
+        self._stop_entered = True
+
         # Reloads return early once ``_stopped`` is set, so a deferred
         # reload applied by a task finishing during the drain cannot
         # restart listeners, the pool or the dashboard.  Setting it
         # under the reload lock makes stop() wait for a reload that has
-        # already passed that check.
+        # already passed that check.  The check here catches a call
+        # from another thread, or one whose signal-driven nested call
+        # already stopped the service after its entry check.
         with self._reload_lock:
             if self._stopped:
                 return
@@ -685,8 +714,7 @@ class GatewayService:
 
         try:
             logger.info("Stopping gateway service...")
-            self._running = False
-            self._shutdown_event.set()
+            self._signal_shutdown()
 
             # Stop config watcher before listeners
             if self._watcher:
@@ -723,6 +751,16 @@ class GatewayService:
             logger.info("Service stopped")
         finally:
             self._stop_done.set()
+
+    def _signal_shutdown(self) -> None:
+        """Tell boot, background threads and the idle main thread to stop.
+
+        Called once, by the stop() call that sets ``_stopped``: the
+        latch must be released exactly once.
+        """
+        self._running = False
+        self._shutdown_event.set()
+        self._shutdown_latch.release()
 
     def _swap_pool(
         self, new: ThreadPoolExecutor | None

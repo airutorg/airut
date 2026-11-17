@@ -5,7 +5,6 @@
 
 """Shared fixtures for gateway service tests."""
 
-import threading
 from collections.abc import Generator, Iterable
 from concurrent.futures import Future
 from contextlib import contextmanager
@@ -24,18 +23,17 @@ from airut.gateway.service.repo_handler import RepoHandler
 from airut.sandbox.types import ResourceLimits
 
 
-class InterruptEvent(threading.Event):
-    """Event whose bare ``wait()`` raises ``KeyboardInterrupt``.
+def interrupt_idle(svc: GatewayService) -> None:
+    """Make ``GatewayService.start()`` exit its idle wait at once.
 
-    Useful for tests that need to exit the ``shutdown_event.wait()``
-    call in ``GatewayService.start()`` without affecting other threads
-    that call ``wait(timeout=N)``.
+    The main thread idles by acquiring ``_shutdown_latch`` once boot
+    completes; this makes that acquire raise ``KeyboardInterrupt``,
+    which start() handles, without setting the shutdown event that
+    boot and background threads watch.
     """
-
-    def wait(self, timeout=None):
-        if timeout is None:
-            raise KeyboardInterrupt
-        return super().wait(timeout)
+    latch = MagicMock()
+    latch.acquire.side_effect = KeyboardInterrupt
+    svc._shutdown_latch = latch
 
 
 @contextmanager

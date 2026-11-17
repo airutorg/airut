@@ -21,8 +21,8 @@ from airut.gateway.service import GatewayService, main
 from airut.gateway.service.gateway import PendingMessage
 
 from .conftest import (
-    InterruptEvent,
     expire_shutdown_wait,
+    interrupt_idle,
     make_message,
     make_service,
     update_global,
@@ -928,14 +928,118 @@ class TestProcessPendingMessage:
 
 
 class TestStartStop:
+    def test_signal_while_stop_holds_reload_lock(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """A signal landing inside stop()'s locked section cannot re-enter.
+
+        stop() runs on the main thread, in the SIGINT/SIGTERM handler and
+        in main()'s finally block.  A signal arriving while it holds the
+        non-reentrant ``_reload_lock`` runs stop() again on that same
+        thread; blocking on the lock there would deadlock.
+        """
+        svc, _ = make_service(email_config, tmp_path)
+        lock = threading.Lock()
+        signalled = False
+
+        class SignalWhileHeld:
+            def __enter__(self) -> None:
+                nonlocal signalled
+                # Acquiring a lock this thread already holds would hang.
+                assert not lock.locked(), "stop() re-entered the lock"
+                lock.acquire()
+                if not signalled:
+                    signalled = True
+                    svc.stop()  # The signal handler runs here.
+
+            def __exit__(self, *exc: object) -> None:
+                lock.release()
+
+        with patch.object(svc, "_reload_lock", SignalWhileHeld()):
+            svc.stop()
+
+        assert signalled
+        assert svc._stopped
+        svc.sandbox.shutdown.assert_called_once()
+
+    def test_signal_while_main_thread_idles(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """The shutdown signal can land as start() begins to idle.
+
+        The handler runs stop() on the main thread, and stop() sets the
+        shutdown event, which takes the event's internal lock.
+        ``Event.wait()`` holds that lock for a moment as it begins, so
+        the main thread must not idle in it.
+        """
+        svc, _ = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+        main_thread = threading.current_thread()
+
+        class SignalDuringWait(threading.Event):
+            in_wait = False
+
+            def wait(self, timeout: float | None = None) -> bool:
+                if (
+                    timeout is None
+                    and threading.current_thread() is main_thread
+                ):
+                    # Event.wait() holds the event's lock here.
+                    self.in_wait = True
+                    try:
+                        svc.stop()  # The signal handler runs here.
+                    finally:
+                        self.in_wait = False
+                return super().wait(timeout)
+
+            def set(self) -> None:
+                assert not self.in_wait, "set() would block on wait()'s lock"
+                super().set()
+
+        svc._shutdown_event = SignalDuringWait()
+        latch = svc._shutdown_latch
+
+        def signal_during_acquire() -> bool:
+            svc.stop()  # The signal handler runs inside acquire().
+            # Non-blocking: a regression must fail, not hang.
+            acquired = latch.acquire(blocking=False)
+            assert acquired, "stop() did not release the latch"
+            return acquired
+
+        svc._shutdown_latch = MagicMock(
+            acquire=signal_during_acquire, release=latch.release
+        )
+
+        svc.start()
+
+        assert svc._shutdown_event.is_set()
+        svc.sandbox.shutdown.assert_called_once()
+
+    def test_stop_already_stopped_past_entry_check(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """stop() returns if the service was stopped after its entry check.
+
+        Simulates a call that has passed the entry check when another
+        call has already stopped the service: two threads can both pass
+        the check, and a signal can land between a call's check and its
+        flag.  The call that takes the reload lock second sees
+        ``_stopped`` and does nothing.
+        """
+        svc, _ = make_service(email_config, tmp_path)
+        svc._stopped = True
+
+        svc.stop()
+
+        svc.sandbox.shutdown.assert_not_called()
+
     def test_start_calls_components(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
         # Make listener.start stop the service immediately
         def fake_start(**kwargs):
-            svc._running = False
-            svc._shutdown_event.set()
+            svc._signal_shutdown()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -951,8 +1055,7 @@ class TestStartStop:
         )
 
         def fake_start(**kwargs):
-            svc._running = False
-            svc._shutdown_event.set()
+            svc._signal_shutdown()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -1105,17 +1208,17 @@ class TestStartStop:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        svc._shutdown_event = InterruptEvent()
+        interrupt_idle(svc)
 
         svc.start()  # Should handle KeyboardInterrupt gracefully
 
     def test_start_main_loop_wakes_on_shutdown_event(
         self, email_config, tmp_path: Path
     ) -> None:
-        """Main loop uses _shutdown_event.wait() for interruptible sleep.
+        """stop() from another thread wakes the idle main thread at once.
 
-        Verifies that calling stop() wakes the main loop immediately
-        instead of blocking for the full sleep interval.
+        Verifies that the main thread blocks on the shutdown latch
+        rather than sleeping in intervals.
         """
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
@@ -1448,10 +1551,9 @@ class TestStartRepoInitFailure:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        # Use InterruptEvent so _boot() completes without seeing
-        # shutdown_event.is_set() (InterruptEvent only fires on bare
-        # .wait() calls, not on .is_set()).
-        svc._shutdown_event = InterruptEvent()
+        # Exit the idle wait without setting the shutdown event, so
+        # _boot() completes without seeing shutdown_event.is_set().
+        interrupt_idle(svc)
 
         # Add a second mock handler that will fail
         mock_handler2 = MagicMock(spec=RepoHandler)
@@ -1489,8 +1591,7 @@ class TestBootState:
         update_global(svc, dashboard_enabled=False)
 
         def fake_start(**kwargs):
-            svc._running = False
-            svc._shutdown_event.set()
+            svc._signal_shutdown()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -1538,7 +1639,7 @@ class TestBootState:
             "Connection refused"
         )
 
-        svc._shutdown_event = InterruptEvent()
+        interrupt_idle(svc)
 
         svc.start(resilient=True)
 
@@ -1584,8 +1685,7 @@ class TestBootState:
             nonlocal dashboard_started_during_boot
             # Dashboard should already be started when _boot runs
             dashboard_started_during_boot = svc.dashboard is not None
-            svc._running = False
-            svc._shutdown_event.set()
+            svc._signal_shutdown()
             return original_boot()
 
         with (
@@ -2702,8 +2802,7 @@ class TestChannelHealth:
         started = threading.Event()
 
         def fake_start(**kwargs):
-            svc._running = False
-            svc._shutdown_event.set()
+            svc._signal_shutdown()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -2766,7 +2865,7 @@ class TestChannelHealth:
         from airut.gateway.channel import ChannelHealth, ChannelStatus
 
         svc, handler = make_service(email_config, tmp_path)
-        svc._shutdown_event = InterruptEvent()
+        interrupt_idle(svc)
         handler.adapters["email"].listener.status = ChannelStatus(
             health=ChannelHealth.DEGRADED,
             message="IMAP reconnecting (attempt 1): Connection refused",
