@@ -18,7 +18,6 @@ Tests cover:
 import os
 import threading
 import time
-from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -32,9 +31,9 @@ from airut.dashboard.tracker import (
 from airut.dashboard.versioned import VersionClock
 from airut.gateway.channel import AuthenticationError, ParsedMessage, RawMessage
 from airut.gateway.config import RepoServerConfig
+from airut.gateway.service.worker_pool import WorkerPool
 
 from .service.conftest import (
-    expire_shutdown_wait,
     interrupt_idle,
     make_message,
     make_service,
@@ -614,9 +613,7 @@ class TestSubmitMessageEdgeCases:
     ) -> None:
         """submit_message registers a task in the tracker."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        mock_future = MagicMock()
-        svc._executor_pool.submit.return_value = mock_future
+        svc._pool = MagicMock(spec=WorkerPool)
 
         msg = make_message()
         result = svc.submit_message(msg, handler, handler.adapters["email"])
@@ -626,18 +623,6 @@ class TestSubmitMessageEdgeCases:
         tasks = svc.tracker.get_all_tasks()
         assert len(tasks) == 1
         assert tasks[0].display_title == "Test"
-
-    def test_submit_message_tracks_future(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        """Submitted future is tracked in _pending_futures."""
-        svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        mock_future = MagicMock()
-        svc._executor_pool.submit.return_value = mock_future
-
-        svc.submit_message(make_message(), handler, handler.adapters["email"])
-        assert mock_future in svc._pending_futures
 
 
 # ===================================================================
@@ -659,29 +644,11 @@ class TestShutdownEdgeCases:
     ) -> None:
         """Stop with executor but no pending futures."""
         svc, _ = make_service(email_config, tmp_path)
-        pool = svc._executor_pool = MagicMock()
+        svc._pool.start(1)
         with patch("concurrent.futures.wait") as mock_wait:
             svc.stop()
         mock_wait.assert_not_called()
-        pool.shutdown.assert_called_once()
-
-    def test_stop_cancels_timed_out_futures(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        """Futures not done after timeout get cancelled."""
-        svc, _ = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        update_global(svc, shutdown_timeout_seconds=1)
-
-        f1: Future[None] = Future()
-        f1.set_result(None)
-        f2: Future[None] = Future()
-        svc._pending_futures = {f1, f2}
-
-        with expire_shutdown_wait():
-            svc.stop()
-
-        assert f2.cancelled()
+        assert not svc._pool.running
 
     def test_stop_shuts_down_sandbox(
         self, email_config, tmp_path: Path

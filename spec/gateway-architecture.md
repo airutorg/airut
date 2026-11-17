@@ -131,7 +131,9 @@ a `-N` suffix instead.
 
 **Protocol-agnostic core** (`gateway/service/`):
 
-- **GatewayService** — Orchestration, thread pool, lifecycle management
+- **GatewayService** — Orchestration, lifecycle management
+- **WorkerPool** — Shared executor for message processing and scheduled runs:
+  submission, live resize on server reload, and the shutdown drain
 - **RepoHandler** — Per-repo state: channel adapters dict, conversation manager.
   Delegates listener lifecycle to each adapter's `listener.start()` /
   `listener.stop()`. Has zero channel-specific imports. The `adapters` dict is
@@ -891,13 +893,13 @@ thread pool.
   acquiring a plain lock that `stop()` releases, rather than waiting on the
   shutdown event, whose internal lock `stop()` takes to set it.
 - **Submission**: Every task's work (incoming message, drained follow-up,
-  scheduled run) goes through `GatewayService.submit_task()`. It reads and
-  submits to the pool under the lock that a server reload holds while it
-  replaces the pool and `stop()` holds while it detaches it, so work never lands
-  on a pool that has been shut down. If the pool is not running (not created
-  yet, or detached by `stop()`), the tracker task is completed as
-  `INTERNAL_ERROR` rather than left active, since an active task blocks deferred
-  config reloads.
+  scheduled run) goes through `GatewayService.submit_task()`, which submits to
+  the `WorkerPool`. The pool owns the executor, the futures tracked for the
+  shutdown drain, and the lock that serializes submissions with replacing the
+  executor (server reload) or detaching it (`stop()`), so work never lands on an
+  executor that has been shut down. If the pool is not running (not started yet,
+  or shut down by `stop()`), the tracker task is completed as `INTERNAL_ERROR`
+  rather than left active, since an active task blocks deferred config reloads.
 
 ### Concurrency Safety
 

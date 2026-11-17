@@ -14,6 +14,7 @@ The service has been modularized into the following components:
 - repo_handler: Per-repository handler (listener, auth, conversation mgmt)
 - message_processing: Message processing and Claude execution
 - usage_stats: Usage statistics extraction from Claude output
+- worker_pool: Shared worker pool for message processing and scheduled runs
 """
 
 from airut.gateway.service.gateway import (

@@ -5,23 +5,20 @@
 
 """Tests for gateway module (GatewayService orchestration)."""
 
-import concurrent.futures
 import os
 import threading
 import time
-from collections.abc import Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from airut.gateway.channel import ParsedMessage, TaskPhase
 from airut.gateway.service import GatewayService, main
 from airut.gateway.service.gateway import PendingMessage
+from airut.gateway.service.worker_pool import WorkerPool
 
 from .conftest import (
-    expire_shutdown_wait,
     interrupt_idle,
     make_message,
     make_service,
@@ -35,9 +32,9 @@ class TestGatewayServiceInit:
         svc, _ = make_service(email_config, tmp_path)
         assert svc._running is True
 
-    def test_init_no_executor_pool(self, email_config, tmp_path: Path) -> None:
+    def test_init_pool_not_running(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
-        assert svc._executor_pool is None
+        assert not svc._pool.running
 
     def test_init_repo_root_default(self, email_config) -> None:
         """When repo_root=None, auto-detect from __file__."""
@@ -117,14 +114,13 @@ class TestSubmitMessage:
             CompletionReason.INTERNAL_ERROR,
             "executor pool not running",
         )
-        assert not svc._pending_futures
 
     def test_after_stop(self, email_config, tmp_path: Path) -> None:
         """A message arriving after stop() completes its task."""
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        svc._pool.start(1)
         svc.stop()
 
         msg = make_message()
@@ -138,63 +134,28 @@ class TestSubmitMessage:
 
     def test_submits_successfully(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        mock_future = MagicMock()
-        svc._executor_pool.submit.return_value = mock_future
+        svc._pool = MagicMock(spec=WorkerPool)
 
         msg = make_message()
         adapter = handler.adapters["email"]
         result = svc.submit_message(msg, handler, adapter)
         assert result is True
-        assert mock_future in svc._pending_futures
+        task_id = svc.tracker.add_task.call_args[0][0]
+        svc._pool.submit.assert_called_once_with(
+            svc._process_message_worker, msg, task_id, handler, adapter
+        )
 
     def test_task_id_starts_with_new(
         self, email_config, tmp_path: Path
     ) -> None:
         svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        mock_future = MagicMock()
-        svc._executor_pool.submit.return_value = mock_future
+        svc._pool = MagicMock(spec=WorkerPool)
 
         msg = make_message()
         adapter = handler.adapters["email"]
         svc.submit_message(msg, handler, adapter)
         task_id = svc.tracker.add_task.call_args[0][0]
         assert len(task_id) == 12  # uuid4().hex[:12]
-
-
-class TestOnFutureComplete:
-    def test_removes_future(self, email_config, tmp_path: Path) -> None:
-        svc, _ = make_service(email_config, tmp_path)
-        future = MagicMock(spec=concurrent.futures.Future)
-        future.exception.return_value = None
-        svc._pending_futures.add(future)
-        svc._on_future_complete(future)
-        assert future not in svc._pending_futures
-
-    def test_logs_exception(self, email_config, tmp_path: Path) -> None:
-        svc, _ = make_service(email_config, tmp_path)
-        future = MagicMock(spec=concurrent.futures.Future)
-        future.exception.return_value = RuntimeError("boom")
-        svc._pending_futures.add(future)
-        svc._on_future_complete(future)
-
-    def test_handles_cancelled(self, email_config, tmp_path: Path) -> None:
-        svc, _ = make_service(email_config, tmp_path)
-        future = MagicMock(spec=concurrent.futures.Future)
-        future.exception.side_effect = concurrent.futures.CancelledError()
-        svc._pending_futures.add(future)
-        svc._on_future_complete(future)
-
-    def test_keeps_other_futures(self, email_config, tmp_path: Path) -> None:
-        svc, _ = make_service(email_config, tmp_path)
-        f1 = MagicMock(spec=concurrent.futures.Future)
-        f1.exception.return_value = None
-        f2 = MagicMock(spec=concurrent.futures.Future)
-        svc._pending_futures = {f1, f2}
-        svc._on_future_complete(f1)
-        assert f2 in svc._pending_futures
-        assert f1 not in svc._pending_futures
 
 
 class TestGetConversationLock:
@@ -712,10 +673,7 @@ class TestDrainPending:
     def test_submits_to_pool(self, email_config, tmp_path: Path) -> None:
         """_drain_pending with pending messages submits to executor pool."""
         svc, handler = make_service(email_config, tmp_path)
-        mock_pool = MagicMock()
-        mock_future = MagicMock()
-        mock_pool.submit.return_value = mock_future
-        svc._executor_pool = mock_pool
+        svc._pool = MagicMock(spec=WorkerPool)
 
         parsed = MagicMock(conversation_id="conv1")
         pending = PendingMessage(
@@ -728,10 +686,9 @@ class TestDrainPending:
 
         svc._drain_pending("conv1")
 
-        mock_pool.submit.assert_called_once_with(
+        svc._pool.submit.assert_called_once_with(
             svc._process_pending_message, pending
         )
-        assert mock_future in svc._pending_futures
         # Pending entry should be popped after draining
         assert "conv1" not in svc._pending_messages
 
@@ -742,7 +699,6 @@ class TestDrainPending:
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = None
 
         parsed = MagicMock(conversation_id="conv1")
         pending = PendingMessage(
@@ -773,7 +729,7 @@ class TestDrainPending:
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        svc._pool.start(1)
         svc.stop()
 
         parsed = MagicMock(conversation_id="conv1")
@@ -791,7 +747,6 @@ class TestDrainPending:
             CompletionReason.INTERNAL_ERROR,
             "executor pool not running",
         )
-        assert not svc._pending_futures
 
 
 class TestProcessPendingMessage:
@@ -1047,7 +1002,7 @@ class TestStartStop:
 
         handler.conversation_manager.mirror.update_mirror.assert_called_once()
         handler.adapters["email"].listener.start.assert_called_once()
-        assert svc._executor_pool is not None
+        assert svc._pool.running
 
     def test_start_with_dashboard(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(
@@ -1091,99 +1046,32 @@ class TestStartStop:
         terminated at the start of shutdown.
         """
         svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
+        svc._pool = MagicMock(spec=WorkerPool)
         update_global(svc, shutdown_timeout_seconds=5)
-
-        future: Future[None] = Future()
-        svc._pending_futures.add(future)
 
         events: list[str] = []
         listener = handler.adapters["email"].listener
         listener.stop.side_effect = lambda: events.append("listener_stop")
-        svc._executor_pool.shutdown.side_effect = lambda wait, cancel_futures: (
-            events.append("pool_shutdown")
+        svc._pool.drain.side_effect = lambda timeout: events.append("drain")
+        svc._pool.shutdown.side_effect = lambda **kw: events.append(
+            "pool_shutdown"
         )
         svc.sandbox.shutdown.side_effect = lambda: events.append(
             "sandbox_shutdown"
         )
 
-        def fake_wait(futures: Iterable[Future[None]], timeout: float) -> None:
-            events.append("wait")
-            future.set_result(None)
-
-        with patch("concurrent.futures.wait", side_effect=fake_wait):
-            svc.stop()
+        svc.stop()
 
         assert events == [
             "listener_stop",
-            "wait",
+            "drain",
             "pool_shutdown",
             "sandbox_shutdown",
         ]
-
-    def test_stop_waits_for_drained_follow_up(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        """A follow-up drained during the wait gets the rest of the grace.
-
-        A task finishing during the wait drains its conversation's
-        queued message into the pool; stop() must wait for that new
-        future too, but only until the original deadline.
-        """
-        svc, _ = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        update_global(svc, shutdown_timeout_seconds=5)
-
-        first: Future[None] = Future()
-        follow_up: Future[None] = Future()
-        svc._pending_futures.add(first)
-
-        clock = [100.0]
-        waits: list[tuple[set[Future[None]], float]] = []
-        sandbox_up_while_waiting: list[bool] = []
-
-        def fake_wait(futures: Iterable[Future[None]], timeout: float) -> None:
-            waits.append((set(futures), timeout))
-            sandbox_up_while_waiting.append(not svc.sandbox.shutdown.called)
-            if first in futures:
-                # The first task finishes 2s in, draining its follow-up.
-                clock[0] += 2
-                svc._pending_futures.add(follow_up)
-                first.set_result(None)
-            else:
-                follow_up.set_result(None)
-
-        with (
-            patch("time.monotonic", side_effect=lambda: clock[0]),
-            patch("concurrent.futures.wait", side_effect=fake_wait),
-        ):
-            svc.stop()
-
-        assert waits == [({first}, 5), ({follow_up}, 3)]
-        assert sandbox_up_while_waiting == [True, True]
-        svc.sandbox.shutdown.assert_called_once()
-
-    def test_stop_cancels_not_done(self, email_config, tmp_path: Path) -> None:
-        """Futures pending at the deadline are cancelled before teardown."""
-        svc, _ = make_service(email_config, tmp_path)
-        pool = svc._executor_pool = MagicMock()
-        update_global(svc, shutdown_timeout_seconds=1)
-
-        future: Future[None] = Future()
-        svc._pending_futures.add(future)
-
-        cancelled_at_teardown: list[bool] = []
-        svc.sandbox.shutdown.side_effect = lambda: cancelled_at_teardown.append(
-            future.cancelled()
-        )
-
-        with expire_shutdown_wait():
-            svc.stop()
-
-        assert cancelled_at_teardown == [True]
-        pool.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
-        # Detached, so later submissions find no pool.
-        assert svc._executor_pool is None
+        svc._pool.drain.assert_called_once_with(5)
+        # cancel_futures: a follow-up queued after the drain's last
+        # snapshot must not run.
+        svc._pool.shutdown.assert_called_once_with(cancel_futures=True)
 
     def test_stop_with_scheduler(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
@@ -1199,7 +1087,6 @@ class TestStartStop:
 
     def test_stop_no_pool(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
-        svc._executor_pool = None
         svc.stop()  # should not raise
 
     def test_start_keyboard_interrupt(
@@ -1294,23 +1181,28 @@ class TestStartStop:
         """
         svc, _ = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
-        pool = MagicMock()
+        real_start = svc._pool.start
 
-        def stop_then_create(**kwargs: object) -> MagicMock:
+        def stop_then_start(max_workers: int) -> None:
             svc.stop()
-            return pool
+            real_start(max_workers)
 
         with (
-            patch(
-                "airut.gateway.service.gateway.ThreadPoolExecutor",
-                side_effect=stop_then_create,
-            ),
+            patch.object(svc._pool, "start", side_effect=stop_then_start),
+            patch.object(
+                svc._pool, "shutdown", wraps=svc._pool.shutdown
+            ) as shutdown,
             patch("airut.gateway.service.gateway.Scheduler"),
         ):
             svc.start()
 
-        pool.shutdown.assert_called_once_with(wait=False)
-        assert svc._executor_pool is None
+        assert not svc._pool.running
+        # stop() cancels queued work after its drain; the re-stop path
+        # shuts the late pool down without cancelling.
+        assert shutdown.call_args_list == [
+            call(cancel_futures=True),
+            call(cancel_futures=False),
+        ]
 
     def test_stop_during_boot_stops_scheduler_and_watcher(
         self, email_config, tmp_path: Path

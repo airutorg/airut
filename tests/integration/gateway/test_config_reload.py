@@ -1098,8 +1098,7 @@ class TestServerScopeReload:
 
         with running_service(cf, integration_env) as service:
             # Verify pool has 1 worker
-            assert service._executor_pool is not None
-            assert service._executor_pool._max_workers == 1
+            assert service._pool.max_workers == 1
 
             # Change to 3
             gen = service._config_generation
@@ -1107,8 +1106,7 @@ class TestServerScopeReload:
             wait_for_reload(service, gen)
 
             # Pool should be recreated
-            assert service._executor_pool is not None
-            assert service._executor_pool._max_workers == 3
+            assert service._pool.max_workers == 3
 
             # Verify tasks still work
             conv_id = _send_and_complete(

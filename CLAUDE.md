@@ -314,7 +314,7 @@ airut/                        - Library code
     conversation.py         - ConversationManager (git checkout, state persistence)
     email/                  - Email channel implementation
     slack/                  - Slack channel implementation (Socket Mode)
-    service/                - Core orchestration (GatewayService, RepoHandler)
+    service/                - Core orchestration (GatewayService, RepoHandler, WorkerPool)
   gh/                       - GitHub API wrappers
   git_mirror.py             - Git mirror cache
   install_services.py       - Service installation logic

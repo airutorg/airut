@@ -253,14 +253,14 @@ Extends the existing invariant documented in `gateway.py`:
 _reload_lock
   ├→ _pending_messages_lock
   │    └→ tracker._lock
-  └→ _pool_lock
+  └→ WorkerPool._lock
 ```
 
-`_pool_lock` is a leaf: nothing else is acquired while holding it. The server
-reload takes it to swap in a new executor pool, and `stop()` (or the boot
-re-stop path in `start()`) takes it alone, after setting `_stopped`, to detach
-the pool. A pool is shut down only after it has been swapped out, outside the
-lock.
+`WorkerPool._lock` is a leaf: nothing else is acquired while holding it. The
+server reload takes it to swap in a new executor (`WorkerPool.resize()`), and
+`stop()` (or the boot re-stop path in `start()`) takes it alone, after setting
+`_stopped`, to detach the executor (`WorkerPool.shutdown()`). An executor is
+shut down only after it has been swapped out, outside the lock.
 
 The ordering applies to **nested acquisition** only — if you hold an outer lock,
 you may acquire an inner lock, but never the reverse.
@@ -300,13 +300,14 @@ there are no active tasks AND no pending messages in `_pending_messages`, so the
 thread pool can be safely recreated without losing queued work.
 
 The idle check is not atomic with new work arriving: a scheduler fire or an
-incoming message can add a task just after it passes. The pool is therefore
-replaced under the lock that `submit_task()` holds while submitting (see
+incoming message can add a task just after it passes. The executor is therefore
+replaced under the lock that `WorkerPool.submit()` holds while submitting (see
 [gateway-architecture.md](gateway-architecture.md#thread-pool-architecture)).
-Work submitted after the swap goes to the new pool. Work submitted just before
-it stays queued on the old pool, which is shut down without cancelling its queue
-and lets its workers finish it, so concurrency can briefly exceed the new limit.
-No work is ever submitted to a pool that has been shut down.
+Work submitted after the swap goes to the new executor. Work submitted just
+before it stays queued on the old executor, which is shut down without
+cancelling its queue and lets its workers finish it, so concurrency can briefly
+exceed the new limit. No work is ever submitted to an executor that has been
+shut down.
 
 ### Dashboard Integration
 

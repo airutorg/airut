@@ -164,7 +164,7 @@ def sync_between_events(event_num):
 
         # After shutdown, verify service state
         assert service._stopped is True
-        assert service._executor_pool is None  # Detached by stop()
+        assert not service._pool.running  # Shut down by stop()
         # Pool shutdown was called
         # All tracking should be consistent
 
@@ -322,7 +322,7 @@ class TestDrainAfterPoolShutdown:
         service._pending_messages[conv_id] = pending
 
         # Ensure pool is None (not started)
-        assert service._executor_pool is None
+        assert not service._pool.running
 
         # Call _drain_pending — should complete task as INTERNAL_ERROR
         service._drain_pending(conv_id)

@@ -5,9 +5,6 @@
 
 """Shared fixtures for gateway service tests."""
 
-from collections.abc import Generator, Iterable
-from concurrent.futures import Future
-from contextlib import contextmanager
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, cast
@@ -34,28 +31,6 @@ def interrupt_idle(svc: GatewayService) -> None:
     latch = MagicMock()
     latch.acquire.side_effect = KeyboardInterrupt
     svc._shutdown_latch = latch
-
-
-@contextmanager
-def expire_shutdown_wait() -> Generator[None]:
-    """Make ``GatewayService.stop()`` run out its drain deadline at once.
-
-    Each ``concurrent.futures.wait`` call times out without any future
-    completing and advances a fake monotonic clock by its timeout, so
-    the drain reaches its deadline without real waiting.  Both patches
-    are process-wide, so only use this while no other threads or event
-    loops rely on them.
-    """
-    clock = [0.0]
-
-    def fake_wait(futures: Iterable[Future[None]], timeout: float) -> None:
-        clock[0] += timeout
-
-    with (
-        patch("time.monotonic", side_effect=lambda: clock[0]),
-        patch("concurrent.futures.wait", side_effect=fake_wait),
-    ):
-        yield
 
 
 def make_message(

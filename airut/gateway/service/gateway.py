@@ -14,7 +14,6 @@ This module contains:
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import dataclasses
 import logging
 import signal
@@ -24,7 +23,7 @@ import traceback
 import types
 import uuid
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from importlib.resources import files
 from pathlib import Path
@@ -75,6 +74,7 @@ from airut.gateway.service.message_processing import (
     process_message,
 )
 from airut.gateway.service.repo_handler import RepoHandler
+from airut.gateway.service.worker_pool import WorkerPool
 from airut.logging import configure_logging
 from airut.sandbox import AgentTask, ClaudeBinaryCache, Sandbox, SandboxConfig
 from airut.version import GitVersionInfo, get_git_version_info
@@ -222,25 +222,13 @@ class GatewayService:
             repo_root = Path(__file__).parent.parent.parent.parent
         self.repo_root = repo_root
 
-        # Shared resources
         # Shared worker pool.  Every submission goes through
-        # submit_task(), which reads the pool and submits under
-        # ``_pool_lock``.  A pool is shut down only after _swap_pool()
-        # has replaced it (server reload) or detached it (stop()) under
-        # that lock, so a pool read under the lock is always live.  Boot
-        # assigns the first pool without the lock: replacing None cannot
-        # strand work, and a signal-driven stop() on the main thread
-        # must never find the lock held by boot.
-        #
-        # ``_pool_lock`` is a leaf: nothing else is acquired while it is
-        # held (only the executor's internal locks).  The reload takes it
-        # nested inside ``_reload_lock``.  The main thread takes it only
-        # in stop() and the boot re-stop path, after ``_stopped`` is set,
-        # so a nested stop() from a signal returns before reaching it.
-        self._executor_pool: ThreadPoolExecutor | None = None
-        self._pool_lock = threading.Lock()
-        self._pending_futures: set[Future[None]] = set()
-        self._futures_lock = threading.Lock()
+        # submit_task().  The pool's lock is a leaf; the server reload
+        # takes it nested inside ``_reload_lock`` (resize).  The main
+        # thread takes it only in stop() and the boot re-stop path,
+        # after ``_stopped`` is set, so a nested stop() from a signal
+        # returns before reaching it.
+        self._pool = WorkerPool()
 
         # Shutdown event for interruptible sleeps in background threads
         self._shutdown_event = threading.Event()
@@ -266,7 +254,7 @@ class GatewayService:
         #
         # Lock ordering invariant (nested acquisition):
         #   _reload_lock → _pending_messages_lock → tracker._lock
-        #   _reload_lock → _pool_lock
+        #   _reload_lock → WorkerPool._lock
         #
         # ``_pending_messages_lock`` and the tracker's internal
         # ``_lock`` must NEVER be held at the same time.  Code that
@@ -432,9 +420,7 @@ class GatewayService:
                 self._scheduler.stop()
             for repo_handler in self.repo_handlers.values():
                 repo_handler.stop()
-            pool = self._swap_pool(None)
-            if pool:
-                pool.shutdown(wait=False)
+            self._pool.shutdown(cancel_futures=False)
             if self.dashboard:
                 self.dashboard.stop()
             return
@@ -503,14 +489,7 @@ class GatewayService:
             return
 
         # Initialize shared thread pool
-        self._executor_pool = ThreadPoolExecutor(
-            max_workers=self.global_config.max_concurrent_executions,
-            thread_name_prefix="ClaudeWorker",
-        )
-        logger.info(
-            "Started execution pool with %d workers",
-            self.global_config.max_concurrent_executions,
-        )
+        self._pool.start(self.global_config.max_concurrent_executions)
 
         # Start garbage collector thread
         gc_thread = threading.Thread(
@@ -729,14 +708,10 @@ class GatewayService:
                 repo_handler.stop()
 
             # Shutdown thread pool with timeout
-            if self._executor_pool:
-                self._wait_for_pending_executions()
-            pool = self._swap_pool(None)
-            if pool:
-                # cancel_futures: a task finishing after the drain's last
-                # snapshot may still have queued a follow-up.
-                pool.shutdown(wait=False, cancel_futures=True)
-                logger.info("Execution pool shut down")
+            self._pool.drain(self.global_config.shutdown_timeout_seconds)
+            # cancel_futures: a task finishing after the drain's last
+            # snapshot may still have queued a follow-up.
+            self._pool.shutdown(cancel_futures=True)
 
             # Shutdown sandbox only after the grace period.  Tearing it down
             # removes every task's network and, with it, its container, so
@@ -761,66 +736,6 @@ class GatewayService:
         self._running = False
         self._shutdown_event.set()
         self._shutdown_latch.release()
-
-    def _swap_pool(
-        self, new: ThreadPoolExecutor | None
-    ) -> ThreadPoolExecutor | None:
-        """Install ``new`` as the executor pool under ``_pool_lock``.
-
-        Once this returns, no submission can reach the old pool, so the
-        caller may shut it down.  ``None`` detaches the pool: later
-        submissions find none.
-
-        Returns:
-            The previous pool, for the caller to shut down.
-        """
-        with self._pool_lock:
-            old, self._executor_pool = self._executor_pool, new
-        return old
-
-    def _wait_for_pending_executions(self) -> None:
-        """Wait for pending executions until none remain or time runs out.
-
-        Waits against a single ``shutdown_timeout_seconds`` deadline,
-        re-reading ``_pending_futures`` each round: a task finishing
-        during the wait may drain a queued follow-up message into the
-        pool, and that follow-up gets the rest of the grace period.
-        Futures still pending at the deadline are cancelled (which only
-        affects those not yet started).
-        """
-        timeout = self.global_config.shutdown_timeout_seconds
-        deadline = time.monotonic() + timeout
-        pending = self._undone_futures()
-        if not pending:
-            return
-        logger.info(
-            "Waiting for %d pending executions (timeout: %ds)...",
-            len(pending),
-            timeout,
-        )
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            concurrent.futures.wait(pending, timeout=remaining)
-            pending = self._undone_futures()
-            if not pending:
-                return
-
-        logger.warning(
-            "%d executions did not complete within timeout", len(pending)
-        )
-        for future in pending:
-            future.cancel()
-
-    def _undone_futures(self) -> set[Future[None]]:
-        """Snapshot pending futures that have not completed yet.
-
-        A completed future may still be in ``_pending_futures`` until
-        its done-callback runs.
-        """
-        with self._futures_lock:
-            return {f for f in self._pending_futures if not f.done()}
 
     # ------------------------------------------------------------------ #
     # Config Reload
@@ -856,7 +771,7 @@ class GatewayService:
 
         Lock ordering:
         ``_reload_lock`` → ``_pending_messages_lock`` → ``tracker._lock``,
-        and ``_reload_lock`` → ``_pool_lock`` (server reload)
+        and ``_reload_lock`` → ``WorkerPool._lock`` (server reload)
         """
         if self._config_source is None:
             return
@@ -1308,23 +1223,7 @@ class GatewayService:
             old_global.max_concurrent_executions
             != new_global.max_concurrent_executions
         ):
-            old_pool = self._swap_pool(
-                ThreadPoolExecutor(
-                    max_workers=new_global.max_concurrent_executions,
-                    thread_name_prefix="ClaudeWorker",
-                )
-            )
-            if old_pool:
-                # Work submitted just before the swap is still queued on
-                # the old pool.  Its workers finish that queue, so
-                # concurrency can briefly exceed the new limit.  Never
-                # pass cancel_futures here: a cancelled run would leave
-                # its tracker task active forever.
-                old_pool.shutdown(wait=False)
-            logger.info(
-                "Recreated execution pool with %d workers",
-                new_global.max_concurrent_executions,
-            )
+            self._pool.resize(new_global.max_concurrent_executions)
 
         # Dashboard
         dashboard_changed = (
@@ -1507,18 +1406,13 @@ class GatewayService:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> Future[None] | None:
-        """Run a tracked task's work on the shared executor pool.
+        """Run a tracked task's work on the shared worker pool.
 
-        Reads the pool and submits under ``_pool_lock``, the lock that
-        ``_swap_pool()`` holds when a server reload replaces the pool or
-        stop() detaches it, so work never lands on a pool that has been
-        shut down.  The future is tracked
-        for the shutdown drain.
-
-        If the pool is not running (not created yet, or detached by
-        ``stop()``), the task is completed as ``INTERNAL_ERROR`` rather
-        than left active: an active task blocks deferred config
-        reloads.
+        The pool never runs work on an executor that a server reload
+        replaced or stop() detached (see ``WorkerPool``).  If the pool
+        is not running (not started yet, or shut down by ``stop()``),
+        the task is completed as ``INTERNAL_ERROR`` rather than left
+        active: an active task blocks deferred config reloads.
 
         Args:
             task_id: Tracker task the work belongs to.
@@ -1529,12 +1423,7 @@ class GatewayService:
         Returns:
             The submitted future, or None if the pool is not running.
         """
-        future: Future[None] | None = None
-        with self._pool_lock:
-            pool = self._executor_pool
-            if pool is not None:
-                future = pool.submit(fn, *args, **kwargs)
-
+        future = self._pool.submit(fn, *args, **kwargs)
         if future is None:
             logger.error(
                 "Executor pool not running, task %s not started", task_id
@@ -1547,24 +1436,7 @@ class GatewayService:
                 CompletionReason.INTERNAL_ERROR,
                 "executor pool not running",
             )
-            return None
-
-        with self._futures_lock:
-            self._pending_futures.add(future)
-        future.add_done_callback(self._on_future_complete)
         return future
-
-    def _on_future_complete(self, future: Future[None]) -> None:
-        """Callback when a future completes."""
-        with self._futures_lock:
-            self._pending_futures.discard(future)
-
-        try:
-            exception = future.exception()
-            if exception:
-                logger.error("Message processing failed: %s", exception)
-        except concurrent.futures.CancelledError:
-            logger.debug("Message processing was cancelled")
 
     def _get_conversation_lock(self, conv_id: str) -> threading.Lock:
         """Get or create a lock for a conversation."""

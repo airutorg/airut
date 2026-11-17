@@ -121,7 +121,7 @@ GatewayService (orchestrator)
 ├── proxy_manager: ProxyManager     (shared gateway, per-conversation proxy)
 ├── tracker: TaskTracker            (shared, tasks tagged with repo + sender)
 ├── dashboard: DashboardServer      (shared)
-└── executor_pool: ThreadPoolExecutor (shared, global max_concurrent)
+└── pool: WorkerPool               (shared, global max_concurrent)
 ```
 
 | Component             | Scope    | Rationale                                                     |
@@ -132,7 +132,7 @@ GatewayService (orchestrator)
 | `ProxyManager`        | Shared   | Gateway infra shared; per-conversation proxy uses allowlist   |
 | `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`                      |
 | `DashboardServer`     | Shared   | Single dashboard for all repos                                |
-| `ThreadPoolExecutor`  | Shared   | Global `max_concurrent` limit across repos                    |
+| `WorkerPool`          | Shared   | Global `max_concurrent` limit across repos                    |
 
 ### Listener Threading Model
 

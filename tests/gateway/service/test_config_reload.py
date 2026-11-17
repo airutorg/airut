@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import DEFAULT, MagicMock, patch
@@ -27,6 +26,7 @@ from airut.gateway.config import (
     SmtpConfig,
 )
 from airut.gateway.service import GatewayService
+from airut.gateway.service.worker_pool import WorkerPool
 
 
 def _make_email_config(
@@ -395,7 +395,7 @@ class TestServerScopeReload:
         )
         svc._pending_server_config = new_config
 
-        svc._executor_pool = MagicMock()
+        svc._pool = MagicMock(spec=WorkerPool)
         with patch.object(
             TaskTracker,
             "has_active_tasks_for_repo",
@@ -404,6 +404,7 @@ class TestServerScopeReload:
             svc._check_pending_server_reload()
 
         assert svc._pending_server_config is None
+        svc._pool.resize.assert_called_once_with(10)
 
     def test_not_applied_when_busy(self, tmp_path: Path) -> None:
         svc = _make_service(tmp_path)
@@ -483,7 +484,7 @@ class TestReloadAfterStop:
             svc._check_pending_server_reload()
 
         assert svc._pending_server_config is new_config
-        assert svc._executor_pool is None
+        assert not svc._pool.running
 
     def test_stop_sets_stopped_under_reload_lock(self, tmp_path: Path) -> None:
         """stop() waits for a reload that already passed its check."""
@@ -1417,7 +1418,8 @@ class TestPoolSwapRace:
         )
 
         svc = _make_service(tmp_path)
-        old_pool = svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        svc._pool.start(1)
+        new_size = _with_new_pool_size(svc).global_config
         sched = _ResolvedSchedule(
             repo_id="test",
             name="hourly",
@@ -1443,7 +1445,7 @@ class TestPoolSwapRace:
             # added its tracker task, and the pool is swapped before the
             # run is submitted.
             svc._apply_server_reload(_with_new_pool_size(svc))
-            assert svc._executor_pool is not old_pool
+            assert svc._pool.max_workers == new_size.max_concurrent_executions
             return DEFAULT
 
         try:
@@ -1463,87 +1465,22 @@ class TestPoolSwapRace:
 
             assert ran.wait(timeout=5)
         finally:
-            assert svc._executor_pool is not None
-            svc._executor_pool.shutdown(wait=True)
+            svc._pool.shutdown(cancel_futures=True)
 
         assert not svc.tracker.has_active_tasks_for_repo("test")
-
-    def test_submission_holds_pool_lock(self, tmp_path: Path) -> None:
-        svc = _make_service(tmp_path)
-        pool = ThreadPoolExecutor(max_workers=1)
-        svc._executor_pool = pool
-        locked: list[bool] = []
-
-        def record_lock(*args: object) -> object:
-            locked.append(svc._pool_lock.locked())
-            return DEFAULT
-
-        handler = svc.repo_handlers["test"]
-        try:
-            with (
-                patch.object(
-                    pool, "submit", wraps=pool.submit, side_effect=record_lock
-                ),
-                patch.object(svc, "_process_message_worker"),
-            ):
-                svc.submit_message(
-                    MagicMock(), handler, handler.adapters["email"]
-                )
-        finally:
-            pool.shutdown(wait=True)
-
-        assert locked == [True]
-
-    def test_pool_swapped_under_lock_before_shutdown(
-        self, tmp_path: Path
-    ) -> None:
-        svc = _make_service(tmp_path)
-        old_pool = ThreadPoolExecutor(max_workers=1)
-        svc._executor_pool = old_pool
-        events: list[tuple[str, object]] = []
-
-        class RecordingLock:
-            def __enter__(self) -> None:
-                events.append(("lock", svc._executor_pool))
-
-            def __exit__(self, *exc: object) -> None:
-                events.append(("unlock", svc._executor_pool))
-
-        def record_shutdown(**kwargs: object) -> object:
-            events.append(("shutdown", svc._executor_pool))
-            return DEFAULT
-
-        with (
-            patch.object(svc, "_pool_lock", RecordingLock()),
-            patch.object(
-                old_pool,
-                "shutdown",
-                wraps=old_pool.shutdown,
-                side_effect=record_shutdown,
-            ),
-        ):
-            svc._apply_server_reload(_with_new_pool_size(svc))
-
-        new_pool = svc._executor_pool
-        assert new_pool is not None
-        assert new_pool is not old_pool
-        # Swapped under the lock; the old pool is shut down only after.
-        assert events == [
-            ("lock", old_pool),
-            ("unlock", new_pool),
-            ("shutdown", new_pool),
-        ]
-        new_pool.shutdown(wait=True)
 
     def test_run_queued_on_old_pool_still_runs(self, tmp_path: Path) -> None:
         """Work queued on the old pool before the swap is not cancelled."""
         from airut.dashboard.tracker import CompletionReason
 
         svc = _make_service(tmp_path)
-        old_pool = ThreadPoolExecutor(max_workers=1)
-        svc._executor_pool = old_pool
+        svc._pool.start(1)
         release = threading.Event()
-        old_pool.submit(release.wait)  # Occupy the only worker.
+
+        def block() -> None:
+            release.wait(timeout=5)
+
+        svc._pool.submit(block)  # Occupy the only worker.
         ran = threading.Event()
 
         def worker(raw: object, task_id: str, *args: object) -> None:
@@ -1561,14 +1498,12 @@ class TestPoolSwapRace:
                     MagicMock(), handler, handler.adapters["email"]
                 )
                 svc._apply_server_reload(_with_new_pool_size(svc))
-                assert svc._executor_pool is not old_pool
+                assert svc._pool.max_workers != 1
                 release.set()
                 assert ran.wait(timeout=5)
         finally:
             release.set()
-            old_pool.shutdown(wait=True)
-            assert svc._executor_pool is not None
-            svc._executor_pool.shutdown(wait=True)
+            svc._pool.shutdown(cancel_futures=True)
 
         assert not svc.tracker.has_active_tasks_for_repo("test")
 
@@ -1610,7 +1545,7 @@ class TestSubmitWithoutPool:
         )
 
         svc = _make_service(tmp_path)
-        svc._executor_pool = ThreadPoolExecutor(max_workers=1)
+        svc._pool.start(1)
         svc.stop()
 
         Scheduler(svc)._dispatch(
