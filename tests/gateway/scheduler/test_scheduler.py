@@ -7,10 +7,16 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from airut.gateway.config import ScheduleConfig, ScheduleDelivery
 from airut.gateway.scheduler.cron import CronExpression
@@ -319,6 +325,163 @@ class TestSchedulerDispatch:
         scheduler._schedules = {"test": {"daily": resolved}}
         sleep = scheduler._compute_sleep()
         assert sleep == 0.1
+
+
+_EXECUTE = "airut.gateway.scheduler.execution.execute_scheduled_task"
+
+
+def _make_resolved(name: str, repo_id: str = "test-repo") -> _ResolvedSchedule:
+    """Create a resolved schedule that is due now."""
+    return _ResolvedSchedule(
+        repo_id=repo_id,
+        name=name,
+        config=_make_schedule_config(),
+        cron=CronExpression("* * * * *"),
+        tz=ZoneInfo("UTC"),
+        next_fire=datetime.now(tz=UTC),
+    )
+
+
+@dataclass
+class _Busy:
+    """Scheduler backed by a real single-worker pool that can be blocked."""
+
+    svc: MagicMock
+    pool: ThreadPoolExecutor
+    scheduler: Scheduler
+    release: threading.Event
+
+    def occupy_worker(self) -> None:
+        """Block the only worker so dispatched runs have to queue."""
+        self.pool.submit(self.release.wait)
+
+    def drain(self) -> None:
+        """Unblock the worker and wait for every queued run to finish."""
+        self.release.set()
+        self.pool.shutdown(wait=True)
+
+
+@pytest.fixture
+def busy() -> Iterator[_Busy]:
+    svc = _make_service()
+    pool = ThreadPoolExecutor(max_workers=1)
+    svc._executor_pool = pool
+    svc.repo_handlers = {"test-repo": MagicMock()}
+    state = _Busy(svc, pool, Scheduler(svc), threading.Event())
+    try:
+        yield state
+    finally:
+        # Never leave a blocked worker behind: interpreter exit joins it.
+        state.drain()
+
+
+class TestSchedulerQueueBound:
+    """At most one run per schedule waits for a free worker."""
+
+    def test_skips_fire_while_previous_run_waits_for_worker(
+        self, busy: _Busy
+    ) -> None:
+        busy.occupy_worker()
+        execute = MagicMock()
+        sched = _make_resolved("hourly")
+
+        with patch(_EXECUTE, execute):
+            busy.scheduler._dispatch(sched)
+            busy.scheduler._dispatch(sched)
+            busy.scheduler._dispatch(sched)
+
+        assert busy.svc.tracker.add_task.call_count == 1
+        busy.drain()
+        execute.assert_called_once()
+
+    def test_skipped_fire_logs_and_advances_next_fire(
+        self, busy: _Busy, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        busy.occupy_worker()
+        sched = _make_resolved("hourly")
+        busy.scheduler._schedules = {"test-repo": {"hourly": sched}}
+
+        with patch(_EXECUTE, MagicMock()):
+            busy.scheduler._tick()
+            sched.next_fire = datetime.now(tz=UTC) - timedelta(minutes=1)
+            with caplog.at_level(
+                logging.WARNING, logger="airut.gateway.scheduler.service"
+            ):
+                busy.scheduler._tick()
+
+        assert busy.svc.tracker.add_task.call_count == 1
+        assert "previous run is still waiting for a free worker" in caplog.text
+        # The skipped fire still moves to the next cron slot.
+        assert sched.next_fire > datetime.now(tz=UTC)
+
+    def test_started_run_does_not_block_next_fire(self, busy: _Busy) -> None:
+        started = threading.Event()
+
+        def fake_execute(*args: object) -> None:
+            started.set()
+            busy.release.wait()
+
+        sched = _make_resolved("hourly")
+        with patch(_EXECUTE, fake_execute):
+            busy.scheduler._dispatch(sched)
+            assert started.wait(timeout=5)
+            # Queues behind the running instance...
+            busy.scheduler._dispatch(sched)
+            # ...and further fires are skipped while it waits.
+            busy.scheduler._dispatch(sched)
+
+        assert busy.svc.tracker.add_task.call_count == 2
+
+    def test_other_schedules_still_queue(self, busy: _Busy) -> None:
+        busy.svc.repo_handlers["other-repo"] = MagicMock()
+        busy.occupy_worker()
+
+        with patch(_EXECUTE, lambda *args: None):
+            busy.scheduler._dispatch(_make_resolved("a"))
+            busy.scheduler._dispatch(_make_resolved("b"))
+            busy.scheduler._dispatch(_make_resolved("a", repo_id="other-repo"))
+
+        assert busy.svc.tracker.add_task.call_count == 3
+
+    def test_dispatches_again_after_run_completes(self, busy: _Busy) -> None:
+        sched = _make_resolved("hourly")
+
+        with patch(_EXECUTE, lambda *args: None):
+            busy.scheduler._dispatch(sched)
+            busy.drain()
+            assert busy.scheduler._dispatched == {}
+
+            busy.pool = ThreadPoolExecutor(max_workers=1)
+            busy.svc._executor_pool = busy.pool
+            busy.scheduler._dispatch(sched)
+
+        assert busy.svc.tracker.add_task.call_count == 2
+
+    def test_queued_run_survives_rebuild_repo(self, busy: _Busy) -> None:
+        busy.svc.repo_handlers["test-repo"].config.schedules = {
+            "hourly": _make_schedule_config()
+        }
+        scheduler = busy.scheduler
+        scheduler.rebuild_repo("test-repo")
+        busy.occupy_worker()
+
+        with patch(_EXECUTE, lambda *args: None):
+            scheduler._dispatch(scheduler._schedules["test-repo"]["hourly"])
+            scheduler.rebuild_repo("test-repo")
+            scheduler._dispatch(scheduler._schedules["test-repo"]["hourly"])
+
+        assert busy.svc.tracker.add_task.call_count == 1
+
+    def test_completion_of_older_run_keeps_newer_entry(self) -> None:
+        scheduler = Scheduler(_make_service())
+        key = ("test-repo", "hourly")
+        older: Future[None] = Future()
+        newer: Future[None] = Future()
+        scheduler._dispatched[key] = newer
+
+        scheduler._on_run_done(key, older)
+
+        assert scheduler._dispatched[key] is newer
 
 
 class TestSchedulerExceptionPaths:

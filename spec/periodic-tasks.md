@@ -47,7 +47,8 @@ This spec assumes the gateway architecture
 - **Persistent conversations.** Each execution is fresh — no state carried
   between runs.
 - **Concurrency guard.** If a scheduled task exceeds the cron interval, the next
-  fire starts a second instance.
+  fire starts a second instance when a worker is free. Only runs still waiting
+  for a worker are limited (see [Dispatch](#dispatch)).
 
 ## Trigger Modes
 
@@ -182,6 +183,9 @@ The scheduler maintains a `dict[str, dict[str, _ResolvedSchedule]]` keyed by
 `CronExpression`, timezone, and next fire time. Protected by a lock for
 concurrent access from the config reload path.
 
+A second map, keyed by `(repo_id, schedule_name)`, tracks each schedule's latest
+unfinished run for the queue bound described under [Dispatch](#dispatch).
+
 ### Thread Loop
 
 1. Compute `now` in UTC.
@@ -199,6 +203,20 @@ The scheduler submits `execute_scheduled_task` to the gateway's shared
 `ThreadPoolExecutor`. Scheduled tasks share the `max_concurrent_executions`
 limit with interactive tasks. If all workers are busy, the scheduled task queues
 until a worker is free.
+
+**At most one queued run per schedule.** When a schedule fires while its
+previous run is still queued (submitted, but not yet picked up by a worker), the
+fire is skipped and a warning is logged. No tracker task is created for the
+skipped fire. This stops a saturated pool from building an unbounded backlog of
+runs of the same schedule while long-running tasks hold every worker. When
+workers free up, the schedule runs once rather than once per missed fire. A run
+that has already started does not block the next fire: the next fire queues
+normally, and later fires are skipped while that one waits. Different schedules
+(or the same schedule name in another repo) are independent.
+
+A queued run uses the schedule config captured when it was dispatched. Fires
+skipped while it waits are not caught up (see
+[Missed Schedules](#missed-schedules)).
 
 ### Missed Schedules
 
@@ -364,7 +382,9 @@ Schedules are `Scope.REPO`. On config reload:
 2. `_apply_single_repo_reload()` calls `scheduler.rebuild_repo(repo_id)` after
    the listener restart succeeds.
 3. The scheduler removes all resolved schedules for that repo, re-parses from
-   the new config, and computes fresh `next_fire` times.
+   the new config, and computes fresh `next_fire` times. A run that is still
+   queued keeps blocking further fires of the same schedule name (see
+   [Dispatch](#dispatch)).
 
 On repo removal: `_remove_repo()` calls `scheduler.remove_repo(repo_id)`
 immediately, regardless of task deferral.
