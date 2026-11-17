@@ -8,6 +8,10 @@
 Runs a background thread that sleeps until the next scheduled fire
 time, then submits tasks to the gateway's shared executor pool.
 The scheduler is a service-level component, not a channel adapter.
+
+At most one run per schedule waits in the pool queue: a fire is skipped
+while the schedule's previous run has not yet been picked up by a worker,
+so a saturated pool cannot accumulate an unbounded backlog.
 """
 
 from __future__ import annotations
@@ -15,8 +19,10 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -81,6 +87,11 @@ class _ResolvedSchedule:
     next_fire: datetime  # timezone-aware, in UTC for comparison
 
 
+def _waiting_for_worker(future: Future[None]) -> bool:
+    """Return whether a submitted run is still queued for a worker."""
+    return not (future.running() or future.done())
+
+
 class Scheduler:
     """Cron scheduler for periodic tasks.
 
@@ -92,6 +103,10 @@ class Scheduler:
         self._service = service
         self._lock = threading.Lock()
         self._schedules: dict[str, dict[str, _ResolvedSchedule]] = {}
+        # Latest unfinished run per (repo_id, schedule name).  Keyed by
+        # identity rather than stored on _ResolvedSchedule so the queue
+        # bound survives rebuild_repo().
+        self._dispatched: dict[tuple[str, str], Future[None]] = {}
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -278,6 +293,18 @@ class Scheduler:
             )
             return
 
+        key = (sched.repo_id, sched.name)
+        with self._lock:
+            previous = self._dispatched.get(key)
+        if previous is not None and _waiting_for_worker(previous):
+            logger.warning(
+                "Schedule '%s/%s': previous run is still waiting for a free "
+                "worker, skipping this fire",
+                sched.repo_id,
+                sched.name,
+            )
+            return
+
         task_id = uuid.uuid4().hex[:12]
         self._service.tracker.add_task(
             task_id,
@@ -308,6 +335,18 @@ class Scheduler:
             task_id,
         )
 
+        with self._lock:
+            self._dispatched[key] = future
+        # Register after storing: the callback runs immediately if the
+        # run has already finished.
+        future.add_done_callback(partial(self._on_run_done, key))
+
         with self._service._futures_lock:
             self._service._pending_futures.add(future)
         future.add_done_callback(self._service._on_future_complete)
+
+    def _on_run_done(self, key: tuple[str, str], future: Future[None]) -> None:
+        """Forget a finished run unless a newer one has replaced it."""
+        with self._lock:
+            if self._dispatched.get(key) is future:
+                del self._dispatched[key]

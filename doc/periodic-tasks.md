@@ -159,7 +159,11 @@ Key behaviors:
 - **No catch-up** — if the service was down when a schedule should have fired,
   the missed execution is skipped
 - **No concurrency guard** — if a task exceeds its cron interval, the next fire
-  starts a second instance
+  starts a second instance when a worker is free
+- **At most one queued run per schedule** — if every worker is busy and the
+  schedule's previous run is still waiting for one, new fires are skipped (and
+  logged) instead of piling up. When workers free up, the schedule runs once,
+  not once per missed fire
 - **Fresh conversations** — each execution creates a new conversation with no
   state carried between runs
 - **Config reload** — schedule changes are picked up via live config reload, no
@@ -176,6 +180,10 @@ implementation specification.
 - Verify the cron expression with a cron calculator
 - Check that the timezone is correct (logs show next fire times at startup)
 - Ensure the delivery channel is configured on the same repo
+- If every worker is busy, fires are skipped while the schedule's previous run
+  is still waiting for one. Look for
+  `previous run is still waiting for a free worker` in the logs, and consider
+  raising `max_concurrent_executions`
 
 **Script mode not triggering Claude:**
 
