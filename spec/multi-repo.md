@@ -151,8 +151,9 @@ which enforces the global `max_concurrent` limit. Listener threads are
 lightweight (mostly blocked in IDLE, sleep, or WebSocket recv) and don't compete
 with workers.
 
-Signal handling: `SIGTERM`/`SIGINT` sets `running = False` and calls
-`interrupt()` on all listeners.
+Signal handling: `SIGTERM`/`SIGINT` call `GatewayService.stop()`, which stops
+every repo's listeners (see
+[gateway-architecture.md](gateway-architecture.md#thread-pool-architecture)).
 
 ### RepoHandler
 

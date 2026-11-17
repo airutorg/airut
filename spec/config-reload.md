@@ -266,8 +266,14 @@ The ordering applies to **nested acquisition** only — if you hold an outer loc
 you may acquire an inner lock, but never the reverse.
 
 The reload lock is non-blocking in `_on_config_changed()` (concurrent triggers
-dropped) but blocking in `_check_pending_repo_reload()` (worker threads wait
-briefly for any in-progress reload to finish).
+dropped) but blocking in `_check_pending_repo_reload()` and
+`_check_pending_server_reload()` (worker threads wait briefly for any
+in-progress reload to finish) and in `stop()`.
+
+`stop()` takes the reload lock to set `_stopped`. It runs on the main thread,
+including in the `SIGINT`/`SIGTERM` handler, so it records its entry before
+taking the lock and a re-entrant call returns immediately (see
+[gateway-architecture.md](gateway-architecture.md#thread-pool-architecture)).
 
 #### Atomic Config Swap
 

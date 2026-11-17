@@ -34,8 +34,8 @@ from airut.gateway.channel import AuthenticationError, ParsedMessage, RawMessage
 from airut.gateway.config import RepoServerConfig
 
 from .service.conftest import (
-    InterruptEvent,
     expire_shutdown_wait,
+    interrupt_idle,
     make_message,
     make_service,
     update_global,
@@ -716,8 +716,7 @@ class TestBootStateEdgeCases:
         svc.sandbox.startup.side_effect = track_phase
 
         def fake_start(**kwargs):
-            svc._running = False
-            svc._shutdown_event.set()
+            svc._signal_shutdown()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
         svc.start()
@@ -736,7 +735,7 @@ class TestBootStateEdgeCases:
             "fail"
         )
 
-        svc._shutdown_event = InterruptEvent()
+        interrupt_idle(svc)
 
         with patch("airut.gateway.service.gateway.DashboardServer") as mock_ds:
             svc.start(resilient=True)
