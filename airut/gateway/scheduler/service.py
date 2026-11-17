@@ -275,15 +275,6 @@ class Scheduler:
 
     def _dispatch(self, sched: _ResolvedSchedule) -> None:
         """Submit a scheduled task to the executor pool."""
-        pool = self._service._executor_pool
-        if pool is None:
-            logger.error(
-                "Schedule '%s/%s': executor pool not available",
-                sched.repo_id,
-                sched.name,
-            )
-            return
-
         handler = self._service.repo_handlers.get(sched.repo_id)
         if handler is None:
             logger.error(
@@ -326,7 +317,8 @@ class Scheduler:
 
         from airut.gateway.scheduler.execution import execute_scheduled_task
 
-        future = pool.submit(
+        future = self._service.submit_task(
+            task_id,
             execute_scheduled_task,
             self._service,
             handler,
@@ -334,16 +326,14 @@ class Scheduler:
             sched.config,
             task_id,
         )
+        if future is None:
+            return
 
         with self._lock:
             self._dispatched[key] = future
         # Register after storing: the callback runs immediately if the
         # run has already finished.
         future.add_done_callback(partial(self._on_run_done, key))
-
-        with self._service._futures_lock:
-            self._service._pending_futures.add(future)
-        future.add_done_callback(self._service._on_future_complete)
 
     def _on_run_done(self, key: tuple[str, str], future: Future[None]) -> None:
         """Forget a finished run unless a newer one has replaced it."""

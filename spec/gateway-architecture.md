@@ -882,6 +882,14 @@ thread pool.
   gateway process alone (as with the systemd unit's `KillMode=mixed`); Ctrl-C in
   a terminal signals the whole process group, including the `podman run`
   clients, which forward it to the task containers.
+- **Submission**: Every task's work (incoming message, drained follow-up,
+  scheduled run) goes through `GatewayService.submit_task()`. It reads and
+  submits to the pool under the lock that a server reload holds while it
+  replaces the pool and `stop()` holds while it detaches it, so work never lands
+  on a pool that has been shut down. If the pool is not running (not created
+  yet, or detached by `stop()`), the tracker task is completed as
+  `INTERNAL_ERROR` rather than left active, since an active task blocks deferred
+  config reloads.
 
 ### Concurrency Safety
 
@@ -890,6 +898,7 @@ thread pool.
 | IMAP operations     | Main thread only (IMAP not thread-safe)                                  |
 | Container execution | Per-conversation locks prevent parallel processing of same conversation  |
 | Image builds        | Serialized via `ImageCache._lock`; cached by content hash with staleness |
+| Executor pool       | Submissions serialized with pool replacement (reload) and detach (stop)  |
 
 ### Per-Conversation Serialization
 

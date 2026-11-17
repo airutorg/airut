@@ -136,7 +136,8 @@ class RepoHandler:
             adapter: The originating channel adapter.
 
         Returns:
-            True if message was submitted, False if pool not ready.
+            True if message was submitted, False if the executor pool
+            is not running.
         """
         return self.service.submit_message(message, self, adapter)
 

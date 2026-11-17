@@ -659,11 +659,11 @@ class TestShutdownEdgeCases:
     ) -> None:
         """Stop with executor but no pending futures."""
         svc, _ = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
+        pool = svc._executor_pool = MagicMock()
         with patch("concurrent.futures.wait") as mock_wait:
             svc.stop()
         mock_wait.assert_not_called()
-        svc._executor_pool.shutdown.assert_called_once()
+        pool.shutdown.assert_called_once()
 
     def test_stop_cancels_timed_out_futures(
         self, email_config, tmp_path: Path
