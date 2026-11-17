@@ -10,7 +10,6 @@ Tests the full end-to-end flow with all components:
   Claude executed → reply sent
 """
 
-import concurrent.futures
 import threading
 import time
 from pathlib import Path
@@ -46,8 +45,6 @@ from airut.gateway.email.parsing import (
 from airut.gateway.service import GatewayService
 from airut.gateway.service.repo_handler import RepoHandler
 from airut.markdown import markdown_to_html
-
-from .service.conftest import expire_shutdown_wait
 
 
 class TestEndToEndFlow:
@@ -605,8 +602,7 @@ class TestParallelExecution:
         service = GatewayService(config)
 
         # Verify parallel state initialized
-        assert service._executor_pool is None  # Not initialized until start()
-        assert service._pending_futures == set()
+        assert not service._pool.running  # Not started until start()
         assert service._conversation_locks == {}
 
     def test_get_conversation_lock_creates_lock(
@@ -633,72 +629,6 @@ class TestParallelExecution:
         assert lock3 is not lock1
         assert "conv456" in service._conversation_locks
 
-    def test_on_future_complete_removes_future(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test _on_future_complete removes future from tracking."""
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
-        )
-        service = GatewayService(config)
-
-        future = concurrent.futures.Future()
-        service._pending_futures = {future}
-
-        # Complete the future
-        future.set_result(None)
-
-        # Call callback
-        service._on_future_complete(future)
-
-        # Future should be removed
-        assert future not in service._pending_futures
-
-    def test_on_future_complete_handles_cancelled(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test _on_future_complete handles cancelled futures."""
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
-        )
-        service = GatewayService(config)
-
-        future = concurrent.futures.Future()
-        service._pending_futures = {future}
-
-        # Cancel the future
-        future.cancel()
-
-        # Call callback - should not raise
-        service._on_future_complete(future)
-
-        # Future should be removed
-        assert future not in service._pending_futures
-
-    def test_on_future_complete_logs_exception(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test _on_future_complete logs exceptions from futures."""
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
-        )
-        service = GatewayService(config)
-
-        future = concurrent.futures.Future()
-        service._pending_futures = {future}
-
-        # Set an exception
-        future.set_exception(RuntimeError("Test error"))
-
-        # Call callback - should not raise
-        service._on_future_complete(future)
-
-        # Future should be removed
-        assert future not in service._pending_futures
-
     def test_submit_message_without_pool(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
@@ -709,7 +639,7 @@ class TestParallelExecution:
         )
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
-        assert service._executor_pool is None
+        assert not service._pool.running
 
         result = service.submit_message(
             sample_email_message, handler, handler.adapters["email"]
@@ -720,14 +650,12 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test stop() waits for pending futures."""
-        from concurrent.futures import ThreadPoolExecutor
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
         service = GatewayService(config)
-        service._executor_pool = ThreadPoolExecutor(max_workers=1)
+        service._pool.start(1)
 
         # Create a future that completes quickly
         completed = []
@@ -736,39 +664,13 @@ class TestParallelExecution:
             time.sleep(0.1)
             completed.append(True)
 
-        future = service._executor_pool.submit(quick_task)
-        service._pending_futures = {future}
+        service._pool.submit(quick_task)
 
         # Stop should wait for future
         service.stop()
 
         # Task should have completed
         assert completed == [True]
-
-    def test_stop_cancels_slow_futures(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test stop() cancels futures that exceed timeout."""
-        from concurrent.futures import ThreadPoolExecutor
-
-        global_config = GlobalConfig(shutdown_timeout_seconds=1)
-        config = ServerConfig(
-            global_config=global_config,
-            repos={"test": email_config},
-        )
-
-        service = GatewayService(config)
-        service._executor_pool = ThreadPoolExecutor(max_workers=1)
-
-        # A slow task that never finishes within the grace period
-        future: concurrent.futures.Future[None] = concurrent.futures.Future()
-        service._pending_futures = {future}
-
-        with expire_shutdown_wait():
-            service.stop()
-
-        # Still pending at the deadline, so cancelled
-        assert future.cancelled()
 
     def test_process_message_worker_no_lock_for_new_conversation(
         self, email_config: RepoServerConfig, sample_email_message
