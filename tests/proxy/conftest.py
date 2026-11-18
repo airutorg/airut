@@ -206,8 +206,49 @@ def _install_mitmproxy_mock() -> None:
     http_mod.HTTPFlow = _MockHTTPFlow  # ty:ignore[missing-attribute]
     http_mod.Response = _MockResponse  # ty:ignore[missing-attribute]
 
+    # Minimal mitmproxy.proxy.layers.http with GetHttpConnection, whose
+    # connection_spec_matches has the same contract as mitmproxy's: a
+    # connection matches when address, TLS flag, upstream proxy (via)
+    # and transport protocol are equal.  connection_reuse patches it.
+    proxy_mod = types.ModuleType("mitmproxy.proxy")
+    layers_mod = types.ModuleType("mitmproxy.proxy.layers")
+    layers_http_mod = types.ModuleType("mitmproxy.proxy.layers.http")
+
+    class _MockGetHttpConnection:
+        """Minimal mitmproxy GetHttpConnection stand-in."""
+
+        def __init__(
+            self,
+            address: tuple[str, int],
+            tls: bool,
+            via: object = None,
+            transport_protocol: str = "tcp",
+        ) -> None:
+            self.address = address
+            self.tls = tls
+            self.via = via
+            self.transport_protocol = transport_protocol
+
+        def connection_spec_matches(
+            self, connection: types.SimpleNamespace
+        ) -> bool:
+            return (
+                self.address == connection.address
+                and self.tls == connection.tls
+                and self.via == connection.via
+                and self.transport_protocol == connection.transport_protocol
+            )
+
+    layers_http_mod.GetHttpConnection = _MockGetHttpConnection  # ty:ignore[missing-attribute]
+    mitmproxy_mod.proxy = proxy_mod  # ty:ignore[missing-attribute]
+    proxy_mod.layers = layers_mod  # ty:ignore[missing-attribute]
+    layers_mod.http = layers_http_mod  # ty:ignore[missing-attribute]
+
     sys.modules["mitmproxy"] = mitmproxy_mod
     sys.modules["mitmproxy.http"] = http_mod
+    sys.modules["mitmproxy.proxy"] = proxy_mod
+    sys.modules["mitmproxy.proxy.layers"] = layers_mod
+    sys.modules["mitmproxy.proxy.layers.http"] = layers_http_mod
 
     # Expose mock helpers for test files
     mitmproxy_mod.http = http_mod  # ty:ignore[missing-attribute]

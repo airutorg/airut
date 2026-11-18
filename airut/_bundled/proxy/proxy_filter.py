@@ -52,6 +52,7 @@ from aws_signing import (
     resign_presigned_url,
     resign_request,
 )
+from connection_reuse import skip_failed_connections
 from github_app import (
     CREDENTIAL_TYPE_GITHUB_APP,
     CachedToken,
@@ -297,7 +298,13 @@ class ProxyFilter:
         ]
 
     def load(self, options: object) -> None:  # noqa: ARG002
-        """Load configuration on startup."""
+        """Load configuration on startup.
+
+        Also patches mitmproxy so a request never reuses an upstream
+        connection that failed to open (see ``connection_reuse``).  If the
+        patch cannot be applied, the error ends mitmdump at startup.
+        """
+        skip_failed_connections()
         self._setup_file_logging()
         self._load_allowlist()
         self._load_replacements()

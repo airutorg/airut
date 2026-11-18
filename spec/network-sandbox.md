@@ -79,6 +79,18 @@ with mitmproxy's `stream_large_bodies` option, which would also stream large
 request bodies upstream before they are inspected. A failed AWS re-signed
 response under `DEBUG_SIGNING` stays buffered so its body can be logged.
 
+**Failed upstream connections are not reused.** A request after a failed
+upstream connection attempt (unresolvable name, refused connection, failed TLS
+handshake) makes a new attempt, also on the same client connection. mitmproxy
+12.3.1 instead answers every later request for that upstream on the client
+connection with the first error, so an HTTP/2 client retrying on its connection
+could never recover; `connection_reuse.py` patches that out. Requests that
+arrive while an attempt is still in progress normally wait for it and share its
+outcome. `ProxyFilter.load()` applies the patch, and mitmdump exits at startup
+if mitmproxy no longer has the method it patches. Other changes in mitmproxy can
+undo the fix silently, so a mitmproxy upgrade re-checks it (see
+[workflows/dependency-updates.md](../workflows/dependency-updates.md)).
+
 Note: Non-existent domains will appear to resolve from within the container.
 This is by design — the DNS responder intentionally avoids upstream DNS
 resolution to prevent DNS exfiltration (encoding stolen data in queries to
@@ -94,6 +106,7 @@ attacker-controlled nameservers). The proxy handles all access control.
 | `airut/_bundled/proxy/dns_responder.py`    | DNS server: returns proxy IP for all A queries         |
 | `airut/_bundled/proxy/proxy_filter.py`     | mitmproxy addon: allowlist, token masking, re-signing  |
 | `airut/_bundled/proxy/aws_signing.py`      | AWS SigV4/SigV4A request re-signing                    |
+| `airut/_bundled/proxy/connection_reuse.py` | mitmproxy patch: no reuse of failed upstream conns     |
 | `airut/_bundled/proxy/host_match.py`       | Shared host-pattern matching + UrlPrefixEntry typedict |
 | `airut/_bundled/proxy/request_filter.py`   | Request-body filter pipeline (PASS/REWRITE/BLOCK)      |
 | `airut/_bundled/proxy/tool_domains.py`     | Anthropic server-side-tool domain trimming             |
