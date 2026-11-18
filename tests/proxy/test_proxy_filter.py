@@ -282,11 +282,15 @@ class TestProxyFilterLoad:
         """load() calls all setup helpers."""
         pf = ProxyFilter()
         with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.skip_failed_connections"
+            ) as mock_skip,
             patch.object(pf, "_setup_file_logging") as mock_log,
             patch.object(pf, "_load_allowlist") as mock_allow,
             patch.object(pf, "_load_replacements") as mock_repl,
         ):
             pf.load(None)
+            mock_skip.assert_called_once_with()
             mock_log.assert_called_once()
             mock_allow.assert_called_once()
             mock_repl.assert_called_once()

@@ -27,6 +27,24 @@ Commit `uv.lock` and `requirements.txt` together. Check whether each
 `override-dependencies` entry in the proxy `pyproject.toml` is still needed; the
 policy is in [spec/image.md](../spec/image.md#proxy-dependency-management).
 
+If the mitmproxy version changed, re-check the patch in
+`airut/_bundled/proxy/connection_reuse.py`;
+`tests/proxy/test_connection_reuse.py` fails until you do. The patch changes how
+mitmproxy picks the upstream connection for a request, and only a missing
+`GetHttpConnection.connection_spec_matches` stops the proxy from starting. Read
+`HttpLayer.get_connection` in the new release, which answers a request with an
+earlier connection's `error` in two places: the loop over existing connections
+and the check of the layer's own context server.
+
+- If neither place does so any more, delete the module, its call in
+  `ProxyFilter.load()`, its tests, the `GetHttpConnection` mock in
+  `tests/proxy/conftest.py`, its `COPY` entry in `proxy.dockerfile`, and its
+  paragraph and Components row in `spec/network-sandbox.md`.
+- Otherwise confirm that both places still decide through
+  `connection_spec_matches`.
+
+Then set `VERIFIED_MITMPROXY_VERSION` in the test to the new version.
+
 ### 3. Screenshots lock
 
 ```bash
