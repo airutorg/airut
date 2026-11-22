@@ -23,6 +23,12 @@ A GitHub App authenticates in two steps:
    `Authorization: Bearer <JWT>`. Returns a `ghs_`-prefixed token valid for **1
    hour**. Optional request body can restrict `permissions` and `repositories`.
 
+The installation ID is never configured. The JWT alone can list the App's
+installations (`GET /app/installations`), so the proxy discovers them and picks
+one per request (see [Installation Routing](#installation-routing)). An App can
+be installed on several accounts (organizations or users); each installation
+token covers only the repositories of **one** account.
+
 Key properties:
 
 - **Overlap**: Generating a new installation token does NOT invalidate the old
@@ -51,6 +57,20 @@ App settings page. Both PKCS#1 (`BEGIN RSA PRIVATE KEY`) and PKCS#8
 For GitHub Enterprise Server, set the `base_url` field to the GHES API base URL
 (e.g. `https://github.example.com/api/v3`). When absent, the proxy uses
 `https://api.github.com` as default.
+
+The optional `repositories` list takes `owner/name` entries, or `owner/*` for
+every repository of that account's installation (bare names are a config error;
+so is an empty list). It selects which installations the credential uses (those
+on an account named by an entry) and narrows each one's tokens to the listed
+names on that account (no narrowing for `owner/*`). Without it, only the
+installation on the **App owner's account** is used, with all of its
+repositories. See [Installation Discovery](#installation-discovery) for why
+other accounts need an explicit entry.
+
+There is no `installation_id` field. Config migration v5 → v6 drops it (and an
+empty `repositories` list, which used to mean "no restriction") from existing
+configs. Bare repository names cannot be migrated because their owner is not
+known offline; they fail config validation with an `owner/name` error.
 
 ## Resolution Flow
 
@@ -83,12 +103,11 @@ new entry type discriminated by `"type": "github-app"`:
     "type": "github-app",
     "app_id": "Iv23li8e2xyz123",
     "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAK...\n-----END RSA PRIVATE KEY-----",
-    "installation_id": "12345678",
     "base_url": "https://api.github.com",
     "scopes": ["github.com", "api.github.com", "*.githubusercontent.com"],
     "allow_foreign_credentials": false,
     "permissions": {"contents": "write", "pull_requests": "write"},
-    "repositories": ["my-repo"]
+    "repositories": ["my-org/my-repo"]
   }
 }
 ```
@@ -99,11 +118,75 @@ replacements (which have no `type` field) and signing credentials (which have
 
 ## Proxy Behavior
 
+### Installation Discovery
+
+On the first request carrying a credential's surrogate, the proxy signs a JWT
+and calls `GET {base_url}/app/installations` (paginated) to list the App's
+installations, plus `GET {base_url}/app` for the App owner's login when
+`repositories` is not set. Suspended installations are skipped. Then:
+
+- **Without `repositories`**, only the installation on the App owner's account
+  is kept (logins match case-insensitively). A private App can only be installed
+  there anyway. A public App can be installed by **anyone**: trusting every
+  installation would let a prompt-injected agent target a repository on an
+  attacker's account (`git push`, REST, or a GraphQL mutation by node ID) and
+  get a token for the attacker's installation that is valid for it — an
+  exfiltration path that a single pinned installation, and GraphQL repository
+  scoping, otherwise close.
+- **With `repositories`**, the installations on the accounts its entries name
+  are kept, each narrowed to its listed bare names (`owner/*`: not narrowed).
+  Listing an account is how a credential opts into installations beyond the
+  owner's.
+
+The remaining installations are ordered by installation ID; the first is the
+**default installation**.
+
+The list is cached per surrogate for one hour (the token lifetime), so an App
+installed on a listed account mid-session is picked up on the next discovery. An
+App with no usable installation fails the request with the refresh-failure 502
+(see [Error Handling](#error-handling)); this result is not cached. Any token
+refresh failure also drops the cached list, so the next request rediscovers
+instead of retrying an installation that may have been removed.
+
+### Installation Routing
+
+Each request is sent with the token of exactly one installation:
+
+- **REST, git, raw content**: the target account comes from the URL —
+  `/repos/{owner}/…` or `/orgs/{org}/…` on any host (REST API,
+  `uploads.github.com`, GHES `/api/v3` and `/api/uploads`), otherwise the first
+  path segment on non-API hosts (`github.com/{owner}/{repo}.git/…`,
+  `raw.githubusercontent.com/{owner}/…`, `codeload.github.com/{owner}/…`, GHES
+  git paths). The API host is the host of `base_url`; on GHES only paths under
+  `/api/` count as API paths. The installation on that account is used.
+  Account-agnostic API paths (`/user`, `/search/…`, `/rate_limit`, …) and
+  accounts without an installation (e.g. reading a public repository elsewhere)
+  use the default installation.
+- **GraphQL** (`/graphql` and `/api/graphql` on any scoped host, ignoring
+  repeated and trailing slashes — matching broadly is fail-secure): the request
+  is [scope-checked](#graphql-repository-scoping) against each installation's
+  repository set in ID order and sent with the first installation it passes for.
+  A request addressing no repository passes for every installation and so uses
+  the default; one addressing a repository passes only for the installation
+  owning it. If it passes for none, the proxy re-checks against the union of all
+  sets: a pass there means the request addresses repositories of more than one
+  installation, which no single token can serve, and it is blocked with detail
+  `<multi-installation>`; otherwise the union result (the offending repository)
+  is reported. GraphQL routing needs every installation's token and repository
+  set, so the first GraphQL request mints tokens for all usable installations.
+
+REST routing only decides which token is sent. GitHub enforces what that token
+can reach, so a misrouted request fails at GitHub rather than gaining access.
+GraphQL forwarding requires the request to pass the scope check against the
+chosen installation's own repository set, which is never wider than the
+single-installation check.
+
 ### Token Cache
 
-The proxy maintains an in-memory cache per GitHub App credential, mapping
-surrogate to a cached token (value + Unix timestamp expiry). A token is
-considered expired when current time is within 5 minutes of `expires_at`.
+The proxy keeps an in-memory token cache keyed by (surrogate, installation ID).
+Each entry holds the token, its Unix-timestamp expiry, and the installation's
+repository node IDs and `owner/name` full names (for GraphQL scoping). A token
+is considered expired when current time is within 5 minutes of `expires_at`.
 
 ### Request Flow
 
@@ -122,28 +205,41 @@ When a request arrives at an allowlisted host:
      Auth credentials.
 
 2. **Scope check**: Verify request host matches the entry's `scopes` patterns.
+   GraphQL requests with URL query parameters are rejected here, before any
+   GitHub API call.
 
-3. **Token check**: Look up the surrogate in the token cache.
+3. **Discover**: Get the usable installations (cached, see
+   [Installation Discovery](#installation-discovery)).
+
+4. **Token check**: For the routed installation (REST) or every installation
+   (GraphQL), look up the token cache.
 
    - If cached token exists and is not within refresh margin -- use it.
-   - If cached token is missing or near expiry -- refresh (step 4).
+   - If cached token is missing or near expiry -- refresh (step 5).
 
-4. **Token refresh** (synchronous): mitmproxy hooks are synchronous (blocking
+5. **Token refresh** (synchronous): mitmproxy hooks are synchronous (blocking
    the event loop), so concurrent requests naturally serialize. Steps:
 
-   a. Generate a JWT: sign `{iss, iat, exp}` with the private key using RS256.
-   b. Call `POST {base_url}/app/installations/{installation_id}/access_tokens`
-   with `Authorization: Bearer <JWT>` and optional `permissions` /
-   `repositories` body. c. Parse response: extract `token` and `expires_at`. d.
-   Update the cache.
+   1. Generate a JWT: sign `{iss, iat, exp}` with the private key using RS256.
+   2. Call `POST {base_url}/app/installations/{id}/access_tokens` with
+      `Authorization: Bearer <JWT>` and optional `permissions` / `repositories`
+      (the installation's bare names) body.
+   3. Parse response: extract `token` and `expires_at`.
+   4. Resolve the installation's repositories (`GET /installation/repositories`)
+      and update the cache.
 
-5. **Replace**: Substitute the surrogate with the real installation token in the
-   `Authorization` header. Apply the same foreign-credential stripping logic as
-   masked secrets (strip non-surrogate Authorization headers on scoped hosts
+6. **Route**: Pick the installation (see
+   [Installation Routing](#installation-routing)); for GraphQL this is where the
+   scope check runs.
+
+7. **Replace**: Substitute the surrogate with the routed installation's token in
+   the `Authorization` header. Apply the same foreign-credential stripping logic
+   as masked secrets (strip non-surrogate Authorization headers on scoped hosts
    when `allow_foreign_credentials` is false).
 
-6. **Log**: Log the replacement with `[github-app: refreshed]` or
-   `[github-app: cached]` in the network log.
+8. **Log**: Log the replacement with `[github-app: refreshed (<account>)]` or
+   `[github-app: cached (<account>)]` in the network log, where `<account>` is
+   the login of the installation's account.
 
 ### Hook Integration
 
@@ -192,19 +288,23 @@ The response contains `token` (the `ghs_`-prefixed installation token) and
 
 ### Error Handling
 
-If the token refresh HTTP call fails:
+If installation discovery or the token refresh HTTP call fails:
 
 - **Network error**: Return HTTP 502 to the container with a JSON body:
   ```json
   {
     "error": "github_app_token_refresh_failed",
-    "message": "Failed to refresh GitHub App installation token: <detail>"
+    "message": "Failed to refresh GitHub App installation token"
   }
   ```
-- **GitHub API error** (4xx/5xx): Return HTTP 502 with the upstream error
-  detail. Common errors: 401 (bad JWT/key), 404 (wrong installation ID), 403
-  (insufficient permissions).
-- **Log**: Always log refresh failures via `_log_loud()`.
+- **GitHub API error** (4xx/5xx): Return the same HTTP 502. Common errors: 401
+  (bad JWT/key), 403 (insufficient permissions).
+- **No usable installation** (App not installed on its owner's account or on the
+  accounts `repositories` lists, or all suspended): Return the same HTTP 502.
+- **Log**: Always log failures, with their detail, via `_log_loud()`.
+
+For GraphQL, a refresh failure for any installation fails the request, since
+routing needs every installation's repository set.
 
 The container sees a clean HTTP error and can retry. The surrogate is never sent
 to the upstream server.
@@ -246,8 +346,10 @@ proxy_filter.py request()
     ├─ Allowlist check
     ├─ Detect surrogate in Authorization header (Bearer or Basic Auth)
     ├─ Scope check (host matches entry's scopes)
+    ├─ Discover installations if not cached (JWT → GET /app/installations)
     ├─ Token refresh if cache miss or near expiry (JWT → installation token)
-    ├─ Replace surrogate with real installation token
+    ├─ Route to one installation (URL account, or GraphQL repo scope)
+    ├─ Replace surrogate with the routed installation's token
     │
     └─ Forward request with real credentials
 ```
@@ -294,19 +396,26 @@ proxy_filter.py request()
     mounted read-only into the proxy container, and deleted after proxy stop.
     This is the same trust boundary as existing masked secret values.
 
+12. **Trusted installations only**: Installations are discovered, not
+    configured, but only the one on the App owner's account is used unless
+    `repositories` names other accounts. A third party installing a public App
+    on its own account therefore gains nothing. Each token covers one
+    installation, and a GraphQL request is forwarded only if it passes the scope
+    check against the routed installation's own repository set.
+
 ## Comparison With Masked Secrets
 
-| Aspect                    | Masked Secret (PAT)      | GitHub App Credential             |
-| ------------------------- | ------------------------ | --------------------------------- |
-| Token lifetime            | Months/years (or never)  | 1 hour                            |
-| Token rotation            | None (static value)      | Automatic (proxy-managed)         |
-| Private key in container  | N/A                      | Never                             |
-| Real token in container   | Never (surrogate)        | Never (surrogate)                 |
-| Proxy complexity          | Stateless string replace | Stateful (cache + HTTP refresh)   |
-| Network call from proxy   | None                     | 1 call per hour to GitHub API     |
-| Response echo risk        | High (PAT valid forever) | Low (token expires in 1 hour)     |
-| Public repo mutation risk | No protection            | Blocked by GraphQL repo scoping   |
-| GitHub rate limits        | 5,000/hr (PAT)           | 5,000-12,500/hr (scales with org) |
+| Aspect                    | Masked Secret (PAT)      | GitHub App Credential                |
+| ------------------------- | ------------------------ | ------------------------------------ |
+| Token lifetime            | Months/years (or never)  | 1 hour                               |
+| Token rotation            | None (static value)      | Automatic (proxy-managed)            |
+| Private key in container  | N/A                      | Never                                |
+| Real token in container   | Never (surrogate)        | Never (surrogate)                    |
+| Proxy complexity          | Stateless string replace | Stateful (cache + HTTP refresh)      |
+| Network call from proxy   | None                     | Hourly discovery + token per install |
+| Response echo risk        | High (PAT valid forever) | Low (token expires in 1 hour)        |
+| Public repo mutation risk | No protection            | Blocked by GraphQL repo scoping      |
+| GitHub rate limits        | 5,000/hr (PAT)           | 5,000-12,500/hr (scales with org)    |
 
 ## Design Decisions
 
@@ -329,6 +438,15 @@ proxy_filter.py request()
    the surrogate in the password field, and re-encodes. This follows the same
    pattern as masked secrets' `_replace_in_header()` method.
 
+4. **Discovered, not configured, installations**: The installation ID is
+   derivable from the App credentials, so configuring it would add setup
+   friction and a way to misconfigure. Defaulting to the App owner's
+   installation keeps the zero-config case as safe as a pinned ID (a private App
+   can only be installed there), while `repositories` entries opt into further
+   accounts explicitly. Routing on the URL (REST, git) and on the GraphQL scope
+   check reuses information the proxy already has; requests that name no account
+   use the lowest-ID installation so the choice is deterministic.
+
 ## GraphQL Repository Scoping
 
 GitHub App installation tokens can perform certain mutations (e.g.,
@@ -338,7 +456,10 @@ installation token is authorized to see (which on github.com includes every
 public repository) via the `Query.repository(owner, name)` selection — this
 entry point is invisible to any `*Id`/`Name` field extraction. To prevent data
 exfiltration via either of these vectors, the proxy performs six layers of scope
-checking on every GraphQL request.
+checking on every GraphQL request. With several installations, the checks run
+against each installation's repository set to pick the one the request is routed
+to (see [Installation Routing](#installation-routing)); the "allowed" sets below
+are those of the installation being checked.
 
 **Layer 0a — `repository(owner, name)` field selection check (string match):**
 
@@ -398,10 +519,12 @@ target a specific allowed repo.
 
 **Layer 1 — `repositoryId` field check (string match):**
 
-1. At token refresh time, the proxy calls `GET /installation/repositories` to
-   resolve configured repositories to both node IDs and `owner/name` full names
-   (both stored in `CachedToken` as `repo_node_ids` and `repo_full_names`). Full
-   names are lowercased for case-insensitive matching.
+1. At token refresh time, the proxy calls `GET /installation/repositories` with
+   each installation's token to resolve that installation's repositories
+   (narrowed to the configured names, if any) to both node IDs and `owner/name`
+   full names (both stored in the installation's `CachedToken` as
+   `repo_node_ids` and `repo_full_names`). Full names are matched
+   case-insensitively.
 2. GraphQL requests with URL query parameters are rejected outright (HTTP 403).
    The GraphQL endpoint only accepts POST with a JSON body; query parameters
    could bypass body-based scope checking. The `gh` CLI never uses query

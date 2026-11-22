@@ -394,10 +394,13 @@ bug.
 
 #### Migration History
 
-| Version | Migration           | Type            | Description                                                                                               |
-| ------- | ------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
-| 1 → 2   | `_migrate_v1_to_v2` | Security reject | Detects legacy email fields at repo level; raises `ConfigError`                                           |
-| 2 → 3   | `_migrate_v2_to_v3` | Auto-transform  | Extracts top-level `resource_limits` into `vars:` section and injects `!var` references into repo configs |
+| Version | Migration           | Type            | Description                                                                                                                                  |
+| ------- | ------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 → 2   | `_migrate_v1_to_v2` | Security reject | Detects legacy email fields at repo level; raises `ConfigError`                                                                              |
+| 2 → 3   | `_migrate_v2_to_v3` | Auto-transform  | Extracts top-level `resource_limits` into `vars:` section and injects `!var` references into repo configs                                    |
+| 3 → 4   | `_migrate_v3_to_v4` | Auto-transform  | Nests flat `email:` fields into `account:`, `imap:`, `smtp:`, `auth:` subsections                                                            |
+| 4 → 5   | `_migrate_v4_to_v5` | Auto-transform  | Flattens `git.repo_url` to `repo_url` and `container.path` to `container_path`                                                               |
+| 5 → 6   | `_migrate_v5_to_v6` | Auto-transform  | Drops GitHub App `installation_id` (installations are discovered by the proxy) and empty `repositories` lists; logs a warning per credential |
 
 #### Variable Name Collision Avoidance
 

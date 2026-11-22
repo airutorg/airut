@@ -357,7 +357,6 @@ class TestSchemaForUIWithRealConfigs:
         assert names == {
             "app_id",
             "private_key",
-            "installation_id",
             "scopes",
             "allow_foreign_credentials",
             "base_url",

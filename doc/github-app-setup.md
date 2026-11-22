@@ -142,9 +142,25 @@ tokens. It never enters the container -- only the proxy sees it.
    on
 4. Click **Install**
 
-After installation, note the **Installation ID** from the URL:
-`https://github.com/settings/installations/<INSTALLATION_ID>` (or
-`https://github.com/organizations/<org>/settings/installations/<INSTALLATION_ID>`).
+You don't need the installation ID: the proxy discovers the App's installations
+from the Client ID and private key. By default it uses only the installation on
+the **App owner's account** — for a private App (the recommended setup above)
+that is the only place it can be installed anyway.
+
+To use installations on other accounts (a public App installed on several
+organizations), list them in `repositories` (see below): `my-org/my-repo` for
+one repository, `my-org/*` for every repository the installation covers. Other
+accounts' installations are ignored. This matters because anyone can install a
+public App on their own account; trusting every installation would give an agent
+a working token for an attacker-controlled account, which defeats the repository
+scoping below.
+
+With several installations, the proxy sends each request the token of the
+installation on the account it targets — the owner in the URL for REST and git
+(`/repos/{owner}/…`, `github.com/{owner}/…`), or the installation owning the
+addressed repositories for GraphQL. Requests that don't name one of them (e.g.
+`/rate_limit`, reading a public repo elsewhere) use the installation with the
+lowest ID.
 
 ## Step 5: Configure Airut
 
@@ -159,7 +175,6 @@ GH_APP_ID=Iv23liXXXXXXXXXX            # Client ID from app settings
 GH_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAK...
 -----END RSA PRIVATE KEY-----"
-GH_APP_INSTALLATION_ID=12345678        # From installation URL
 ```
 
 **Server config** (`~/.config/airut/airut.yaml`):
@@ -171,7 +186,6 @@ repos:
       GH_TOKEN:
         app_id: !env GH_APP_ID
         private_key: !env GH_APP_PRIVATE_KEY
-        installation_id: !env GH_APP_INSTALLATION_ID
         scopes:
           - "github.com"
           - "api.github.com"
@@ -180,9 +194,12 @@ repos:
         permissions:
           contents: write
           pull_requests: write
-        # Optional: restrict token to specific repos
+        # Optional: restrict tokens to specific repos (owner/name, or
+        # owner/* for all). Only the listed owners' installations are used;
+        # without it, only the App owner's installation is used.
         repositories:
-          - "my-repo"
+          - "my-org/my-repo"
+          - "partner-org/*"
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
@@ -231,7 +248,6 @@ github_app_credentials:
   GH_TOKEN:
     app_id: "12345"                          # Numeric App ID for GHES < 3.19
     private_key: !env GH_APP_PRIVATE_KEY
-    installation_id: "67890"
     base_url: "https://github.example.com/api/v3"
     scopes:
       - "github.example.com"
@@ -272,10 +288,29 @@ even if the administrator who installed it leaves the organization.
   lines)
 - Check that the key hasn't been revoked -- regenerate if needed
 
-**"404 Not Found" on token refresh:**
+**"no usable installation" on token refresh:**
 
-- Verify `installation_id` is correct (check the URL after installing the app)
-- Ensure the app is still installed on the target organization/account
+- Without `repositories`, the app must be installed (and not suspended) on the
+  account that owns it
+- With `repositories`, its `owner` parts must match accounts the app is
+  installed on
+
+**"404 Not Found" from GitHub for a repository in another account:**
+
+- Install the app on that account and add `owner/name` (or `owner/*`) for it to
+  `repositories`; the proxy picks the new installation up within an hour (or on
+  the next task)
+
+**Config error "must be in owner/name or owner/\* form" after upgrading:**
+
+- `repositories` entries used to be bare names. Prefix each with its owner (e.g.
+  `my-repo` → `my-org/my-repo`). The config migration drops `installation_id`
+  automatically but cannot know the owner.
+
+**"graphql_repo_scope_blocked" with detail `<multi-installation>`:**
+
+- A single GraphQL request addressed repositories in two accounts; one token can
+  only cover one installation. Split it into one request per account.
 
 **"403 Forbidden" on API calls:**
 

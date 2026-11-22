@@ -17,6 +17,7 @@ from airut.config.migration import (
     _migrate_v2_to_v3,
     _migrate_v3_to_v4,
     _migrate_v4_to_v5,
+    _migrate_v5_to_v6,
     apply_migrations,
     get_file_config_version,
     migrate_config_file,
@@ -746,6 +747,129 @@ class TestMigrateV4ToV5:
         assert repo["container_path"] == ".devcontainer"
         assert "git" not in repo
         assert "container" not in repo
+
+
+class TestMigrateV5ToV6:
+    def test_drops_installation_id(self) -> None:
+        """installation_id is removed; other credential fields stay."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "github_app_credentials": {
+                        "GH_TOKEN": {
+                            "app_id": "Iv23li",
+                            "private_key": "key",
+                            "installation_id": 12345,
+                            "scopes": ["api.github.com"],
+                        }
+                    }
+                }
+            }
+        }
+        result = _migrate_v5_to_v6(raw)
+        assert result["repos"]["r"]["github_app_credentials"]["GH_TOKEN"] == {
+            "app_id": "Iv23li",
+            "private_key": "key",
+            "scopes": ["api.github.com"],
+        }
+
+    def test_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Dropping installation_id is logged with repo and key."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "github_app_credentials": {
+                        "GH_TOKEN": {"installation_id": 1}
+                    }
+                }
+            }
+        }
+        with caplog.at_level("WARNING", logger="airut.config.migration"):
+            _migrate_v5_to_v6(raw)
+        assert "repos.r.github_app_credentials.GH_TOKEN" in caplog.text
+
+    def test_drops_empty_repositories(self) -> None:
+        """An empty repositories list is removed; v6 rejects it."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "github_app_credentials": {
+                        "GH": {"app_id": "x", "repositories": []},
+                        "KEEP": {"app_id": "y", "repositories": ["o/n"]},
+                    }
+                }
+            }
+        }
+        creds = _migrate_v5_to_v6(raw)["repos"]["r"]["github_app_credentials"]
+        assert creds["GH"] == {"app_id": "x"}
+        assert creds["KEEP"] == {"app_id": "y", "repositories": ["o/n"]}
+
+    def test_credential_without_installation_id_unchanged(self) -> None:
+        """Credentials without installation_id are left as-is."""
+        cred = {"app_id": "Iv23li", "scopes": ["api.github.com"]}
+        raw: dict[str, Any] = {
+            "repos": {"r": {"github_app_credentials": {"GH": dict(cred)}}}
+        }
+        result = _migrate_v5_to_v6(raw)
+        assert result["repos"]["r"]["github_app_credentials"]["GH"] == cred
+
+    def test_non_dict_shapes_left_alone(self) -> None:
+        """Malformed sections are left for the parser to reject."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "bad": "not-a-dict",
+                "no_creds": {},
+                "bad_creds": {"github_app_credentials": "not-a-dict"},
+                "bad_entry": {"github_app_credentials": {"GH": "x"}},
+            }
+        }
+        result = _migrate_v5_to_v6(raw)
+        assert result["repos"]["bad"] == "not-a-dict"
+        assert result["repos"]["no_creds"] == {}
+        assert result["repos"]["bad_creds"]["github_app_credentials"] == (
+            "not-a-dict"
+        )
+        assert result["repos"]["bad_entry"]["github_app_credentials"] == {
+            "GH": "x"
+        }
+
+    def test_non_dict_repos(self) -> None:
+        """Non-dict repos value is returned unchanged."""
+        raw: dict[str, Any] = {"repos": "not-a-dict"}
+        assert _migrate_v5_to_v6(raw) == {"repos": "not-a-dict"}
+
+    def test_idempotent(self) -> None:
+        """Running the migration twice produces the same result."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "github_app_credentials": {
+                        "GH": {"app_id": "x", "installation_id": 1}
+                    }
+                }
+            }
+        }
+        result1 = _migrate_v5_to_v6(raw)
+        result2 = _migrate_v5_to_v6(result1)
+        assert result1 == result2
+
+    def test_full_chain_v5_to_v6(self) -> None:
+        """apply_migrations runs v5→v6 for config_version: 5."""
+        raw: dict[str, Any] = {
+            "config_version": 5,
+            "repos": {
+                "r": {
+                    "github_app_credentials": {
+                        "GH": {"app_id": "x", "installation_id": 1}
+                    }
+                }
+            },
+        }
+        result = apply_migrations(raw)
+        assert result["config_version"] == CURRENT_CONFIG_VERSION
+        assert result["repos"]["r"]["github_app_credentials"]["GH"] == {
+            "app_id": "x"
+        }
 
 
 class TestGetFileConfigVersion:

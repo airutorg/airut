@@ -6,8 +6,9 @@
 """GitHub App JWT generation and installation token management.
 
 Provides functions to generate JWTs signed with a GitHub App's RSA private
-key and exchange them for short-lived installation access tokens. Used by
-the proxy to transparently rotate tokens behind a stable surrogate.
+key, look up the App's owner and installations, and exchange JWTs for
+short-lived installation access tokens.  Installation routing and token
+caching live in ``github_app_tokens``.
 
 No PyJWT dependency -- uses only stdlib + cryptography (already present
 for AWS SigV4A signing).
@@ -33,6 +34,24 @@ CREDENTIAL_TYPE_GITHUB_APP = "github-app"
 # Refresh margin: refresh the token when it is within this many seconds
 # of expiry.  5 minutes is generous enough to avoid edge-case races.
 _REFRESH_MARGIN_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class Installation:
+    """A GitHub App installation the credential may mint tokens for.
+
+    Attributes:
+        id: Numeric installation ID.
+        account: Login of the account (org or user) the App is
+            installed on.
+        repositories: Bare repository names (within ``account``) that
+            tokens for this installation are restricted to, or None to
+            use every repository the installation grants.
+    """
+
+    id: int
+    account: str
+    repositories: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +172,93 @@ def fetch_installation_token(
     return token, expires_at
 
 
+def fetch_app_owner(base_url: str, jwt: str) -> str:
+    """Return the login of the account that owns a GitHub App.
+
+    Calls ``GET /app`` (JWT-authenticated).
+
+    Args:
+        base_url: GitHub API base URL (e.g., "https://api.github.com").
+        jwt: Signed App JWT.
+
+    Returns:
+        The owner's login.
+
+    Raises:
+        urllib.error.HTTPError: If the GitHub API returns an error.
+        urllib.error.URLError: If the network request fails.
+        ValueError: If the response carries no owner login.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(
+        f"{base_url}/app",
+        headers={
+            "Authorization": f"Bearer {jwt}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with opener.open(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+
+    owner = (result.get("owner") or {}).get("login")
+    if not isinstance(owner, str) or not owner:
+        raise ValueError("GitHub App response has no owner login")
+    return owner
+
+
+def fetch_app_installations(base_url: str, jwt: str) -> list[Installation]:
+    """List the accounts a GitHub App is installed on.
+
+    Calls ``GET /app/installations`` (JWT-authenticated) with
+    pagination.  Suspended installations are skipped: GitHub refuses to
+    mint tokens for them.
+
+    Args:
+        base_url: GitHub API base URL (e.g., "https://api.github.com").
+        jwt: Signed App JWT.
+
+    Returns:
+        Installations in the order GitHub returned them, without
+        repository restrictions.
+
+    Raises:
+        urllib.error.HTTPError: If the GitHub API returns an error.
+        urllib.error.URLError: If the network request fails.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    installations: list[Installation] = []
+    page = 1
+
+    while True:
+        url = f"{base_url}/app/installations?per_page=100&page={page}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {jwt}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        with opener.open(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+
+        for item in result:
+            installation_id = item.get("id")
+            account = (item.get("account") or {}).get("login")
+            if not isinstance(installation_id, int) or not account:
+                continue
+            if item.get("suspended_at"):
+                continue
+            installations.append(Installation(installation_id, account))
+
+        if len(result) < 100:
+            break
+        page += 1
+
+    return installations
+
+
 def fetch_installation_repos(
     base_url: str,
     token: str,
@@ -169,7 +275,8 @@ def fetch_installation_repos(
         base_url: GitHub API base URL (e.g., "https://api.github.com").
         token: Installation access token (not JWT).
         configured_repos: Optional list of bare repo names to filter by.
-            When provided, only repos matching these names are included.
+            When provided, only repos matching these names
+            (case-insensitively) are included.
             When None, all installation repos are included.
 
     Returns:
@@ -183,7 +290,9 @@ def fetch_installation_repos(
     full_names: list[str] = []
     page = 1
     configured_set = (
-        set(configured_repos) if configured_repos is not None else None
+        {r.lower() for r in configured_repos}
+        if configured_repos is not None
+        else None
     )
 
     while True:
@@ -206,7 +315,10 @@ def fetch_installation_repos(
             full_name = repo.get("full_name", "")
             if not node_id or not full_name:
                 continue
-            if configured_set is not None and name not in configured_set:
+            if (
+                configured_set is not None
+                and name.lower() not in configured_set
+            ):
                 continue
             node_ids.append(node_id)
             full_names.append(full_name)

@@ -18,7 +18,10 @@ from airut._bundled.proxy.github_app import (
     _REFRESH_MARGIN_SECONDS,
     CREDENTIAL_TYPE_GITHUB_APP,
     CachedToken,
+    Installation,
     _base64url,
+    fetch_app_installations,
+    fetch_app_owner,
     fetch_installation_repos,
     fetch_installation_token,
     generate_jwt,
@@ -397,7 +400,7 @@ class TestFetchInstallationRepos:
         )
 
     def test_filters_by_configured_repos(self) -> None:
-        """Only includes repos matching configured_repos."""
+        """Only includes repos matching configured_repos (any case)."""
         repos = [
             {
                 "name": "airut",
@@ -424,7 +427,7 @@ class TestFetchInstallationRepos:
             node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com",
                 "ghs_token",
-                configured_repos=["airut", "sandbox-action"],
+                configured_repos=["Airut", "sandbox-action"],
             )
 
         assert node_ids == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
@@ -640,3 +643,127 @@ class TestCachedToken:
             repo_full_names=names,
         )
         assert cached.repo_full_names == names
+
+
+def _mock_pages_opener(pages: list[list[dict]]) -> MagicMock:
+    """Create a mock opener returning one JSON array response per page."""
+    responses = []
+    for page in pages:
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(page).encode()
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        responses.append(resp)
+    opener = MagicMock()
+    opener.open.side_effect = responses
+    return opener
+
+
+def _installation_item(
+    installation_id: int, login: str, suspended_at: str | None = None
+) -> dict:
+    return {
+        "id": installation_id,
+        "account": {"login": login},
+        "suspended_at": suspended_at,
+    }
+
+
+class TestFetchAppInstallations:
+    """Tests for fetch_app_installations function."""
+
+    def test_lists_installations(self) -> None:
+        """Returns installations and authenticates with the JWT."""
+        opener = _mock_pages_opener(
+            [[_installation_item(1, "orgA"), _installation_item(2, "orgB")]]
+        )
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_app_installations("https://api.github.com", "jwt")
+
+        assert result == [Installation(1, "orgA"), Installation(2, "orgB")]
+        req = opener.open.call_args[0][0]
+        assert req.full_url == (
+            "https://api.github.com/app/installations?per_page=100&page=1"
+        )
+        assert req.headers["Authorization"] == "Bearer jwt"
+
+    def test_pagination(self) -> None:
+        """Follows pages until a short page is returned."""
+        first = [_installation_item(i, f"org{i}") for i in range(100)]
+        opener = _mock_pages_opener([first, [_installation_item(100, "last")]])
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_app_installations("https://ghe.example/api/v3", "j")
+
+        assert len(result) == 101
+        assert opener.open.call_args[0][0].full_url == (
+            "https://ghe.example/api/v3/app/installations?per_page=100&page=2"
+        )
+
+    def test_skips_suspended_and_malformed(self) -> None:
+        """Suspended installations and incomplete entries are skipped."""
+        opener = _mock_pages_opener(
+            [
+                [
+                    _installation_item(1, "ok"),
+                    _installation_item(2, "susp", "2026-01-01T00:00:00Z"),
+                    {"id": 3, "account": None},
+                    {"id": "4", "account": {"login": "bad-id"}},
+                    {"account": {"login": "no-id"}},
+                ]
+            ]
+        )
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_app_installations("https://api.github.com", "jwt")
+
+        assert result == [Installation(1, "ok")]
+
+
+class TestFetchAppOwner:
+    """Tests for fetch_app_owner function."""
+
+    @staticmethod
+    def _opener(body: dict) -> MagicMock:
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(body).encode()
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        opener = MagicMock()
+        opener.open.return_value = resp
+        return opener
+
+    def test_returns_owner_login(self) -> None:
+        """Reads owner.login from GET /app with the JWT."""
+        opener = self._opener({"owner": {"login": "airutorg"}})
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            assert fetch_app_owner("https://api.github.com", "jwt") == (
+                "airutorg"
+            )
+        req = opener.open.call_args[0][0]
+        assert req.full_url == "https://api.github.com/app"
+        assert req.headers["Authorization"] == "Bearer jwt"
+
+    @pytest.mark.parametrize(
+        "body", [{}, {"owner": None}, {"owner": {"login": ""}}]
+    )
+    def test_missing_owner_raises(self, body: dict) -> None:
+        """A response without an owner login is an error."""
+        with (
+            patch(
+                "airut._bundled.proxy.github_app.urllib.request.build_opener",
+                return_value=self._opener(body),
+            ),
+            pytest.raises(ValueError, match="no owner login"),
+        ):
+            fetch_app_owner("https://api.github.com", "jwt")

@@ -12,6 +12,7 @@ reimplemented copies.
 """
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -37,6 +38,7 @@ from tests.proxy.vectors import (
     SURROGATE_ACCESS_KEY_ID,
 )
 
+from airut._bundled.proxy.github_app import Installation
 from airut._bundled.proxy.host_match import (
     UrlPrefixEntry,
     match_host_pattern,
@@ -477,7 +479,6 @@ class TestProxyFilterLog:
                         "type": "github-app",
                         "app_id": "12345",
                         "private_key": private_key,
-                        "installation_id": 678,
                         "scopes": ["api.github.com"],
                     },
                 }
@@ -549,7 +550,6 @@ class TestProxyFilterLog:
                     env_var="GH_TOKEN",
                     app_id="Iv23li",
                     private_key="real-private-key",
-                    installation_id=123,
                     scopes=("api.github.com",),
                 )
             ],
@@ -3531,7 +3531,6 @@ def _github_app_replacement(
     *,
     app_id: str = "Iv23liTestApp",
     private_key: str = "test-private-key",
-    installation_id: int = 12345,
     base_url: str = "https://api.github.com",
     scopes: list[str] | None = None,
     allow_foreign_credentials: bool = False,
@@ -3543,7 +3542,6 @@ def _github_app_replacement(
         "type": "github-app",
         "app_id": app_id,
         "private_key": private_key,
-        "installation_id": installation_id,
         "base_url": base_url,
         "scopes": scopes or ["api.github.com"],
         "allow_foreign_credentials": allow_foreign_credentials,
@@ -3555,10 +3553,43 @@ def _github_app_replacement(
     return entry
 
 
+# The single installation ``one_installation`` discovers.
+_INSTALLATION_ID = 12345
+_INSTALLATION_ACCOUNT = "org"
+
+
+@pytest.fixture
+def one_installation() -> Iterator[MagicMock]:
+    """Make discovery find one installation, on the App owner ``org``.
+
+    Also stubs JWT signing, which discovery needs; tests that exercise
+    signing failures patch ``generate_jwt`` again inside the test.
+    """
+    with (
+        patch(
+            "github_app_tokens.generate_jwt",
+            return_value="fake-jwt",
+        ),
+        patch(
+            "github_app_tokens.fetch_app_installations",
+            return_value=[
+                Installation(_INSTALLATION_ID, _INSTALLATION_ACCOUNT)
+            ],
+        ) as mock_discover,
+        patch(
+            "github_app_tokens.fetch_app_owner",
+            return_value=_INSTALLATION_ACCOUNT,
+        ),
+    ):
+        yield mock_discover
+
+
+@pytest.mark.usefixtures("one_installation")
 class TestGitHubAppTokenReplacement:
     """Tests for GitHub App token replacement in proxy filter."""
 
     _SURROGATE = "ghs_SurrogateTokenValue1234567890abcde"
+    _TOKEN_KEY = (_SURROGATE, _INSTALLATION_ID)
 
     def test_replaces_surrogate_with_real_token(self) -> None:
         """Surrogate in Authorization header is replaced with real token."""
@@ -3576,11 +3607,11 @@ class TestGitHubAppTokenReplacement:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_real_token_value", 9999999999.0),
             ),
         ):
@@ -3604,7 +3635,7 @@ class TestGitHubAppTokenReplacement:
         pf.replacements = {
             self._SURROGATE: _github_app_replacement(self._SURROGATE),
         }
-        pf._github_app_cache[self._SURROGATE] = CachedToken(
+        pf._github_app._tokens[self._TOKEN_KEY] = CachedToken(
             token="ghs_cached_token",
             expires_at=time_mod.time() + 3600,
         )
@@ -3615,9 +3646,7 @@ class TestGitHubAppTokenReplacement:
             headers={"Authorization": f"Bearer {self._SURROGATE}"},
         )
 
-        with patch(
-            "airut._bundled.proxy.proxy_filter.fetch_installation_token"
-        ) as mock_fetch:
+        with patch("github_app_tokens.fetch_installation_token") as mock_fetch:
             pf.requestheaders(flow)
             pf.request(flow)
 
@@ -3637,7 +3666,7 @@ class TestGitHubAppTokenReplacement:
         pf.replacements = {
             self._SURROGATE: _github_app_replacement(self._SURROGATE),
         }
-        pf._github_app_cache[self._SURROGATE] = CachedToken(
+        pf._github_app._tokens[self._TOKEN_KEY] = CachedToken(
             token="ghs_expired",
             expires_at=time_mod.time() - 100,
         )
@@ -3650,11 +3679,11 @@ class TestGitHubAppTokenReplacement:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fresh-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_fresh_token", time_mod.time() + 3600),
             ),
         ):
@@ -3662,7 +3691,8 @@ class TestGitHubAppTokenReplacement:
             pf.request(flow)
 
         assert flow.request.headers["Authorization"] == "Bearer ghs_fresh_token"
-        assert pf._github_app_cache[self._SURROGATE].token == "ghs_fresh_token"
+        key = self._TOKEN_KEY
+        assert pf._github_app._tokens[key].token == "ghs_fresh_token"
 
     def test_returns_502_on_refresh_failure(self) -> None:
         """Returns 502 when token refresh fails."""
@@ -3679,7 +3709,7 @@ class TestGitHubAppTokenReplacement:
         )
 
         with patch(
-            "airut._bundled.proxy.proxy_filter.generate_jwt",
+            "github_app_tokens.generate_jwt",
             side_effect=Exception("key error"),
         ):
             pf.requestheaders(flow)
@@ -3794,11 +3824,11 @@ class TestGitHubAppTokenReplacement:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_wildcard_token", 9999999999.0),
             ),
         ):
@@ -3817,7 +3847,7 @@ class TestGitHubAppTokenReplacement:
             self._SURROGATE: _github_app_replacement(
                 self._SURROGATE,
                 permissions={"contents": "write"},
-                repositories=["my-repo"],
+                repositories=["org/my-repo"],
             ),
         }
 
@@ -3829,11 +3859,11 @@ class TestGitHubAppTokenReplacement:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_scoped", 9999999999.0),
             ) as mock_fetch,
         ):
@@ -3842,7 +3872,7 @@ class TestGitHubAppTokenReplacement:
 
         mock_fetch.assert_called_once_with(
             "https://api.github.com",
-            "12345",
+            _INSTALLATION_ID,
             "fake-jwt",
             permissions={"contents": "write"},
             repositories=["my-repo"],
@@ -3872,11 +3902,11 @@ class TestGitHubAppTokenReplacement:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_real_token_value", 9999999999.0),
             ),
         ):
@@ -3906,7 +3936,7 @@ class TestGitHubAppTokenReplacement:
                 self._SURROGATE, scopes=["github.com"]
             ),
         }
-        pf._github_app_cache[self._SURROGATE] = CachedToken(
+        pf._github_app._tokens[self._TOKEN_KEY] = CachedToken(
             token="ghs_cached_basic",
             expires_at=time_mod.time() + 3600,
         )
@@ -3920,9 +3950,7 @@ class TestGitHubAppTokenReplacement:
             headers={"Authorization": f"Basic {basic}"},
         )
 
-        with patch(
-            "airut._bundled.proxy.proxy_filter.fetch_installation_token"
-        ) as mock_fetch:
+        with patch("github_app_tokens.fetch_installation_token") as mock_fetch:
             pf.requestheaders(flow)
             pf.request(flow)
 
@@ -3955,11 +3983,11 @@ class TestGitHubAppTokenReplacement:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_real_token", 9999999999.0),
             ),
         ):
@@ -3978,10 +4006,12 @@ class TestGitHubAppTokenReplacement:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("one_installation")
 class TestGitHubAppGraphQLScoping:
     """Tests for GraphQL repository scoping in _try_github_app()."""
 
     _SURROGATE = "ghs_SurrogateTokenValue1234567890abcde"
+    _TOKEN_KEY = (_SURROGATE, _INSTALLATION_ID)
     _REPO_NODE_IDS = frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
     _REPO_FULL_NAMES = frozenset({"airutorg/airut", "airutorg/sandbox-action"})
 
@@ -4000,7 +4030,7 @@ class TestGitHubAppGraphQLScoping:
         pf.replacements = {
             self._SURROGATE: _github_app_replacement(self._SURROGATE),
         }
-        pf._github_app_cache[self._SURROGATE] = CachedToken(
+        pf._github_app._tokens[self._TOKEN_KEY] = CachedToken(
             token="ghs_real_token",
             expires_at=time_mod.time() + 3600,
             repo_node_ids=repo_node_ids
@@ -4011,6 +4041,34 @@ class TestGitHubAppGraphQLScoping:
             else self._REPO_FULL_NAMES,
         )
         return pf
+
+    def test_ghes_graphql_path_is_scoped(self) -> None:
+        """GHES serves GraphQL at /api/graphql; it must be scope-checked."""
+        pf = self._setup_filter_with_cached_token()
+        pf.domains = ["ghe.example.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                base_url="https://ghe.example.com/api/v3",
+                scopes=["ghe.example.com"],
+            ),
+        }
+        body = json.dumps(
+            {"query": 'query { repository(owner: "evil", name: "x") { id } }'}
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="ghe.example.com",
+            path="/api/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert json.loads(flow.response._content)["detail"] == "evil/x"
 
     def test_undecodable_body_fails_closed(self) -> None:
         """An unreadable body blocks instead of skipping the check.
@@ -4214,7 +4272,7 @@ class TestGitHubAppGraphQLScoping:
         pf.replacements = {
             self._SURROGATE: _github_app_replacement(
                 self._SURROGATE,
-                repositories=["airut"],
+                repositories=["org/airut"],
             ),
         }
 
@@ -4226,15 +4284,15 @@ class TestGitHubAppGraphQLScoping:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_real", 9999999999.0),
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_repos",
+                "github_app_tokens.fetch_installation_repos",
                 return_value=(
                     frozenset({"R_kgDORH34qw"}),
                     frozenset({"airutorg/airut"}),
@@ -4249,7 +4307,7 @@ class TestGitHubAppGraphQLScoping:
             "ghs_real",
             configured_repos=["airut"],
         )
-        cached = pf._github_app_cache[self._SURROGATE]
+        cached = pf._github_app._tokens[self._TOKEN_KEY]
         assert cached.repo_node_ids == frozenset({"R_kgDORH34qw"})
         assert cached.repo_full_names == frozenset({"airutorg/airut"})
 
@@ -4345,15 +4403,15 @@ class TestGitHubAppGraphQLScoping:
 
         with (
             patch(
-                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                "github_app_tokens.generate_jwt",
                 return_value="fake-jwt",
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                "github_app_tokens.fetch_installation_token",
                 return_value=("ghs_real", 9999999999.0),
             ),
             patch(
-                "airut._bundled.proxy.proxy_filter.fetch_installation_repos",
+                "github_app_tokens.fetch_installation_repos",
                 side_effect=Exception("API error"),
             ),
         ):
@@ -4363,7 +4421,7 @@ class TestGitHubAppGraphQLScoping:
         # REST (non-graphql) still works with token replacement
         assert flow.request.headers["Authorization"] == "Bearer ghs_real"
         # Node IDs and full names are empty from failed resolution
-        cached = pf._github_app_cache[self._SURROGATE]
+        cached = pf._github_app._tokens[self._TOKEN_KEY]
         assert cached.repo_node_ids == frozenset()
         assert cached.repo_full_names == frozenset()
 
@@ -4710,6 +4768,383 @@ class TestGitHubAppGraphQLScoping:
 # ---------------------------------------------------------------------------
 # GraphQL operation allowlist (Layer 1)
 # ---------------------------------------------------------------------------
+
+
+class TestGitHubAppMultiInstallation:
+    """Routing requests across several installations of one GitHub App."""
+
+    _SURROGATE = "ghs_SurrogateTokenValue1234567890abcde"
+    # Discovery returns B first: routing must not depend on API order.
+    _INSTALLATIONS = [Installation(200, "orgB"), Installation(100, "orgA")]
+    _REPOS = {
+        100: (frozenset({"R_kgDORH34qw"}), frozenset({"orgA/app"})),
+        200: (frozenset({"R_kgDORm2NDQ"}), frozenset({"orgB/lib"})),
+    }
+    # The App is owned by orgA; orgB is a further installation that the
+    # credential must opt into via repositories.
+    _APP_OWNER = "orgA"
+    _BOTH_ACCOUNTS = ("orgA/*", "orgB/*")
+
+    def _filter(
+        self, repositories: tuple[str, ...] | None = _BOTH_ACCOUNTS
+    ) -> ProxyFilter:
+        """Build a filter; by default the credential opts into both orgs."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com", "github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                scopes=["api.github.com", "github.com"],
+                repositories=list(repositories) if repositories else None,
+            ),
+        }
+        return pf
+
+    def _run(
+        self,
+        pf: ProxyFilter,
+        flow: MockHTTPFlow,
+        *,
+        installations: list[Installation] | None = None,
+    ) -> dict[str, MagicMock]:
+        """Run the hooks with GitHub mocked; tokens are ``ghs_tok_<id>``."""
+
+        def fake_token(
+            _base_url: str, installation_id: int, _jwt: str, **_kw: object
+        ) -> tuple[str, float]:
+            return f"ghs_tok_{installation_id}", 9999999999.0
+
+        def fake_repos(
+            _base_url: str, token: str, **_kw: object
+        ) -> tuple[frozenset[str], frozenset[str]]:
+            return self._REPOS[int(token.rsplit("_", 1)[1])]
+
+        with (
+            patch(
+                "github_app_tokens.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "github_app_tokens.fetch_app_installations",
+                return_value=(
+                    self._INSTALLATIONS
+                    if installations is None
+                    else installations
+                ),
+            ) as discover,
+            patch(
+                "github_app_tokens.fetch_app_owner",
+                return_value=self._APP_OWNER,
+            ) as owner,
+            patch(
+                "github_app_tokens.fetch_installation_token",
+                side_effect=fake_token,
+            ) as token,
+            patch(
+                "github_app_tokens.fetch_installation_repos",
+                side_effect=fake_repos,
+            ) as repos,
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+        return {
+            "discover": discover,
+            "owner": owner,
+            "token": token,
+            "repos": repos,
+        }
+
+    def _rest(self, path: str, host: str = "api.github.com") -> MockHTTPFlow:
+        return _flow(
+            host=host,
+            path=path,
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+    def _graphql(self, query: str) -> MockHTTPFlow:
+        return _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=json.dumps({"query": query}).encode(),
+        )
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("/repos/orgB/lib/pulls", "ghs_tok_200"),
+            ("/repos/ORGB/lib", "ghs_tok_200"),
+            ("/orgs/orgB/members", "ghs_tok_200"),
+            ("/repos/orgA/app", "ghs_tok_100"),
+            # Account-agnostic and non-installed accounts use the
+            # lowest-ID installation.
+            ("/rate_limit", "ghs_tok_100"),
+            ("/repos/someone-else/public", "ghs_tok_100"),
+        ],
+    )
+    def test_rest_routes_by_owner(self, path: str, expected: str) -> None:
+        """REST requests use the installation on the path's account."""
+        pf = self._filter()
+        flow = self._rest(path)
+        mocks = self._run(pf, flow)
+
+        assert flow.request.headers["Authorization"] == f"Bearer {expected}"
+        # Only the routed installation gets a token.
+        assert mocks["token"].call_count == 1
+
+    def test_git_basic_auth_routes_by_owner(self) -> None:
+        """Git over HTTPS on github.com routes by the first path segment."""
+        import base64
+
+        pf = self._filter()
+        creds = base64.b64encode(
+            f"x-access-token:{self._SURROGATE}".encode()
+        ).decode()
+        flow = _flow(
+            host="github.com",
+            path="/orgB/lib.git/git-upload-pack",
+            headers={"Authorization": f"Basic {creds}"},
+        )
+        self._run(pf, flow)
+
+        decoded = base64.b64decode(
+            flow.request.headers["Authorization"].split(" ", 1)[1]
+        ).decode()
+        assert decoded == "x-access-token:ghs_tok_200"
+
+    def test_credential_info_names_account(self) -> None:
+        """The network log tag records which account's token was used."""
+        pf = self._filter()
+        flow = self._rest("/repos/orgB/lib")
+        self._run(pf, flow)
+
+        assert (
+            flow.metadata["credential_info"] == "github-app: refreshed (orgB)"
+        )
+
+    def test_tokens_cached_per_installation(self) -> None:
+        """Each installation's token is minted once and reused."""
+        pf = self._filter()
+        for path in ["/repos/orgA/app", "/repos/orgB/lib", "/repos/orgA/x"]:
+            mocks = self._run(pf, self._rest(path))
+        # The final request reused orgA's token from the first one.
+        mocks["token"].assert_not_called()
+        assert set(pf._github_app._tokens) == {
+            (self._SURROGATE, 100),
+            (self._SURROGATE, 200),
+        }
+
+    def test_installation_list_cached(self) -> None:
+        """Discovery runs once while the installation list is fresh."""
+        pf = self._filter()
+        first = self._run(pf, self._rest("/repos/orgA/app"))
+        second = self._run(pf, self._rest("/repos/orgB/lib"))
+
+        first["discover"].assert_called_once_with(
+            "https://api.github.com", "fake-jwt"
+        )
+        second["discover"].assert_not_called()
+
+    def test_stale_installation_list_rediscovered(self) -> None:
+        """An installation list past its TTL is fetched again."""
+        from airut._bundled.proxy.github_app_tokens import InstallationList
+
+        pf = self._filter()
+        pf._github_app._installations[self._SURROGATE] = InstallationList(
+            installations=(Installation(100, "orgA"),), fetched_at=0.0
+        )
+        mocks = self._run(pf, self._rest("/repos/orgB/lib"))
+
+        mocks["discover"].assert_called_once()
+        assert [
+            i.account
+            for i in pf._github_app._installations[
+                self._SURROGATE
+            ].installations
+        ] == ["orgA", "orgB"]
+
+    def test_discovery_failure_returns_502(self) -> None:
+        """A failed installation lookup fails the request like a refresh."""
+        pf = self._filter()
+        flow = self._rest("/repos/orgA/app")
+        with (
+            patch(
+                "github_app_tokens.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "github_app_tokens.fetch_app_installations",
+                side_effect=OSError("network down"),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 502
+        assert flow.metadata["credential_info"] == "github-app: refresh-failed"
+        assert self._SURROGATE not in pf._github_app._installations
+
+    def test_no_installations_returns_502(self) -> None:
+        """An App installed nowhere fails with 502 and is not cached."""
+        pf = self._filter()
+        flow = self._rest("/repos/orgA/app")
+        with patch.object(pf, "_log_loud") as log:
+            self._run(pf, flow, installations=[])
+
+        assert flow.response is not None
+        assert flow.response.status_code == 502
+        assert "no usable installation" in log.call_args[0][0]
+        assert self._SURROGATE not in pf._github_app._installations
+
+    def test_default_uses_only_owner_installation(self) -> None:
+        """Without repositories, other accounts' installations are ignored.
+
+        A public App can be installed by anyone, so a request naming the
+        installer's account must not get that installation's token.
+        """
+        pf = self._filter(repositories=None)
+        flow = self._rest("/repos/orgB/lib/issues")
+        mocks = self._run(pf, flow)
+
+        assert flow.request.headers["Authorization"] == "Bearer ghs_tok_100"
+        mocks["token"].assert_called_once()
+        mocks["owner"].assert_called_once_with(
+            "https://api.github.com", "fake-jwt"
+        )
+        assert [
+            i.account
+            for i in pf._github_app._installations[
+                self._SURROGATE
+            ].installations
+        ] == ["orgA"]
+
+    def test_default_graphql_ignores_third_party_installation(self) -> None:
+        """A mutation on a third-party installation's repo is blocked."""
+        pf = self._filter(repositories=None)
+        flow = self._graphql(
+            'mutation { createIssue(input: {repositoryId: "R_kgDORm2NDQ",'
+            ' title: "t"}) { issue { id } } }'
+        )
+        mocks = self._run(pf, flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert json.loads(flow.response._content)["detail"] == "R_kgDORm2NDQ"
+        # orgB's installation was never asked for a token.
+        mocks["token"].assert_called_once()
+
+    def test_wildcard_repositories_do_not_narrow(self) -> None:
+        """``owner/*`` uses the account's installation with all repos."""
+        pf = self._filter()
+        flow = self._rest("/repos/orgB/lib")
+        mocks = self._run(pf, flow)
+
+        assert mocks["token"].call_args.kwargs["repositories"] is None
+
+    def test_repositories_restrict_installations(self) -> None:
+        """Only accounts with a listed repo are used, narrowed to it."""
+        pf = self._filter(repositories=("orgb/lib",))
+        flow = self._rest("/repos/orgA/app")
+        mocks = self._run(pf, flow)
+
+        # orgA has no listed repo, so the only installation (orgB) is
+        # the default even for an orgA path.
+        assert flow.request.headers["Authorization"] == "Bearer ghs_tok_200"
+        assert mocks["token"].call_args.kwargs["repositories"] == ["lib"]
+        assert mocks["repos"].call_args.kwargs["configured_repos"] == ["lib"]
+        # The owner lookup is only needed without repositories.
+        mocks["owner"].assert_not_called()
+
+    def test_graphql_routes_to_repo_installation(self) -> None:
+        """A GraphQL query on orgB's repo uses orgB's token."""
+        pf = self._filter()
+        flow = self._graphql(
+            'query { repository(owner: "orgB", name: "lib") { id } }'
+        )
+        mocks = self._run(pf, flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_tok_200"
+        assert flow.metadata["credential_info"] == (
+            "github-app: refreshed (orgB), graphql-scoped"
+        )
+        # Routing GraphQL needs every installation's repository set.
+        assert mocks["token"].call_count == 2
+
+    def test_graphql_routes_by_node_id(self) -> None:
+        """A mutation addressing a repo by node ID routes to its owner."""
+        pf = self._filter()
+        flow = self._graphql(
+            'mutation { createIssue(input: {repositoryId: "R_kgDORm2NDQ",'
+            ' title: "t"}) { issue { id } } }'
+        )
+        self._run(pf, flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_tok_200"
+
+    def test_graphql_without_repo_uses_default(self) -> None:
+        """A query addressing no repository uses the lowest-ID install."""
+        pf = self._filter()
+        flow = self._graphql("query { viewer { login } }")
+        self._run(pf, flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_tok_100"
+
+    def test_graphql_spanning_installations_blocked(self) -> None:
+        """One request cannot address repos of two installations."""
+        pf = self._filter()
+        flow = self._graphql(
+            "query {"
+            ' a: repository(owner: "orgA", name: "app") { id }'
+            ' b: repository(owner: "orgB", name: "lib") { id }'
+            "}"
+        )
+        self._run(pf, flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        body = json.loads(flow.response._content)
+        assert body["error"] == "graphql_repo_scope_blocked"
+        assert body["detail"] == "<multi-installation>"
+        assert "more than one GitHub App installation" in body["message"]
+        assert flow.metadata["credential_info"] == (
+            "github-app: <multi-installation>"
+        )
+
+    def test_graphql_out_of_scope_reports_offending_repo(self) -> None:
+        """With several installations the block names the bad repo."""
+        pf = self._filter()
+        flow = self._graphql(
+            "query {"
+            ' a: repository(owner: "orgA", name: "app") { id }'
+            ' b: repository(owner: "evil", name: "x") { id }'
+            "}"
+        )
+        self._run(pf, flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        body = json.loads(flow.response._content)
+        assert body["detail"] == "evil/x"
+
+    def test_graphql_query_params_blocked_before_discovery(self) -> None:
+        """Query-param GraphQL requests are refused without any API call."""
+        pf = self._filter()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql?query=x",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        mocks = self._run(pf, flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        mocks["discover"].assert_not_called()
 
 
 class TestGraphqlOperationAllowlist:

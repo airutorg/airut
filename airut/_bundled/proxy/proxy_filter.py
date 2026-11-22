@@ -53,19 +53,19 @@ from aws_signing import (
     resign_request,
 )
 from connection_reuse import skip_failed_connections
-from github_app import (
-    CREDENTIAL_TYPE_GITHUB_APP,
-    CachedToken,
-    fetch_installation_repos,
-    fetch_installation_token,
-    generate_jwt,
-    is_token_valid,
+from github_app import CREDENTIAL_TYPE_GITHUB_APP
+from github_app_tokens import (
+    MULTI_INSTALLATION,
+    Candidate,
+    GitHubAppTokens,
+    is_graphql_path,
+    route_graphql,
 )
 from graphql_operations import GraphQLOperationFilter
 from graphql_scope import (
     _UNREADABLE,
+    ScopeResult,
     ScopeVerdict,
-    check_repo_scope,
 )
 from host_match import UrlPrefixEntry, match_host_pattern
 from mitmproxy import ctx, http
@@ -283,7 +283,8 @@ class ProxyFilter:
         self.replacements: dict[str, dict[str, _JsonValue]] = {}
         self._real_values: re.Pattern[str] | None = None
         self._log_file: TextIO | None = None
-        self._github_app_cache: dict[str, CachedToken] = {}
+        # GitHub App installation lists and tokens (see github_app_tokens).
+        self._github_app = GitHubAppTokens(self._log_loud)
 
         # Ordered request-body filter pipeline. Each filter gates itself
         # on the request and inspects / rewrites / rejects the body; the
@@ -851,8 +852,9 @@ class ProxyFilter:
 
         Checks Authorization header for a surrogate matching a
         ``"type": "github-app"`` entry in the replacement map. If found,
-        generates/refreshes a real installation access token and replaces
-        the surrogate.
+        picks the App installation the request targets (by account in
+        the URL, or by repository scope for GraphQL), generates/refreshes
+        that installation's access token, and replaces the surrogate.
 
         Also handles foreign credential stripping when
         ``allow_foreign_credentials`` is False.
@@ -892,82 +894,9 @@ class ProxyFilter:
             if not any(match_host_pattern(scope, host) for scope in scopes):
                 continue
 
-            # Found a matching GitHub App credential — get a real token
-            cached = self._github_app_cache.get(surrogate)
-
-            if is_token_valid(cached):
-                real_token = cached.token  # type: ignore[union-attr]
-                cache_status = "cached"
-            else:
-                # Refresh the token
-                try:
-                    jwt = generate_jwt(
-                        str(config["app_id"]),
-                        str(config["private_key"]),
-                    )
-                    permissions = config.get("permissions")
-                    repositories = config.get("repositories")
-                    real_token, expires_at = fetch_installation_token(
-                        str(config["base_url"]),
-                        str(config["installation_id"]),
-                        jwt,
-                        permissions=dict(permissions)  # type: ignore[arg-type]
-                        if permissions
-                        else None,
-                        repositories=list(repositories)  # type: ignore[arg-type]
-                        if repositories
-                        else None,
-                    )
-                    # Resolve repo node IDs and full names for GraphQL scoping
-                    try:
-                        repo_node_ids, repo_full_names = (
-                            fetch_installation_repos(
-                                str(config["base_url"]),
-                                real_token,
-                                configured_repos=list(repositories)  # type: ignore[arg-type]
-                                if repositories
-                                else None,
-                            )
-                        )
-                    except Exception as e:
-                        self._log_loud(
-                            f"GitHub App repo node ID resolution failed: {e}"
-                        )
-                        repo_node_ids = frozenset()
-                        repo_full_names = frozenset()
-                    self._github_app_cache[surrogate] = CachedToken(
-                        token=real_token,
-                        expires_at=expires_at,
-                        repo_node_ids=repo_node_ids,
-                        repo_full_names=repo_full_names,
-                    )
-                    cache_status = "refreshed"
-                except Exception as e:
-                    self._log_loud(
-                        f"GitHub App token refresh failed for "
-                        f"{flow.request.method} "
-                        f"{self._logged_url(flow)}: {e}"
-                    )
-                    flow.metadata["credential_info"] = (
-                        "github-app: refresh-failed"
-                    )
-                    flow.response = http.Response.make(
-                        502,
-                        json.dumps(
-                            {
-                                "error": "github_app_token_refresh_failed",
-                                "message": (
-                                    "Failed to refresh GitHub App "
-                                    "installation token"
-                                ),
-                            }
-                        ),
-                        {"Content-Type": "application/json"},
-                    )
-                    return True
-
-            # GraphQL repository scope check (fail-secure).
-            graphql_tag = ""
+            # Found a matching GitHub App credential.  Decide which
+            # installation's token to send, then replace the surrogate.
+            #
             # Normalize percent-encoding so that e.g. ``/%67raphql``
             # is treated the same as ``/graphql``.  This mirrors the
             # ``unquote()`` call in ``_is_allowed()`` and prevents
@@ -978,112 +907,64 @@ class ProxyFilter:
             # the query string.  A ``%3F`` in the raw path decodes
             # to ``?`` and is treated as a query delimiter, which is
             # fail-secure: the request hits the query-params block
-            # below.  This replaces the old fragile
-            # ``startswith("/graphql?")`` with exact path matching.
+            # below.
             req_path = unquote(flow.request.path)
-            path_without_query = req_path.split("?", 1)[0]
-            if path_without_query == "/graphql":
+            is_graphql = is_graphql_path(req_path.split("?", 1)[0])
+            if is_graphql and "?" in req_path:
                 # Reject requests with query parameters — the
                 # GraphQL endpoint only accepts POST with a JSON
                 # body.  Query parameters could bypass body-based
                 # scope checking.
-                if "?" in req_path:
-                    flow.metadata["allowlist_action"] = "BLOCKED"
-                    flow.metadata["credential_info"] = (
-                        "github-app: graphql-query-params"
-                    )
-                    flow.response = http.Response.make(
-                        403,
-                        json.dumps(
-                            {
-                                "error": "graphql_repo_scope_blocked",
-                                "message": (
-                                    "GraphQL requests with URL query "
-                                    "parameters are not allowed. Use "
-                                    "POST with a JSON body."
-                                ),
-                                "detail": "query-params",
-                            }
-                        ),
-                        {"Content-Type": "application/json"},
-                    )
-                    return True
+                self._block_graphql(
+                    flow,
+                    "query-params",
+                    "GraphQL requests with URL query parameters are not "
+                    "allowed. Use POST with a JSON body.",
+                    credential_info="github-app: graphql-query-params",
+                )
+                return True
 
-                cached_entry = self._github_app_cache.get(surrogate)
-                repo_ids = (
-                    cached_entry.repo_node_ids
-                    if cached_entry is not None
-                    else frozenset()
+            try:
+                candidates = self._github_app.candidates(
+                    surrogate,
+                    config,
+                    host,
+                    flow.request.path,
+                    graphql=is_graphql,
                 )
-                repo_full_names = (
-                    cached_entry.repo_full_names
-                    if cached_entry is not None
-                    else frozenset()
+            except Exception as e:
+                self._log_loud(
+                    f"GitHub App token refresh failed for "
+                    f"{flow.request.method} "
+                    f"{self._logged_url(flow)}: {e}"
                 )
-                # This runs outside the request-body filter pipeline,
-                # so it cannot rely on that pipeline's fail-closed
-                # guard and needs its own. get_content() raises for a
-                # Content-Encoding mitmproxy cannot decode — ValueError
-                # for an unknown codec, TypeError for a str-only one
-                # like rot13 — and the agent controls that header. A
-                # body we cannot read or parse is one we cannot
-                # scope-check, so treat it exactly like unparseable
-                # input rather than letting the hook raise and
-                # mitmproxy forward the request unchecked.
-                #
-                # ``or b""`` mirrors the pipeline: an absent body is
-                # handed over as empty, which check_repo_scope rejects
-                # as unparseable rather than raising on ``len(None)``.
-                try:
-                    content = flow.request.get_content() or b""
-                    result = check_repo_scope(
-                        content,
-                        repo_ids,
-                        repo_full_names,
-                    )
-                except Exception as e:  # noqa: BLE001 - must fail closed
-                    # Unconditional catch, so log: otherwise a genuine
-                    # bug in check_repo_scope() surfaces only as an
-                    # unexplained 403.
-                    self._log_loud(
-                        f"GraphQL repo-scope check failed: "
-                        f"{type(e).__name__}: {str(e)[:200]}"
-                    )
-                    result = _UNREADABLE
-                if result.verdict is not ScopeVerdict.ALLOWED:
-                    detail = result.detail or result.verdict.value
-                    if result.verdict is ScopeVerdict.OUT_OF_SCOPE:
-                        msg = (
-                            f"GraphQL request targets repository "
-                            f"outside configured scope: {detail} is "
-                            f"not in the set of allowed repositories "
-                            f"for this GitHub App credential."
-                        )
-                    else:
-                        msg = (
-                            f"GraphQL request blocked: could not "
-                            f"verify repository scope ({detail}). "
-                            f"Only well-formed GraphQL requests are "
-                            f"allowed when repository scoping is "
-                            f"active."
-                        )
-                    flow.metadata["allowlist_action"] = "BLOCKED"
-                    flow.metadata["credential_info"] = f"github-app: {detail}"
-                    flow.response = http.Response.make(
-                        403,
-                        json.dumps(
-                            {
-                                "error": "graphql_repo_scope_blocked",
-                                "message": msg,
-                                "detail": detail,
-                            }
-                        ),
-                        {"Content-Type": "application/json"},
-                    )
-                    return True
+                flow.metadata["credential_info"] = "github-app: refresh-failed"
+                flow.response = http.Response.make(
+                    502,
+                    json.dumps(
+                        {
+                            "error": "github_app_token_refresh_failed",
+                            "message": (
+                                "Failed to refresh GitHub App "
+                                "installation token"
+                            ),
+                        }
+                    ),
+                    {"Content-Type": "application/json"},
+                )
+                return True
+
+            graphql_tag = ""
+            if is_graphql:
+                chosen = self._scope_graphql(flow, candidates)
+                if chosen is None:
+                    return True  # Blocked; response already set.
                 graphql_tag = ", graphql-scoped"
+            else:
+                chosen = candidates[0]
 
             # Replace the surrogate with the real token
+            real_token = chosen.token.token
             if is_basic:
                 # Re-encode Basic Auth with real token in password
                 username, password = basic_creds  # type: ignore[misc]
@@ -1097,7 +978,8 @@ class ProxyFilter:
                 )
             self._collapse_duplicate_header(flow, "Authorization")
             flow.metadata["credential_info"] = (
-                f"github-app: {cache_status}{graphql_tag}"
+                f"github-app: {chosen.cache_status} "
+                f"({chosen.installation.account}){graphql_tag}"
             )
             return True
 
@@ -1124,6 +1006,98 @@ class ProxyFilter:
                 )
 
         return False
+
+    def _scope_graphql(
+        self, flow: http.HTTPFlow, candidates: list[Candidate]
+    ) -> Candidate | None:
+        """Scope-check a GraphQL request and pick its installation.
+
+        See :func:`github_app_tokens.route_graphql`.  Blocks the request
+        (403) when no installation's repository set admits it.
+
+        Args:
+            flow: The GraphQL flow.
+            candidates: Every usable installation with its token.
+
+        Returns:
+            The selected candidate, or None if the request was blocked.
+        """
+        # This runs outside the request-body filter pipeline, so it
+        # cannot rely on that pipeline's fail-closed guard and needs its
+        # own. get_content() raises for a Content-Encoding mitmproxy
+        # cannot decode — ValueError for an unknown codec, TypeError for
+        # a str-only one like rot13 — and the agent controls that
+        # header. A body we cannot read or parse is one we cannot
+        # scope-check, so treat it exactly like unparseable input rather
+        # than letting the hook raise and mitmproxy forward the request
+        # unchecked.
+        #
+        # ``or b""`` mirrors the pipeline: an absent body is handed over
+        # as empty, which check_repo_scope rejects as unparseable rather
+        # than raising on ``len(None)``.
+        try:
+            routed = route_graphql(
+                flow.request.get_content() or b"", candidates
+            )
+        except Exception as e:  # noqa: BLE001 - must fail closed
+            # Unconditional catch, so log: otherwise a genuine bug in
+            # check_repo_scope() surfaces only as an unexplained 403.
+            self._log_loud(
+                f"GraphQL repo-scope check failed: "
+                f"{type(e).__name__}: {str(e)[:200]}"
+            )
+            routed = _UNREADABLE
+        if isinstance(routed, Candidate):
+            return routed
+
+        result: ScopeResult = routed
+        detail = result.detail or result.verdict.value
+        if result == MULTI_INSTALLATION:
+            msg = (
+                "GraphQL request targets repositories owned by more than "
+                "one GitHub App installation. A single request can only "
+                "address repositories of one account; split it into one "
+                "request per account."
+            )
+        elif result.verdict is ScopeVerdict.OUT_OF_SCOPE:
+            msg = (
+                f"GraphQL request targets repository outside configured "
+                f"scope: {detail} is not in the set of allowed "
+                f"repositories for this GitHub App credential."
+            )
+        else:
+            msg = (
+                f"GraphQL request blocked: could not verify repository "
+                f"scope ({detail}). Only well-formed GraphQL requests are "
+                f"allowed when repository scoping is active."
+            )
+        self._block_graphql(flow, detail, msg)
+        return None
+
+    @staticmethod
+    def _block_graphql(
+        flow: http.HTTPFlow,
+        detail: str,
+        message: str,
+        *,
+        credential_info: str | None = None,
+    ) -> None:
+        """Block a GitHub App GraphQL request with a 403 scope error."""
+        flow.metadata["allowlist_action"] = "BLOCKED"
+        flow.metadata["credential_info"] = (
+            credential_info or f"github-app: {detail}"
+        )
+        flow.response = http.Response.make(
+            403,
+            json.dumps(
+                {
+                    "error": "graphql_repo_scope_blocked",
+                    "message": message,
+                    "detail": detail,
+                }
+            ),
+            {"Content-Type": "application/json"},
+        )
 
     def _prepare_signing_context(
         self,

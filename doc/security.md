@@ -353,6 +353,12 @@ container -- the surrogate never changes.
   unrestricted against public repository mutations
 - **Scope enforcement**: Same as masked secrets -- proxy only replaces for
   matching hosts, foreign credentials are stripped
+- **Trusted installations only**: The proxy discovers the App's installations
+  itself but uses only the one on the App owner's account, plus accounts listed
+  in `repositories`. Anyone can install a public App on their own account;
+  trusting such installations would hand the agent a working token for an
+  attacker-controlled account, an exfiltration path past GraphQL repository
+  scoping
 
 See [github-app-setup.md](github-app-setup.md) for the setup guide and
 [network-sandbox.md](network-sandbox.md#github-app-credentials-proxy-managed-token-rotation)

@@ -98,7 +98,7 @@ def _make_github_app_skeleton() -> dict[str, Any]:
     """Create a GitHub App credential skeleton with sensible defaults.
 
     Pre-populates the host scopes and base URL so users only need to
-    fill in app-specific values (app_id, private_key, installation_id).
+    fill in app-specific values (app_id, private_key).
     """
     return {
         "scopes": [

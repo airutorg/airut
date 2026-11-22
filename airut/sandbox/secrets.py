@@ -149,18 +149,16 @@ class GitHubAppCredential:
         env_var: Environment variable name for the container.
         app_id: GitHub App Client ID or numeric App ID.
         private_key: PEM-encoded RSA private key.
-        installation_id: Installation ID for the target org/user.
         scopes: Fnmatch patterns for allowed hosts.
         allow_foreign_credentials: Whether to allow non-surrogate credentials.
         base_url: GitHub API base URL.
         permissions: Optional token permission restrictions.
-        repositories: Optional token repository restrictions.
+        repositories: Optional ``owner/name`` repository restrictions.
     """
 
     env_var: str
     app_id: str
     private_key: str
-    installation_id: int
     scopes: tuple[str, ...]
     allow_foreign_credentials: bool = False
     base_url: str = "https://api.github.com"
@@ -174,7 +172,6 @@ class _GitHubAppEntry:
 
     app_id: str
     private_key: str
-    installation_id: int
     base_url: str
     scopes: tuple[str, ...]
     allow_foreign_credentials: bool = False
@@ -187,7 +184,6 @@ class _GitHubAppEntry:
             "type": "github-app",
             "app_id": self.app_id,
             "private_key": self.private_key,
-            "installation_id": self.installation_id,
             "base_url": self.base_url,
             "scopes": list(self.scopes),
         }
@@ -387,7 +383,6 @@ def prepare_secrets(
         replacement_map[surrogate] = _GitHubAppEntry(
             app_id=gh_cred.app_id,
             private_key=gh_cred.private_key,
-            installation_id=gh_cred.installation_id,
             base_url=gh_cred.base_url,
             scopes=gh_cred.scopes,
             allow_foreign_credentials=gh_cred.allow_foreign_credentials,

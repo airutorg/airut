@@ -351,7 +351,6 @@ repos:
       GH_TOKEN:
         app_id: !env GH_APP_ID
         private_key: !env GH_APP_PRIVATE_KEY
-        installation_id: !env GH_APP_INSTALLATION_ID
         scopes:
           - "github.com"
           - "api.github.com"
@@ -394,7 +393,6 @@ repos:
       GH_TOKEN:
         app_id: !env GH_APP_ID
         private_key: !env GH_APP_PRIVATE_KEY
-        installation_id: !env GH_APP_INSTALLATION_ID
         scopes:
           - "github.com"
           - "api.github.com"
@@ -425,7 +423,6 @@ GH_APP_ID=Iv23liXXXXXXXXXX
 GH_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 ...
 -----END RSA PRIVATE KEY-----"
-GH_APP_INSTALLATION_ID=12345678
 # Or classic PAT (alternative)
 # GH_TOKEN_YOUR_REPO=ghp_...
 ```

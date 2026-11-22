@@ -3452,7 +3452,6 @@ def _make_sample_raw_with_credentials() -> dict[str, Any]:
         "MY_APP": {
             "app_id": "123456",
             "private_key": "test-key-data",
-            "installation_id": 789012,
             "scopes": ["api.github.com"],
         },
     }
