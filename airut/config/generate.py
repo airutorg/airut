@@ -151,7 +151,6 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         "  GH_TOKEN:",
         "    app_id: !env GH_APP_ID",
         "    private_key: !env GH_APP_PRIVATE_KEY",
-        "    installation_id: !env GH_APP_INSTALLATION_ID",
         "    scopes:",
         '      - "github.com"',
         '      - "api.github.com"',
@@ -162,7 +161,7 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         "      contents: write",
         "      pull_requests: write",
         "    repositories:",
-        "      - my-repo",
+        "      - my-org/my-repo",
     ],
     "RepoServerConfig.schedules": [
         "schedules:",

@@ -1113,7 +1113,6 @@ def convert_replacement_map(
             internal_map[surrogate] = _GitHubAppEntry(
                 app_id=entry.app_id,
                 private_key=entry.private_key,
-                installation_id=entry.installation_id,
                 base_url=entry.base_url,
                 scopes=entry.scopes,
                 allow_foreign_credentials=(entry.allow_foreign_credentials),

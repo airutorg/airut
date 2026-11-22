@@ -695,8 +695,17 @@ manages installation tokens:
    git operations via credential helpers.
 2. Proxy detects the surrogate and checks scope match
 3. Proxy generates a JWT from the private key (in-memory, never written to disk)
-4. Proxy exchanges the JWT for a short-lived installation token (1-hour expiry)
-5. Proxy caches the token and reuses it until near expiry (5-minute margin)
+   and discovers the App's installations (`GET /app/installations`). No
+   installation ID is configured. Only the installation on the App owner's
+   account is used, unless `repositories` lists other accounts — anyone can
+   install a public App, so other installations are not trusted by default.
+4. Proxy picks the installation the request targets — the account in the URL
+   (`/repos/{owner}/…`, `github.com/{owner}/…`), or for GraphQL the installation
+   owning the addressed repositories — falling back to the lowest-ID
+   installation for requests that name none of them
+5. Proxy exchanges the JWT for a short-lived token for that installation (1-hour
+   expiry), caches it per installation, and reuses it until near expiry
+   (5-minute margin)
 6. Proxy replaces the surrogate with the real installation token in the header.
    For Basic Auth, the proxy decodes the Base64 payload, replaces the surrogate
    in the password field, and re-encodes — the same mechanism used for
@@ -711,7 +720,6 @@ repos:
       GH_TOKEN:
         app_id: !env GH_APP_ID
         private_key: !env GH_APP_PRIVATE_KEY
-        installation_id: !env GH_APP_INSTALLATION_ID
         scopes:
           - "github.com"
           - "api.github.com"
@@ -720,9 +728,11 @@ repos:
         permissions:
           contents: write
           pull_requests: write
-        # Optional: restrict token to specific repos
+        # Optional: restrict tokens to specific repos (owner/name, or
+        # owner/* for all). Only the listed owners' installations are used;
+        # without it, only the App owner's installation is used.
         repositories:
-          - "my-repo"
+          - "my-org/my-repo"
 ```
 
 The container receives a surrogate `GH_TOKEN` env var auto-injected from the

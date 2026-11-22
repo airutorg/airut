@@ -25,6 +25,7 @@ gateway can be deployed independently.
 import logging
 import math
 import os
+import re
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +65,10 @@ CONFIG_PATH_ENV = "AIRUT_CONFIG"
 
 #: Environment variable overriding the state directory.
 STATE_DIR_ENV = "AIRUT_STATE_DIR"
+
+#: GitHub App ``repositories`` entry: ``owner/name``, or ``owner/*`` for
+#: every repository of that account's installation.
+_GITHUB_FULL_NAME_RE = re.compile(r"[^/\s*]+/(?:\*|[^/\s*]+)")
 
 
 def _env_path(name: str) -> Path | None:
@@ -339,19 +344,22 @@ class SigningCredentialEntry:
 class GitHubAppCredential:
     """GitHub App credential for proxy-managed token rotation.
 
-    The proxy holds the private key and generates short-lived installation
-    access tokens on demand.  The container sees only a stable surrogate.
+    The proxy holds the private key, discovers the App's installations,
+    and generates short-lived installation access tokens on demand for
+    the installation each request targets.  The container sees only a
+    stable surrogate.
 
     Attributes:
         app_id: GitHub App Client ID or numeric App ID.
         private_key: PEM-encoded RSA private key.
-        installation_id: Installation ID for the target org/user.
         scopes: Fnmatch patterns for hosts where token replacement applies.
         allow_foreign_credentials: If False (default), non-surrogate
             Authorization headers on scoped hosts are stripped.
         base_url: GitHub API base URL (default: https://api.github.com).
         permissions: Optional token permission restrictions.
-        repositories: Optional token repository restrictions.
+        repositories: Optional ``owner/name`` (or ``owner/*``) entries.
+            Selects which accounts' installations are used; without it
+            only the App owner's installation is used.
     """
 
     app_id: str = field(
@@ -367,13 +375,6 @@ class GitHubAppCredential:
             " settings > Private keys",
             Scope.TASK,
             secret=True,
-        ),
-    )
-    installation_id: int = field(
-        metadata=meta(
-            "Numeric installation ID — visible in the URL after installing"
-            " the App: /installations/<id>",
-            Scope.TASK,
         ),
     )
     scopes: frozenset[str] = field(
@@ -413,8 +414,10 @@ class GitHubAppCredential:
     repositories: tuple[str, ...] | None = field(
         default=None,
         metadata=meta(
-            "Restrict token to specific repository names"
-            " — omit to use all repositories from the installation",
+            "Repositories (owner/name, or owner/* for all) the tokens may"
+            " use; also selects which accounts' App installations are"
+            " used — omit to use only the installation on the App"
+            " owner's account, with all its repositories",
             Scope.TASK,
         ),
     )
@@ -432,17 +435,15 @@ class GitHubAppEntry:
     Attributes:
         app_id: GitHub App Client ID or numeric App ID.
         private_key: PEM-encoded RSA private key.
-        installation_id: Installation ID for the target org/user.
         base_url: GitHub API base URL.
         scopes: Host patterns where replacement is allowed.
         allow_foreign_credentials: Whether to allow non-surrogate credentials.
         permissions: Optional token permission restrictions.
-        repositories: Optional token repository restrictions.
+        repositories: Optional ``owner/name`` repository restrictions.
     """
 
     app_id: str
     private_key: str
-    installation_id: int
     base_url: str
     scopes: tuple[str, ...]
     allow_foreign_credentials: bool = False
@@ -455,7 +456,6 @@ class GitHubAppEntry:
             "type": CREDENTIAL_TYPE_GITHUB_APP,
             "app_id": self.app_id,
             "private_key": self.private_key,
-            "installation_id": self.installation_id,
             "base_url": self.base_url,
             "scopes": list(self.scopes),
         }
@@ -2498,13 +2498,6 @@ def _resolve_github_app_credentials(
         if not private_key:
             raise ConfigError(f"{key}.private_key is required")
 
-        # Resolve installation_id (required, supports !env, must be numeric)
-        installation_id = _resolve(
-            config.get("installation_id"),
-            int,
-            required=f"{key}.installation_id",
-        )
-
         # Parse scopes (required)
         raw_scopes = config.get("scopes")
         if raw_scopes is None:
@@ -2538,7 +2531,18 @@ def _resolve_github_app_credentials(
         if raw_repositories is not None:
             if not isinstance(raw_repositories, list):
                 raise ConfigError(f"{key}.repositories must be a list")
+            if not raw_repositories:
+                raise ConfigError(
+                    f"{key}.repositories cannot be empty"
+                    " (omit it to use the App owner's installation)"
+                )
             repositories = tuple(str(r) for r in raw_repositories)
+            for full_name in repositories:
+                if not _GITHUB_FULL_NAME_RE.fullmatch(full_name):
+                    raise ConfigError(
+                        f"{key}.repositories entry {full_name!r} must be"
+                        " in owner/name or owner/* form (e.g. my-org/my-repo)"
+                    )
 
         ga_overrides: dict[str, Any] = {}
         if raw_allow_foreign is not None:
@@ -2553,7 +2557,6 @@ def _resolve_github_app_credentials(
         result[name] = GitHubAppCredential(
             app_id=app_id,
             private_key=private_key,
-            installation_id=installation_id,
             scopes=scopes,
             **ga_overrides,
         )
@@ -2655,7 +2658,6 @@ def _build_task_env(
         replacement_map[surrogate] = GitHubAppEntry(
             app_id=gh_cred.app_id,
             private_key=gh_cred.private_key,
-            installation_id=gh_cred.installation_id,
             base_url=gh_cred.base_url,
             scopes=tuple(sorted(gh_cred.scopes)),
             allow_foreign_credentials=gh_cred.allow_foreign_credentials,

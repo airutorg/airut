@@ -2147,7 +2147,6 @@ class TestBuildTaskEnv:
             "GH_TOKEN": GitHubAppCredential(
                 app_id="Iv23li",
                 private_key="key",
-                installation_id=12345,
                 scopes=frozenset(["api.github.com"]),
             )
         }
@@ -2178,7 +2177,6 @@ class TestBuildTaskEnv:
             "TOKEN": GitHubAppCredential(
                 app_id="app",
                 private_key="key",
-                installation_id=123,
                 scopes=frozenset(["api.github.com"]),
             )
         }
@@ -3942,11 +3940,9 @@ class TestGitHubAppCredential:
                 "\ntest\n"
                 "-----END RSA PRIVATE KEY-----"
             ),
-            installation_id=12345,
             scopes=frozenset(["api.github.com"]),
         )
         assert cred.app_id == "Iv23liXyz"
-        assert cred.installation_id == 12345
         assert cred.base_url == "https://api.github.com"
         assert cred.allow_foreign_credentials is False
         assert cred.permissions is None
@@ -3957,24 +3953,22 @@ class TestGitHubAppCredential:
         cred = GitHubAppCredential(
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id=12345,
             scopes=frozenset(["api.github.com", "*.githubusercontent.com"]),
             allow_foreign_credentials=True,
             base_url="https://github.example.com/api/v3",
             permissions={"contents": "write"},
-            repositories=("my-repo",),
+            repositories=("my-org/my-repo",),
         )
         assert cred.allow_foreign_credentials is True
         assert cred.base_url == "https://github.example.com/api/v3"
         assert cred.permissions == {"contents": "write"}
-        assert cred.repositories == ("my-repo",)
+        assert cred.repositories == ("my-org/my-repo",)
 
     def test_frozen(self) -> None:
         """GitHubAppCredential is immutable."""
         cred = GitHubAppCredential(
             app_id="app",
             private_key="key",
-            installation_id=123,
             scopes=frozenset(["api.github.com"]),
         )
         with pytest.raises(AttributeError):
@@ -3989,7 +3983,6 @@ class TestGitHubAppEntry:
         entry = GitHubAppEntry(
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id=12345,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
         )
@@ -3997,7 +3990,6 @@ class TestGitHubAppEntry:
         assert d["type"] == CREDENTIAL_TYPE_GITHUB_APP
         assert d["app_id"] == "Iv23liXyz"
         assert d["private_key"] == "key"
-        assert d["installation_id"] == 12345
         assert d["base_url"] == "https://api.github.com"
         assert d["scopes"] == ["api.github.com"]
         assert "allow_foreign_credentials" not in d
@@ -4009,24 +4001,22 @@ class TestGitHubAppEntry:
         entry = GitHubAppEntry(
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id=12345,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
             allow_foreign_credentials=True,
             permissions={"contents": "write"},
-            repositories=("my-repo", "other-repo"),
+            repositories=("my-org/my-repo", "my-org/other-repo"),
         )
         d = entry.to_dict()
         assert d["allow_foreign_credentials"] is True
         assert d["permissions"] == {"contents": "write"}
-        assert d["repositories"] == ["my-repo", "other-repo"]
+        assert d["repositories"] == ["my-org/my-repo", "my-org/other-repo"]
 
     def test_frozen(self) -> None:
         """GitHubAppEntry is immutable."""
         entry = GitHubAppEntry(
             app_id="app",
             private_key="key",
-            installation_id=123,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
         )
@@ -4073,7 +4063,6 @@ class TestResolveGitHubAppCredentials:
                     "\ntest\n"
                     "-----END RSA PRIVATE KEY-----"
                 ),
-                "installation_id": 12345,
                 "scopes": [
                     "api.github.com",
                     "*.githubusercontent.com",
@@ -4085,7 +4074,6 @@ class TestResolveGitHubAppCredentials:
         assert "GH_TOKEN" in result
         cred = result["GH_TOKEN"]
         assert cred.app_id == "Iv23liXyz"
-        assert cred.installation_id == 12345
         assert "api.github.com" in cred.scopes
         assert cred.base_url == "https://api.github.com"
 
@@ -4095,12 +4083,11 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23liXyz",
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "allow_foreign_credentials": True,
                 "base_url": "https://github.example.com/api/v3",
                 "permissions": {"contents": "write", "pull_requests": "write"},
-                "repositories": ["my-repo"],
+                "repositories": ["my-org/my-repo", "other-org/*"],
             }
         }
         result = _resolve_github_app_credentials(raw, "repos.test")
@@ -4112,14 +4099,13 @@ class TestResolveGitHubAppCredentials:
             "contents": "write",
             "pull_requests": "write",
         }
-        assert cred.repositories == ("my-repo",)
+        assert cred.repositories == ("my-org/my-repo", "other-org/*")
 
     def test_missing_app_id_raises(self) -> None:
         """Raises ConfigError when app_id is missing."""
         raw = {
             "GH_TOKEN": {
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": ["api.github.com"],
             }
         }
@@ -4131,23 +4117,10 @@ class TestResolveGitHubAppCredentials:
         raw = {
             "GH_TOKEN": {
                 "app_id": "Iv23li",
-                "installation_id": 12345,
                 "scopes": ["api.github.com"],
             }
         }
         with pytest.raises(ConfigError, match="private_key is required"):
-            _resolve_github_app_credentials(raw, "repos.test")
-
-    def test_missing_installation_id_raises(self) -> None:
-        """Raises ConfigError when installation_id is missing."""
-        raw = {
-            "GH_TOKEN": {
-                "app_id": "Iv23li",
-                "private_key": "key",
-                "scopes": ["api.github.com"],
-            }
-        }
-        with pytest.raises(ConfigError, match="installation_id.* is missing"):
             _resolve_github_app_credentials(raw, "repos.test")
 
     def test_missing_scopes_raises(self) -> None:
@@ -4156,7 +4129,6 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": 12345,
             }
         }
         with pytest.raises(ConfigError, match="scopes is required"):
@@ -4168,7 +4140,6 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": [],
             }
         }
@@ -4181,7 +4152,6 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": "api.github.com",
             }
         }
@@ -4194,26 +4164,12 @@ class TestResolveGitHubAppCredentials:
         with pytest.raises(ConfigError, match="must be a mapping"):
             _resolve_github_app_credentials(raw, "repos.test")
 
-    def test_non_numeric_installation_id_raises(self) -> None:
-        """Raises ValueError when installation_id is not numeric."""
-        raw = {
-            "GH_TOKEN": {
-                "app_id": "Iv23li",
-                "private_key": "key",
-                "installation_id": "abc",
-                "scopes": ["api.github.com"],
-            }
-        }
-        with pytest.raises(ValueError, match="invalid literal"):
-            _resolve_github_app_credentials(raw, "repos.test")
-
     def test_http_base_url_raises(self) -> None:
         """Raises ConfigError when base_url uses HTTP instead of HTTPS."""
         raw = {
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "base_url": "http://github.example.com/api/v3",
             }
@@ -4227,7 +4183,6 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "permissions": "not-a-mapping",
             }
@@ -4241,12 +4196,49 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "repositories": "not-a-list",
             }
         }
         with pytest.raises(ConfigError, match="repositories must be a list"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_empty_repositories_raises(self) -> None:
+        """Raises ConfigError when repositories is an empty list."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "scopes": ["api.github.com"],
+                "repositories": [],
+            }
+        }
+        with pytest.raises(ConfigError, match="repositories cannot be empty"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "my-repo",
+            "my-org/",
+            "/my-repo",
+            "a/b/c",
+            "my org/repo",
+            "*/repo",
+            "my-org/re*po",
+        ],
+    )
+    def test_repositories_not_owner_name_raises(self, entry: str) -> None:
+        """Raises ConfigError for entries not in owner/name form."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "scopes": ["api.github.com"],
+                "repositories": ["my-org/ok", entry],
+            }
+        }
+        with pytest.raises(ConfigError, match=r"owner/name or owner/\* form"):
             _resolve_github_app_credentials(raw, "repos.test")
 
 
@@ -4258,12 +4250,10 @@ class TestBuildTaskEnvGitHubApp:
         *,
         app_id: str = "Iv23liXyz",
         private_key: str = "test-key",
-        installation_id: int = 12345,
     ) -> GitHubAppCredential:
         return GitHubAppCredential(
             app_id=app_id,
             private_key=private_key,
-            installation_id=installation_id,
             scopes=frozenset(["api.github.com"]),
         )
 
@@ -4289,7 +4279,6 @@ class TestBuildTaskEnvGitHubApp:
         assert isinstance(entry, GitHubAppEntry)
         assert entry.app_id == "Iv23liXyz"
         assert entry.private_key == "test-key"
-        assert entry.installation_id == 12345
         assert entry.base_url == "https://api.github.com"
 
     def test_github_app_priority_over_masked_secrets(self) -> None:
@@ -4314,10 +4303,9 @@ class TestBuildTaskEnvGitHubApp:
         cred = GitHubAppCredential(
             app_id="Iv23li",
             private_key="key",
-            installation_id=123,
             scopes=frozenset(["api.github.com"]),
             permissions={"contents": "write"},
-            repositories=("my-repo",),
+            repositories=("my-org/my-repo",),
         )
 
         result, replacement_map = _build_task_env(
@@ -4328,7 +4316,7 @@ class TestBuildTaskEnvGitHubApp:
         entry = replacement_map[surrogate]
         assert isinstance(entry, GitHubAppEntry)
         assert entry.permissions == {"contents": "write"}
-        assert entry.repositories == ("my-repo",)
+        assert entry.repositories == ("my-org/my-repo",)
 
     def test_signing_credential_priority_over_github_app(self) -> None:
         """Signing credential takes priority over GitHub App credential."""
@@ -4373,7 +4361,6 @@ class TestRepoServerConfigGitHubApp:
                 "GH_TOKEN": GitHubAppCredential(
                     app_id="Iv23li",
                     private_key="super-secret-key",
-                    installation_id=123,
                     scopes=frozenset(["api.github.com"]),
                 )
             },

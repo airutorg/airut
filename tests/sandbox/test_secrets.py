@@ -545,7 +545,6 @@ class TestGitHubAppCredential:
             env_var="GH_TOKEN",
             app_id="Iv23liXyz",
             private_key="key-data",
-            installation_id=12345,
             scopes=("api.github.com",),
         )
         assert cred.env_var == "GH_TOKEN"
@@ -561,17 +560,16 @@ class TestGitHubAppCredential:
             env_var="GH_TOKEN",
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id=12345,
             scopes=("api.github.com",),
             allow_foreign_credentials=True,
             base_url="https://ghes.example.com/api/v3",
             permissions={"contents": "write"},
-            repositories=("my-repo",),
+            repositories=("my-org/my-repo",),
         )
         assert cred.allow_foreign_credentials is True
         assert cred.base_url == "https://ghes.example.com/api/v3"
         assert cred.permissions == {"contents": "write"}
-        assert cred.repositories == ("my-repo",)
+        assert cred.repositories == ("my-org/my-repo",)
 
     def test_frozen(self) -> None:
         """GitHubAppCredential is immutable."""
@@ -579,7 +577,6 @@ class TestGitHubAppCredential:
             env_var="GH_TOKEN",
             app_id="app",
             private_key="key",
-            installation_id=123,
             scopes=("api.github.com",),
         )
         with __import__("pytest").raises(AttributeError):
@@ -594,7 +591,6 @@ class TestGitHubAppEntry:
         entry = _GitHubAppEntry(
             app_id="Iv23li",
             private_key="key",
-            installation_id=12345,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
         )
@@ -602,7 +598,6 @@ class TestGitHubAppEntry:
         assert d["type"] == "github-app"
         assert d["app_id"] == "Iv23li"
         assert d["private_key"] == "key"
-        assert d["installation_id"] == 12345
         assert d["base_url"] == "https://api.github.com"
         assert d["scopes"] == ["api.github.com"]
         assert "permissions" not in d
@@ -613,17 +608,16 @@ class TestGitHubAppEntry:
         entry = _GitHubAppEntry(
             app_id="Iv23li",
             private_key="key",
-            installation_id=12345,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
             allow_foreign_credentials=True,
             permissions={"contents": "write"},
-            repositories=("my-repo",),
+            repositories=("my-org/my-repo",),
         )
         d = entry.to_dict()
         assert d["allow_foreign_credentials"] is True
         assert d["permissions"] == {"contents": "write"}
-        assert d["repositories"] == ["my-repo"]
+        assert d["repositories"] == ["my-org/my-repo"]
 
 
 class TestPrepareSecretsGitHubApp:
@@ -636,7 +630,6 @@ class TestPrepareSecretsGitHubApp:
                 env_var="GH_TOKEN",
                 app_id="Iv23liXyz",
                 private_key="key",
-                installation_id=12345,
                 scopes=("api.github.com",),
             ),
         ]
@@ -654,7 +647,6 @@ class TestPrepareSecretsGitHubApp:
                 env_var="GH_TOKEN",
                 app_id="Iv23liXyz",
                 private_key="key-data",
-                installation_id=12345,
                 scopes=("api.github.com",),
             ),
         ]
@@ -667,7 +659,6 @@ class TestPrepareSecretsGitHubApp:
         assert entry["type"] == "github-app"
         assert entry["app_id"] == "Iv23liXyz"
         assert entry["private_key"] == "key-data"
-        assert entry["installation_id"] == 12345
 
     def test_mixed_all_credential_types(self) -> None:
         """Handles masked secrets, signing creds, and GitHub App creds."""
@@ -695,7 +686,6 @@ class TestPrepareSecretsGitHubApp:
                 env_var="GH_TOKEN",
                 app_id="Iv23li",
                 private_key="key",
-                installation_id=123,
                 scopes=("api.github.com",),
             ),
         ]

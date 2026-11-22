@@ -28,7 +28,7 @@ from airut.gateway.config import ConfigError
 logger = logging.getLogger(__name__)
 
 #: Current schema version.  Bump when adding a migration.
-CURRENT_CONFIG_VERSION: int = 5
+CURRENT_CONFIG_VERSION: int = 6
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -278,6 +278,59 @@ def _migrate_v4_to_v5(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v5_to_v6(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v5 -> v6: drop GitHub App ``installation_id``.
+
+    The proxy now discovers a GitHub App's installations from its
+    credentials and routes each request to the installation on its
+    target account, so ``installation_id`` is no longer configured.
+    Without ``repositories`` only the installation on the App owner's
+    account is used — the one a pinned ID almost always named, since a
+    private App installs only there.  A pin to another account needs a
+    ``repositories`` entry (``owner/name`` or ``owner/*``); the warning
+    says so.
+
+    An empty ``repositories`` list (previously "no restriction") is
+    dropped too, since v6 rejects it.  Bare repository names cannot be
+    migrated (their owner is not known offline) and are left for the
+    parser to reject with an ``owner/name`` error.
+
+    Args:
+        raw: Raw config dict.
+
+    Returns:
+        The transformed config dict.
+    """
+    repos = raw.get("repos", {})
+    if not isinstance(repos, dict):
+        return raw
+
+    for repo_id, repo in repos.items():
+        if not isinstance(repo, dict):
+            continue
+        credentials = repo.get("github_app_credentials")
+        if not isinstance(credentials, dict):
+            continue
+        for name, credential in credentials.items():
+            if not isinstance(credential, dict):
+                continue
+            if credential.get("repositories") == []:
+                del credential["repositories"]
+            if "installation_id" in credential:
+                del credential["installation_id"]
+                logger.warning(
+                    "Removed installation_id from repos.%s."
+                    "github_app_credentials.%s: installations are now "
+                    "discovered automatically. Only the App owner's "
+                    "installation is used unless repositories lists other "
+                    "accounts (owner/name or owner/*)",
+                    repo_id,
+                    name,
+                )
+
+    return raw
+
+
 #: Migration functions keyed by the version they migrate FROM.
 #: Each takes a raw dict and returns the transformed raw dict.
 MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
@@ -285,6 +338,7 @@ MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
 }
 
 

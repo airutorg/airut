@@ -2438,11 +2438,10 @@ class TestConvertReplacementMap:
             "ghs_SurrogateToken1234567890abcdefgh": GitHubAppEntry(
                 app_id="Iv23liXyz",
                 private_key="test-key",
-                installation_id=12345,
                 base_url="https://api.github.com",
                 scopes=("api.github.com",),
                 permissions={"contents": "write"},
-                repositories=("my-repo",),
+                repositories=("my-org/my-repo",),
             ),
         }
 
@@ -2473,9 +2472,8 @@ class TestConvertReplacementMap:
         assert replacements_dict[key]["type"] == "github-app"
         assert replacements_dict[key]["app_id"] == "Iv23liXyz"
         assert replacements_dict[key]["private_key"] == "test-key"
-        assert replacements_dict[key]["installation_id"] == 12345
         assert replacements_dict[key]["permissions"] == {"contents": "write"}
-        assert replacements_dict[key]["repositories"] == ["my-repo"]
+        assert replacements_dict[key]["repositories"] == ["my-org/my-repo"]
 
 
 class TestBuildRecoveryPrompt:
