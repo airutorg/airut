@@ -520,6 +520,7 @@ def run_in_sandbox(
         ),
         network_sandbox=network_sandbox,
         resource_limits=resource_limits,
+        kvm=repo_cfg.kvm,
         claude_binary_path=claude_binary_path,
     )
 
@@ -597,6 +598,7 @@ def run_in_sandbox(
             ),
             network_sandbox=network_sandbox,
             resource_limits=resource_limits,
+            kvm=repo_cfg.kvm,
             claude_binary_path=claude_binary_path,
         )
 

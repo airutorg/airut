@@ -219,6 +219,7 @@ class Sandbox:
         network_log_path: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         resource_limits: ResourceLimits | None = None,
+        kvm: bool = False,
         claude_binary_path: Path | None = None,
     ) -> AgentTask:
         """Create a task for sandboxed Claude Code execution.
@@ -247,6 +248,9 @@ class Sandbox:
             network_sandbox: Network sandbox configuration.
             resource_limits: Container resource limits (timeout, memory,
                 cpus, pids_limit).
+            kvm: Pass the host ``/dev/kvm`` into the container for
+                hardware-accelerated virtualization.  Execution raises
+                ``SandboxError`` if the device is missing.
             claude_binary_path: Host path to cached Claude binary.
                 When provided, the binary is bind-mounted read-only at
                 ``/opt/claude/claude`` in the container.
@@ -263,6 +267,7 @@ class Sandbox:
             network_log_path=network_log_path,
             network_sandbox=network_sandbox,
             resource_limits=resource_limits or ResourceLimits(),
+            kvm=kvm,
             container_command=self._container_command,
             proxy_manager=(
                 self._proxy_manager if network_sandbox is not None else None
@@ -281,6 +286,7 @@ class Sandbox:
         network_log_path: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         resource_limits: ResourceLimits | None = None,
+        kvm: bool = False,
     ) -> CommandTask:
         """Create a task for sandboxed generic command execution.
 
@@ -297,6 +303,8 @@ class Sandbox:
             network_log_path: File path for network activity log.
             network_sandbox: Network sandbox configuration.
             resource_limits: Container resource limits.
+            kvm: Pass the host ``/dev/kvm`` into the container (see
+                ``create_task()``).
 
         Returns:
             CommandTask instance ready for execution.
@@ -310,6 +318,7 @@ class Sandbox:
             network_log_path=network_log_path,
             network_sandbox=network_sandbox,
             resource_limits=resource_limits or ResourceLimits(),
+            kvm=kvm,
             container_command=self._container_command,
             proxy_manager=(
                 self._proxy_manager if network_sandbox is not None else None

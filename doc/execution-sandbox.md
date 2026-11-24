@@ -19,6 +19,9 @@ for running arbitrary commands in CI pipelines and other environments. See
   - [Session Metadata](#session-metadata)
 - [Network Isolation](#network-isolation)
 - [Container Runtime](#container-runtime)
+- [KVM Passthrough](#kvm-passthrough)
+  - [Host Setup](#host-setup)
+  - [Security Exposure](#security-exposure)
 - [Resource Limits](#resource-limits)
   - [cgroup v2 Requirement](#cgroup-v2-requirement)
   - [Other Limits](#other-limits)
@@ -131,6 +134,8 @@ Containers run with rootless Podman:
   minimal set re-added for package-manager compatibility: `CHOWN`,
   `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`
 - **Privilege escalation**: Blocked (`--security-opt=no-new-privileges:true`)
+- **Devices**: None passed through, unless `kvm` is enabled for the repo (see
+  [KVM Passthrough](#kvm-passthrough))
 
 These security options are defense-in-depth measures. Rootless Podman already
 provides strong isolation through user namespaces — capabilities inside the
@@ -144,6 +149,91 @@ escalating beyond the granted set.
 The container image is built in two layers — a repo-defined base image and a
 server overlay with the entrypoint. See [spec/image.md](../spec/image.md) for
 build details.
+
+## KVM Passthrough
+
+Workloads that boot virtual machines — NixOS VM tests (`nix flake check`),
+QEMU-based integration tests, Android emulators — fall back to software
+emulation inside the container, which is often an order of magnitude slower.
+Setting `kvm: true` for a repo in the server config passes the host's `/dev/kvm`
+into that repo's containers (`--device=/dev/kvm`) so these tools can use
+hardware virtualization:
+
+```yaml
+# ~/.config/airut/airut.yaml (server config, per repo)
+repos:
+  my-project:
+    kvm: true
+    resource_limits:
+      memory: "16g"   # guest RAM counts against the container limit
+```
+
+It is off by default and can only be enabled in the server config, never from
+the repository. Nothing else about the sandbox changes: capabilities,
+`no-new-privileges`, mounts, credentials and the
+[network sandbox](network-sandbox.md) stay as described above. KVM creates no
+host network interfaces, so any traffic from a guest leaves through the VMM
+process in the container's network namespace and goes through the proxy and
+allowlist like everything else.
+
+If the device is missing, the task fails with an error instead of running with
+slow emulation. Nix detects `/dev/kvm` and adds the `kvm` system feature
+automatically; verify with `nix config show system-features` inside the
+container.
+
+### Host Setup
+
+1. **KVM on the host.** On bare metal, load `kvm_intel` or `kvm_amd`. If the
+   Airut host is itself a virtual machine, the hypervisor must expose nested
+   virtualization (e.g. `--enable-nested-virtualization` on Google Cloud, or an
+   instance type that supports it). It is exposed when the host VM's CPU flags
+   include `vmx` (Intel) or `svm` (AMD) — `grep -cE 'vmx|svm' /proc/cpuinfo` —
+   and `/dev/kvm` appears after loading the module.
+
+2. **Device permissions.** Rootless podman drops the host user's supplementary
+   groups inside the container, so membership in the `kvm` group is not enough.
+   `/dev/kvm` must be mode `0666` (systemd's upstream default, used e.g. by
+   Fedora and Arch) or carry an ACL entry for the user running Airut. On
+   distributions that ship it as `0660` (e.g. Debian, Ubuntu), add a udev rule:
+
+   ```
+   # /etc/udev/rules.d/99-kvm.rules
+   KERNEL=="kvm", GROUP="kvm", MODE="0666"
+   ```
+
+   then run `sudo udevadm control --reload && sudo udevadm trigger`. To grant
+   access only to the Airut user instead of every local user, add an ACL entry
+   from the rule (replace `airut` with that user's name):
+
+   ```
+   KERNEL=="kvm", RUN+="/usr/bin/setfacl -m u:airut:rw $devnode"
+   ```
+
+3. **Verify** with `airut check`. It lists the repos with `kvm` enabled, fails
+   if `/dev/kvm` is missing, and warns if its permissions look insufficient.
+
+### Security Exposure
+
+KVM passthrough trades isolation for speed. The agent controls both the VMM
+(QEMU, issuing ioctls on `/dev/kvm`) and the guest code, so the host kernel's
+KVM implementation — the ioctl interface, instruction emulator, MMU code and
+especially nested virtualization support — becomes attack surface in addition to
+the ordinary syscall interface. A KVM vulnerability is a container escape to the
+host kernel, which bypasses every other layer: other conversations, the server
+config and its real secrets, and the network sandbox. On a VM host the escape
+lands in that VM, which is still the whole Airut server.
+
+To limit the exposure:
+
+- Enable `kvm` only for repos that need it.
+- Keep the host kernel patched; KVM fixes ship in stable kernel updates.
+- Load the KVM module with `nested=0` on the Airut host (e.g.
+  `options kvm_intel nested=0` in `/etc/modprobe.d/`) unless the guests
+  themselves need to run VMs. Nested virtualization is historically the most
+  bug-prone part of KVM. This is independent of whether the host's own
+  hypervisor provides nested virtualization to the host.
+- Consider a dedicated Airut host for KVM-enabled repos, without credentials for
+  other repos.
 
 ## Resource Limits
 

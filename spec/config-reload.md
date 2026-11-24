@@ -132,7 +132,7 @@ current config.
 
 #### TASK Scope — Immediate Atomic Swap
 
-**Fields:** `model`, `effort`, `resource_limits` (per-repo), `secrets`,
+**Fields:** `model`, `effort`, `resource_limits` (per-repo), `kvm`, `secrets`,
 `masked_secrets`, `signing_credentials`, `github_app_credentials`.
 
 These are read from `repo_handler.config` at the start of each task. In-flight

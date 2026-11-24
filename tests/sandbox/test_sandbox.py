@@ -508,6 +508,31 @@ class TestSandboxCreateTask:
         )
 
         assert task._resource_limits == ResourceLimits()
+        assert task._kvm is False
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_kvm(
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """create_task() passes kvm to AgentTask."""
+        sandbox = Sandbox(SandboxConfig())
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        task = sandbox.create_task(
+            "task-123",
+            image_tag="airut-overlay:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+            kvm=True,
+        )
+
+        assert task._kvm is True
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     @patch("airut.sandbox.sandbox.ImageCache")
@@ -650,6 +675,31 @@ class TestSandboxCreateCommandTask:
         )
 
         assert task._resource_limits == ResourceLimits()
+        assert task._kvm is False
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_kvm(
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """create_command_task() passes kvm to CommandTask."""
+        sandbox = Sandbox(SandboxConfig())
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        task = sandbox.create_command_task(
+            "cmd-123",
+            image_tag="airut-overlay:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+            kvm=True,
+        )
+
+        assert task._kvm is True
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     @patch("airut.sandbox.sandbox.ImageCache")

@@ -1404,6 +1404,23 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].claude_version == "1.2.3"
 
+    def test_kvm_default_false(self, master_repo: Path, tmp_path: Path) -> None:
+        """KVM passthrough is off unless enabled."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert config.repos["test"].kvm is False
+
+    def test_kvm_parsed(self, master_repo: Path, tmp_path: Path) -> None:
+        """Kvm is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo) + "    kvm: true\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert config.repos["test"].kvm is True
+
     def test_model_empty_string_falls_back_to_default(
         self, master_repo: Path, tmp_path: Path
     ) -> None:

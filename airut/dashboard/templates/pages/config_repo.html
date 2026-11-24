@@ -96,7 +96,7 @@
       <span class="cfg-card-title">Container</span>
     </div>
     {% for f in schema %}
-    {% if f.name == 'container_path' %}
+    {% if f.name in ['container_path', 'kvm'] %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}

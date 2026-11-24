@@ -86,6 +86,7 @@ async def _run_with_env(variables: dict[str, str]) -> None:
         mounts=[],
         env=ContainerEnv(variables=variables),
         resource_limits=ResourceLimits(),
+        kvm=False,
         network_args=[],
         command=["cmd"],
         stdin_data=None,
@@ -194,6 +195,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["echo", "hello"],
             stdin_data=None,
@@ -225,6 +227,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -336,6 +339,7 @@ class TestRunContainer:
             mounts=mounts,
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -363,6 +367,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(memory="2g"),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -393,6 +398,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(cpus=1.5),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -420,6 +426,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(pids_limit=256),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -449,6 +456,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -462,6 +470,38 @@ class TestRunContainer:
         assert "--memory" not in call_args
         assert "--cpus" not in call_args
         assert "--pids-limit" not in call_args
+        assert not any(a.startswith("--device") for a in call_args)
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_kvm_device(self, mock_create: MagicMock) -> None:
+        """run_container passes /dev/kvm through when kvm is set."""
+        mock_create.return_value = _make_mock_process()
+
+        await run_container(
+            container_command="podman",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            resource_limits=ResourceLimits(),
+            kvm=True,
+            network_args=["--network", "airut-conv-x"],
+            command=["cmd"],
+            stdin_data=None,
+            on_stdout_line=None,
+            on_stderr_line=None,
+            timeout=None,
+            process_tracker=_ProcessTracker(),
+        )
+
+        call_args = list(mock_create.call_args[0])
+        assert "--device=/dev/kvm" in call_args
+        # Hardening flags and network sandbox are unaffected.
+        assert "--cap-drop=ALL" in call_args
+        assert "--security-opt=no-new-privileges:true" in call_args
+        assert "--network" in call_args
+        assert call_args.index("--device=/dev/kvm") < call_args.index(
+            "airut:test"
+        )
 
     @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
     async def test_network_args(self, mock_create: MagicMock) -> None:
@@ -476,6 +516,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=["--network", "my-net", "--dns", "10.0.0.1"],
             command=["cmd"],
             stdin_data=None,
@@ -503,6 +544,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data="hello world",
@@ -530,6 +572,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -559,6 +602,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -590,6 +634,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -616,6 +661,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -641,6 +687,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -667,6 +714,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -693,6 +741,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -726,6 +775,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -754,6 +804,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -796,6 +847,7 @@ class TestRunContainer:
                 mounts=[],
                 env=ContainerEnv(),
                 resource_limits=ResourceLimits(),
+                kvm=False,
                 network_args=[],
                 command=["cmd"],
                 stdin_data="hello",
@@ -821,6 +873,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,
@@ -858,6 +911,7 @@ class TestRunContainer:
                 mounts=[],
                 env=ContainerEnv(),
                 resource_limits=ResourceLimits(),
+                kvm=False,
                 network_args=[],
                 command=["cmd"],
                 stdin_data="hello",
@@ -894,6 +948,7 @@ class TestRunContainer:
                 mounts=[],
                 env=ContainerEnv(),
                 resource_limits=ResourceLimits(),
+                kvm=False,
                 network_args=[],
                 command=["cmd"],
                 stdin_data="hello",
@@ -922,6 +977,7 @@ class TestRunContainer:
             mounts=[],
             env=ContainerEnv(),
             resource_limits=ResourceLimits(),
+            kvm=False,
             network_args=[],
             command=["cmd"],
             stdin_data=None,

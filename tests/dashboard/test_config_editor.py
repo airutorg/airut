@@ -1619,6 +1619,7 @@ class TestRepoPage:
         assert "repos.test-repo.model" in html
         assert "repos.test-repo.claude_version" in html
         assert "repos.test-repo.container_path" in html
+        assert "repos.test-repo.kvm" in html
 
     def test_repo_page_not_found(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")

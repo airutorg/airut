@@ -170,6 +170,8 @@ is managed by `airut/conversation/ConversationStore`, which the protocol layer
 await task.execute(prompt, session_id=..., model=..., effort=...,
                    on_event=..., on_stderr_line=..., on_network_line=...)
   |
+  +- Check /dev/kvm exists (if kvm; raises SandboxError otherwise)
+  |
   +- Start proxy (if network_sandbox configured)
   |    +- Allocate subnet, create internal network
   |    +- Start dual-homed proxy container
@@ -182,6 +184,7 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |    +- --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID
   |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
+  |    +- --device=/dev/kvm (if kvm)
   |    +- Force airut-owned Claude env vars over the caller's env
   |    +- Pass env vars as -e NAME, values in podman's own environment
   |    +- Prompt on stdin, read stdout/stderr concurrently as async streams
@@ -262,6 +265,8 @@ events list are not retained — consumers use the pre-extracted fields directly
 await task.execute(["make", "test"], on_output=..., on_stderr=...,
                    on_network_line=...)
   |
+  +- Check /dev/kvm exists (if kvm; raises SandboxError otherwise)
+  |
   +- Start proxy (if network_sandbox configured)
   |
   +- Start network log tail task (if on_network_line provided)
@@ -270,6 +275,7 @@ await task.execute(["make", "test"], on_output=..., on_stderr=...,
   |    +- --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID
   |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
+  |    +- --device=/dev/kvm (if kvm)
   |    +- Pass env vars as -e NAME, values in podman's own environment
   |    +- Read stdout/stderr concurrently as async streams
   |    +- Invoke on_output callback for each stdout line
@@ -320,6 +326,29 @@ Resource limits require cgroup v2 with the `cpu`, `memory`, and `pids`
 controllers delegated to the user running Airut. The `airut check` command
 verifies this. This is the default on Ubuntu 22.04+, Fedora 34+, Debian 12+, and
 RHEL 9+.
+
+## KVM Passthrough
+
+`create_task()` and `create_command_task()` accept `kvm: bool` (default
+`False`). When set, the container is started with `--device=/dev/kvm` so tools
+such as QEMU (e.g. NixOS VM tests) can use hardware virtualization instead of
+software emulation.
+
+- **Fail fast**: `execute()` checks that `/dev/kvm` exists and is a character
+  device before starting the proxy, raising `SandboxError` otherwise. A task
+  that asks for KVM never silently runs without it.
+- **No other flag changes**: opening `/dev/kvm` and issuing its ioctls needs no
+  capabilities, so the capability set, `no-new-privileges`, the user namespace,
+  seccomp and the network sandbox are unchanged. KVM creates no host network
+  interfaces; guest traffic leaves through the VMM process in the container's
+  network namespace and hits the proxy like any other traffic.
+- **Resource limits still apply**: guest memory and vCPU threads belong to the
+  container's cgroup, so `memory` must leave room for the VMs.
+- **Host requirements and security**: the device must be usable without
+  supplementary groups, which rootless podman drops. Passthrough exposes the
+  host kernel's KVM interface to agent-controlled code. See
+  [doc/execution-sandbox.md](../doc/execution-sandbox.md#kvm-passthrough) for
+  host setup and the security trade-off.
 
 ## Outcome Classification
 

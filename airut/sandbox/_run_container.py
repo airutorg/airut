@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from airut.sandbox.kvm import KVM_DEVICE
 from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
 
 
@@ -158,6 +159,7 @@ async def run_container(
     mounts: list[Mount],
     env: ContainerEnv,
     resource_limits: ResourceLimits,
+    kvm: bool,
     network_args: list[str],
     command: list[str],
     stdin_data: str | None,
@@ -181,6 +183,7 @@ async def run_container(
         mounts: Volume mounts for the container.
         env: Container environment variables.
         resource_limits: Resource limits (memory, cpus, pids).
+        kvm: Pass the host KVM device into the container.
         network_args: Network sandbox arguments (empty list if no sandbox).
         command: Command to run inside the container.
         stdin_data: Data to write to stdin, or None.
@@ -223,6 +226,9 @@ async def run_container(
         cmd.extend(["--cpus", str(resource_limits.cpus)])
     if resource_limits.pids_limit is not None:
         cmd.extend(["--pids-limit", str(resource_limits.pids_limit)])
+
+    if kvm:
+        cmd.append(f"--device={KVM_DEVICE}")
 
     # Network sandbox args
     cmd.extend(network_args)

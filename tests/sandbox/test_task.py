@@ -37,6 +37,7 @@ def _make_task(
     network_log_path: Path | None = None,
     network_sandbox: NetworkSandboxConfig | None = None,
     resource_limits: ResourceLimits | None = None,
+    kvm: bool = False,
     container_command: str = "podman",
     proxy_manager: ProxyManager | None = None,
     claude_binary_path: Path | None = None,
@@ -54,6 +55,7 @@ def _make_task(
         network_log_path=network_log_path,
         network_sandbox=network_sandbox,
         resource_limits=resource_limits or ResourceLimits(),
+        kvm=kvm,
         container_command=container_command,
         proxy_manager=proxy_manager,
         claude_binary_path=claude_binary_path,
@@ -679,6 +681,85 @@ class TestAgentTaskExecute:
         assert calls[0]["resource_limits"].memory == "4g"
         assert calls[0]["resource_limits"].cpus == 2.5
         assert calls[0]["resource_limits"].pids_limit == 512
+
+
+class TestAgentTaskKvm:
+    """Tests for KVM passthrough in AgentTask."""
+
+    @pytest.mark.parametrize("kvm", [True, False])
+    async def test_kvm_passed_to_run_container(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        kvm: bool,
+    ) -> None:
+        """execute() forwards the kvm flag to run_container."""
+        monkeypatch.setattr(
+            "airut.sandbox.task.kvm_unavailable_reason", lambda: None
+        )
+        task = _make_task(tmp_path, kvm=kvm)
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute("Test prompt")
+
+        assert calls[0]["kvm"] is kvm
+
+    async def test_missing_device_fails_before_proxy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A missing KVM device raises before the proxy or container start."""
+        monkeypatch.setattr(
+            "airut.sandbox.task.kvm_unavailable_reason",
+            lambda: "/dev/kvm does not exist",
+        )
+        run_container = MagicMock()
+        monkeypatch.setattr("airut.sandbox.task.run_container", run_container)
+        proxy_manager = MagicMock()
+        task = _make_task(
+            tmp_path,
+            kvm=True,
+            network_sandbox=MagicMock(),
+            proxy_manager=proxy_manager,
+        )
+
+        with pytest.raises(
+            SandboxError,
+            match="KVM passthrough requested but /dev/kvm does not exist",
+        ):
+            await task.execute("Test prompt")
+
+        proxy_manager.start_proxy.assert_not_called()
+        run_container.assert_not_called()
+
+    async def test_device_not_checked_without_kvm(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Tasks without kvm never inspect the host device."""
+        check = MagicMock(return_value="/dev/kvm does not exist")
+        monkeypatch.setattr("airut.sandbox.task.kvm_unavailable_reason", check)
+        monkeypatch.setattr(
+            "airut.sandbox.task.run_container",
+            create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            ),
+        )
+        task = _make_task(tmp_path)
+
+        await task.execute("Test prompt")
+
+        check.assert_not_called()
 
 
 class TestTailNetworkLog:
