@@ -7,6 +7,7 @@
 
 import hashlib
 import subprocess
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -851,6 +852,64 @@ class TestImageCachePruneImages:
         )
         assert cache.prune_images() == 0
         mock_run.assert_not_called()
+
+    def test_prune_waits_for_in_progress_build(self) -> None:
+        """Pruning does not run while a build is in progress.
+
+        A build's image has no tag until the build commits, so a
+        concurrent ``image prune -f`` can delete it as dangling.  The
+        build then tags a missing image and the task's ``run`` fails.
+        """
+        build_started = threading.Event()
+        release_build = threading.Event()
+        prune_called = threading.Event()
+        calls: list[str] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> MagicMock:
+            if cmd[1] == "build":
+                calls.append("build-start")
+                build_started.set()
+                assert release_build.wait(timeout=10)
+                calls.append("build-end")
+                return MagicMock(returncode=0)
+            if cmd[1:3] == ["image", "inspect"]:
+                return MagicMock(returncode=1)  # not found
+            calls.append(" ".join(cmd[1:3]))
+            prune_called.set()
+            return MagicMock(returncode=0, stdout="")
+
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="overlay", dockerfile=b"FROM base\n")
+
+        with patch(
+            "airut.sandbox._image_cache.subprocess.run", side_effect=fake_run
+        ):
+            builder = threading.Thread(target=cache.ensure, args=(spec,))
+            pruner = threading.Thread(target=cache.prune_images)
+            builder.start()
+            try:
+                assert build_started.wait(timeout=10)
+                pruner.start()
+                # The prune must not reach podman while the build holds
+                # the lock.  Without the lock it is called immediately.
+                assert not prune_called.wait(timeout=0.2)
+            finally:
+                release_build.set()
+            builder.join(timeout=10)
+            pruner.join(timeout=10)
+            assert not builder.is_alive()
+            assert not pruner.is_alive()
+
+        assert calls == [
+            "build-start",
+            "build-end",
+            "image prune",
+            "images --format",
+        ]
 
 
 class TestImageCacheIsStale:

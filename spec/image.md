@@ -180,6 +180,8 @@ build simultaneously:
 - First task acquires lock, builds
 - Subsequent tasks wait, then find the image already exists and reuse it
 
+Image pruning takes the same lock (see [Image Cleanup](#image-cleanup)).
+
 Builds produce new tags (content-addressed), so they don't affect running
 containers.
 
@@ -567,7 +569,12 @@ hours (controlled by `execution.image_prune`, default `true`). Each cycle:
    any older than the internal staleness threshold (24 h, same as the rebuild
    threshold in `ensure()`).
 
-Pruning runs in the background without holding the image build lock, so
-concurrent task startups are not blocked.
+Pruning runs in the background but holds the image build lock (see
+[Concurrent Build Safety](#concurrent-build-safety)), so it never overlaps a
+build. A build's image stays untagged until the build commits, so a concurrent
+dangling prune could delete it and the task's container would fail to start.
+Every task startup, including one that reuses a cached image, waits for an
+in-progress prune, which takes seconds. The lock is per process, so it does not
+protect against other processes sharing the same image store.
 
 Manual cleanup is also possible: `podman image prune -a`.

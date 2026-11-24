@@ -143,9 +143,9 @@ class Sandbox:
     def prune_images(self) -> int:
         """Prune dangling and stale container images.
 
-        Delegates to :meth:`ImageCache.prune_images`.  Does not hold the
-        image build lock, so concurrent ``ensure_image()`` calls are not
-        blocked.
+        Delegates to :meth:`ImageCache.prune_images`, which holds the
+        image build lock so pruning never overlaps an ``ensure_image()``
+        build.
 
         Returns:
             Number of old prefixed images removed.
