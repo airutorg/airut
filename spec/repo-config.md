@@ -65,6 +65,15 @@ and `resource_limits:` examples, and
 [declarative-config.md](declarative-config.md#config-variables) for `!var`
 syntax and resolution.
 
+## KVM Passthrough
+
+`repos.<id>.kvm` (default `false`) passes the host `/dev/kvm` into the repo's
+containers, for both conversation and scheduled tasks. Like every per-repo
+setting it lives only in the server config, so the agent cannot enable it by
+changing the repository. It expands the host attack surface; see
+[doc/execution-sandbox.md](../doc/execution-sandbox.md#kvm-passthrough) for host
+setup and the security trade-off.
+
 ## What Stays in the Repository
 
 ### Network Allowlist

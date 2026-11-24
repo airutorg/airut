@@ -451,7 +451,7 @@ class TestRunCommandTask:
         )
 
     def test_command_with_trigger_timeout(self) -> None:
-        """Trigger timeout overrides resource_limits."""
+        """Trigger timeout overrides resource_limits; kvm is forwarded."""
         from airut.gateway.scheduler.execution import _run_command_task
         from airut.sandbox.types import ResourceLimits
 
@@ -473,6 +473,7 @@ class TestRunCommandTask:
         handler.config.resource_limits = ResourceLimits(
             timeout=3600, memory="8g", cpus=4, pids_limit=1024
         )
+        handler.config.kvm = True
 
         mock_result = MagicMock()
         mock_task = MagicMock()
@@ -501,6 +502,7 @@ class TestRunCommandTask:
 
         call_kwargs = svc.sandbox.create_command_task.call_args.kwargs
         assert call_kwargs["resource_limits"].timeout == 300
+        assert call_kwargs["kvm"] is True
 
     def test_command_with_network_sandbox(self) -> None:
         """Network sandbox is configured when enabled."""

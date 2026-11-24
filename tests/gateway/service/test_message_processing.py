@@ -1673,6 +1673,47 @@ class TestProcessMessage:
         assert first_call[1]["claude_binary_path"] == expected
         assert recovery_call[1]["claude_binary_path"] == expected
 
+    @pytest.mark.parametrize("kvm", [True, False])
+    def test_tasks_receive_repo_kvm(
+        self, email_config: RepoServerConfig, tmp_path: Path, kvm: bool
+    ) -> None:
+        """The initial task and the recovery retry both get the repo's kvm."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, kvm=kvm)
+
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = (
+            tmp_path / "repo"
+        )
+        mock_cs.get_session_id_for_resume.return_value = "old-session-id"
+        mock_cs.get_last_successful_response.return_value = "Prior work."
+
+        mock_task1 = MagicMock()
+        mock_task1.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.PROMPT_TOO_LONG,
+            )
+        )
+        mock_task1.event_log = MagicMock()
+        mock_task2 = MagicMock()
+        mock_task2.execute = AsyncMock(return_value=_make_success_result())
+        mock_task2.event_log = MagicMock()
+        svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
+
+        parsed = _make_parsed_message(
+            body="Continue please", conversation_id="aabb1122"
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        first_call, recovery_call = svc.sandbox.create_task.call_args_list
+        assert first_call[1]["kvm"] is kvm
+        assert recovery_call[1]["kvm"] is kvm
+
     def test_prompt_too_long_no_retry_without_session_id(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:

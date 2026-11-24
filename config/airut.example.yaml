@@ -216,6 +216,9 @@ repos:
     # Path to container directory within the repo (must contain a Dockerfile)
     # container_path: .airut/container
 
+    # Pass host /dev/kvm into the container for hardware virtualization
+    # kvm: false
+
     # Periodic task schedules keyed by name
     # schedules:
     #   # Prompt mode: run Claude with a fixed prompt on a schedule

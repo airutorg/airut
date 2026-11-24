@@ -487,6 +487,7 @@ Settings read at task creation time, effective immediately:
 - `repos.*.masked_secrets` — scoped secrets with proxy replacement
 - `repos.*.signing_credentials` — AWS SigV4 re-signing credentials
 - `repos.*.github_app_credentials` — proxy-managed GitHub App tokens
+- `repos.*.kvm` — `/dev/kvm` passthrough into task containers
 
 ## Compatibility
 

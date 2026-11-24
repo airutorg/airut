@@ -32,6 +32,11 @@ from airut.sandbox.claude_binary import (
     ClaudeBinaryError,
 )
 from airut.sandbox.event_log import EVENTS_FILE_NAME, EventLog
+from airut.sandbox.kvm import (
+    KVM_DEVICE,
+    kvm_access_warning,
+    kvm_unavailable_reason,
+)
 from airut.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
 from airut.sandbox.sandbox import Sandbox, SandboxConfig, default_proxy_dir
 from airut.sandbox.secrets import (
@@ -67,6 +72,10 @@ __all__ = [
     "default_proxy_dir",
     # proxy
     "DEFAULT_PROXY_READY_TIMEOUT",
+    # kvm
+    "KVM_DEVICE",
+    "kvm_access_warning",
+    "kvm_unavailable_reason",
     # task
     "AgentTask",
     "CommandTask",

@@ -300,6 +300,7 @@ def _run_command_task(
         ),
         network_sandbox=network_sandbox,
         resource_limits=resource_limits,
+        kvm=repo_cfg.kvm,
     )
 
     result: CommandResult = asyncio.run(task.execute(command))

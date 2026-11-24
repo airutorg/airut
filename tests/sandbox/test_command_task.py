@@ -33,6 +33,7 @@ def _make_command_task(
     network_log_path: Path | None = None,
     network_sandbox: NetworkSandboxConfig | None = None,
     resource_limits: ResourceLimits | None = None,
+    kvm: bool = False,
     container_command: str = "podman",
     proxy_manager: ProxyManager | None = None,
 ) -> CommandTask:
@@ -49,6 +50,7 @@ def _make_command_task(
         network_log_path=network_log_path,
         network_sandbox=network_sandbox,
         resource_limits=resource_limits or ResourceLimits(),
+        kvm=kvm,
         container_command=container_command,
         proxy_manager=proxy_manager,
     )
@@ -334,6 +336,58 @@ class TestCommandTaskExecute:
         await task.execute(["cmd"], on_network_line=network_lines.append)
 
         assert "ALLOW example.com" in network_lines
+
+
+class TestCommandTaskKvm:
+    """Tests for KVM passthrough in CommandTask."""
+
+    async def test_kvm_passed_to_run_container(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """execute() forwards the kvm flag to run_container."""
+        monkeypatch.setattr(
+            "airut.sandbox.task.kvm_unavailable_reason", lambda: None
+        )
+        task = _make_command_task(tmp_path, kvm=True)
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container()(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute(["cmd"])
+
+        assert calls[0]["kvm"] is True
+
+    async def test_missing_device_fails_before_proxy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A missing KVM device raises before the proxy or container start."""
+        monkeypatch.setattr(
+            "airut.sandbox.task.kvm_unavailable_reason",
+            lambda: "/dev/kvm does not exist",
+        )
+        run_container = MagicMock()
+        monkeypatch.setattr("airut.sandbox.task.run_container", run_container)
+        proxy_manager = MagicMock()
+        task = _make_command_task(
+            tmp_path,
+            kvm=True,
+            network_sandbox=MagicMock(),
+            proxy_manager=proxy_manager,
+        )
+
+        with pytest.raises(SandboxError, match="KVM passthrough requested"):
+            await task.execute(["cmd"])
+
+        proxy_manager.start_proxy.assert_not_called()
+        run_container.assert_not_called()
 
 
 class TestCommandTaskStop:

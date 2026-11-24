@@ -35,6 +35,7 @@ from airut.sandbox._run_container import (
 )
 from airut.sandbox.claude_binary import CLAUDE_BINARY_CONTAINER_PATH
 from airut.sandbox.event_log import EventLog
+from airut.sandbox.kvm import kvm_unavailable_reason
 from airut.sandbox.network_log import NetworkLog
 from airut.sandbox.secrets import SecretReplacements
 from airut.sandbox.types import (
@@ -78,6 +79,25 @@ class NetworkSandboxConfig:
     ) -> None:
         self.allowlist = allowlist
         self.replacements = replacements
+
+
+def _require_kvm(kvm: bool) -> None:
+    """Fail fast when KVM passthrough is requested but unavailable.
+
+    Runs before the proxy starts so a missing device costs nothing and
+    produces a clearer error than podman's.
+
+    Args:
+        kvm: Whether the task requests KVM passthrough.
+
+    Raises:
+        SandboxError: If KVM is requested and the host device is missing.
+    """
+    if not kvm:
+        return
+    reason = kvm_unavailable_reason()
+    if reason is not None:
+        raise SandboxError(f"KVM passthrough requested but {reason}")
 
 
 def _start_proxy(
@@ -176,6 +196,7 @@ class AgentTask:
         network_log_path: Path | None,
         network_sandbox: NetworkSandboxConfig | None,
         resource_limits: ResourceLimits,
+        kvm: bool,
         container_command: str,
         proxy_manager: ProxyManager | None,
         claude_binary_path: Path | None = None,
@@ -188,6 +209,7 @@ class AgentTask:
         self._network_log_path = network_log_path
         self._network_sandbox = network_sandbox
         self._resource_limits = resource_limits
+        self._kvm = kvm
         self._container_command = container_command
         self._proxy_manager = proxy_manager
         self._claude_binary_path = claude_binary_path
@@ -235,14 +257,15 @@ class AgentTask:
     ) -> ExecutionResult:
         """Execute Claude Code in the sandbox.
 
-        1. Start proxy (if network sandbox configured)
-        2. Optionally start network log tailing
-        3. Build podman command with mounts, env, network args
-        4. Run container with prompt on stdin
-        5. Stream events to accumulator, event log, and callback
-        6. Stop network log tailing
-        7. Stop proxy
-        8. Build result from accumulator (no disk re-read)
+        1. Check the KVM device (if KVM passthrough requested)
+        2. Start proxy (if network sandbox configured)
+        3. Optionally start network log tailing
+        4. Build podman command with mounts, env, network args
+        5. Run container with prompt on stdin
+        6. Stream events to accumulator, event log, and callback
+        7. Stop network log tailing
+        8. Stop proxy
+        9. Build result from accumulator (no disk re-read)
 
         Args:
             prompt: User prompt to pass to Claude via stdin.
@@ -269,6 +292,8 @@ class AgentTask:
             effort,
             self._execution_context_id,
         )
+
+        _require_kvm(self._kvm)
 
         task_proxy: _ContextProxy | None = None
 
@@ -432,6 +457,7 @@ class AgentTask:
                 mounts=all_mounts,
                 env=claude_env,
                 resource_limits=self._resource_limits,
+                kvm=self._kvm,
                 network_args=network_args,
                 command=claude_args,
                 stdin_data=prompt,
@@ -491,6 +517,7 @@ class CommandTask:
         network_log_path: Path | None,
         network_sandbox: NetworkSandboxConfig | None,
         resource_limits: ResourceLimits,
+        kvm: bool,
         container_command: str,
         proxy_manager: ProxyManager | None,
     ) -> None:
@@ -502,6 +529,7 @@ class CommandTask:
         self._network_log_path = network_log_path
         self._network_sandbox = network_sandbox
         self._resource_limits = resource_limits
+        self._kvm = kvm
         self._container_command = container_command
         self._proxy_manager = proxy_manager
 
@@ -552,6 +580,8 @@ class CommandTask:
             self._execution_context_id,
             command,
         )
+
+        _require_kvm(self._kvm)
 
         task_proxy: _ContextProxy | None = None
 
@@ -609,6 +639,7 @@ class CommandTask:
                         mounts=self._mounts,
                         env=self._env,
                         resource_limits=self._resource_limits,
+                        kvm=self._kvm,
                         network_args=network_args,
                         command=command,
                         stdin_data=None,

@@ -1393,6 +1393,15 @@ class RepoServerConfig:
             ``None`` omits the flag, letting Claude use its own default.
         resource_limits: Container resource limits (timeout, memory,
             cpus, pids_limit).  Use ``!var`` references for shared defaults.
+        claude_version: Claude Code version (semver, ``"latest"``, or
+            ``"stable"``).
+        container_path: Repo-relative directory holding the container
+            Dockerfile.
+        kvm: Pass the host ``/dev/kvm`` into the container so tools
+            such as QEMU can use hardware virtualization.  Defaults to
+            ``False``.  Set only in the server config, so the agent
+            cannot enable it for itself.
+        schedules: Periodic task schedules keyed by name.
     """
 
     repo_id: str = field(
@@ -1477,6 +1486,13 @@ class RepoServerConfig:
             "Path to container directory within the repo"
             " (must contain a Dockerfile)",
             Scope.REPO,
+        ),
+    )
+    kvm: bool = field(
+        default=False,
+        metadata=meta(
+            "Pass host /dev/kvm into the container for hardware virtualization",
+            Scope.TASK,
         ),
     )
     schedules: dict[str, ScheduleConfig] = field(
@@ -1947,6 +1963,9 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     container_path = _resolve(raw.get("container_path"), str)
     if container_path is not None:
         repo_overrides["container_path"] = container_path
+    kvm = _resolve(raw.get("kvm"), bool)
+    if kvm is not None:
+        repo_overrides["kvm"] = kvm
 
     # Parse schedules
     raw_schedules = raw.get("schedules", {})

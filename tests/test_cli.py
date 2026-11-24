@@ -1316,6 +1316,54 @@ repos:
         assert "missing controllers" in out
         assert result == 0
 
+    def test_kvm_section_hidden_without_kvm_repos(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No KVM section, and no device probe, unless a repo enables it."""
+        _path, ctx = _check_patches(tmp_path)
+        with (
+            ctx,
+            patch("airut.sandbox.kvm_unavailable_reason") as mock_reason,
+        ):
+            result = cmd_check([])
+        out = capsys.readouterr().out
+        assert "KVM" not in out
+        mock_reason.assert_not_called()
+        assert result == 0
+
+    @pytest.mark.parametrize(
+        ("reason", "warning", "expected", "exit_code"),
+        [
+            (None, None, "✓ /dev/kvm accessible", 0),
+            (None, "/dev/kvm has mode 0660", "! /dev/kvm has mode 0660", 0),
+            ("/dev/kvm does not exist", None, "✗ /dev/kvm does not exist", 1),
+        ],
+    )
+    def test_kvm_section(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        reason: str | None,
+        warning: str | None,
+        expected: str,
+        exit_code: int,
+    ) -> None:
+        """Repos with kvm get a device check; only a missing device fails."""
+        _path, ctx = _check_patches(
+            tmp_path, config_text=_VALID_CONFIG + "    kvm: true\n"
+        )
+        with (
+            ctx,
+            patch("airut.sandbox.kvm_unavailable_reason", return_value=reason),
+            patch("airut.sandbox.kvm_access_warning", return_value=warning),
+        ):
+            result = cmd_check([])
+        out = capsys.readouterr().out
+        assert "KVM" in out
+        assert "Enabled for: test" in out
+        assert expected in out
+        assert result == exit_code
+
     def test_version_mismatch_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

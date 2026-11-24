@@ -764,6 +764,49 @@ def _print_cgroup_section(s: _Style) -> None:
     print()
 
 
+def _print_kvm_section(s: _Style, config: ServerConfig | None) -> bool:
+    """Print the KVM device check for repos with ``kvm`` enabled.
+
+    Skipped entirely when no repo enables KVM.  A missing device fails
+    the check; a permission problem is only a warning because POSIX ACL
+    entries can grant access that the mode bits do not show.
+
+    Args:
+        s: Output styling.
+        config: Loaded server config, or None if loading failed.
+
+    Returns:
+        False if a repo enables KVM but the device is unavailable.
+    """
+    from airut.sandbox import (
+        KVM_DEVICE,
+        kvm_access_warning,
+        kvm_unavailable_reason,
+    )
+
+    if config is None:
+        return True
+    repos = sorted(r for r, cfg in config.repos.items() if cfg.kvm)
+    if not repos:
+        return True
+
+    print(s.bold("KVM"))
+    print(f"  Enabled for: {', '.join(repos)}")
+    ok = True
+    reason = kvm_unavailable_reason()
+    if reason is not None:
+        print(f"  {s.red('✗')} {reason}")
+        ok = False
+    else:
+        warning = kvm_access_warning()
+        if warning is not None:
+            print(f"  {s.yellow('!')} {warning}")
+        else:
+            print(f"  {s.green('✓')} {KVM_DEVICE} accessible")
+    print()
+    return ok
+
+
 def _print_service_section(
     s: _Style, vi: GitVersionInfo, config: ServerConfig | None, *, nix: bool
 ) -> None:
@@ -802,7 +845,8 @@ def cmd_check(argv: list[str]) -> int:
     """Run readiness checks and print installation status.
 
     Displays version information, configuration status, system
-    dependencies, and service health.  Dependency and configuration
+    dependencies, KVM device availability (when a repo enables ``kvm``),
+    and service health.  Dependency, configuration, and KVM device
     failures affect the exit code; service status is informational only.
 
     With ``--offline``, only validates the config, without reading
@@ -826,6 +870,7 @@ def cmd_check(argv: list[str]) -> int:
     if not offline:
         all_ok = _print_dependency_section(s) and all_ok
         _print_cgroup_section(s)
+        all_ok = _print_kvm_section(s, config) and all_ok
         _print_service_section(s, vi, config, nix=nix)
 
     if all_ok:

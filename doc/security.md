@@ -212,6 +212,9 @@ See [execution-sandbox.md](execution-sandbox.md) for full details.
 - No host credentials mounted (SSH keys, git config, etc.)
 - Session metadata stored outside container mounts
 - Configurable timeout with hard kill
+- Optional per-repo KVM passthrough (`kvm: true`, off by default), which exposes
+  the host kernel's KVM interface to the agent — see
+  [execution-sandbox.md](execution-sandbox.md#kvm-passthrough)
 
 ## Network Isolation
 
