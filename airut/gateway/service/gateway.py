@@ -1829,8 +1829,8 @@ class GatewayService:
 
         Delegates to ``Sandbox.prune_images()`` which runs
         ``podman image prune -f`` and removes stale airut-prefixed
-        images.  Does not hold the image build lock, so concurrent
-        task startups are not blocked.
+        images.  Holds the image build lock while pruning, so it never
+        deletes an image a concurrent task startup is building.
         """
         logger.info("Running container image pruning...")
         removed = self.sandbox.prune_images()

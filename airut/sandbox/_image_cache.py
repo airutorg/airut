@@ -160,8 +160,8 @@ def _format_age(age: timedelta) -> str:
 class ImageCache:
     """Thread-safe container image cache with staleness checking.
 
-    All builds are serialized via a lock. Image age is determined
-    by ``podman image inspect``, not in-memory state.
+    Builds and pruning are serialized via a lock. Image age is
+    determined by ``podman image inspect``, not in-memory state.
     """
 
     def __init__(
@@ -233,14 +233,18 @@ class ImageCache:
         images, then lists images matching the resource prefix and
         removes any that exceed ``max_age_hours``.
 
-        This method does NOT hold the build lock while running prune
-        commands, so concurrent image builds are not blocked.
+        Holds the build lock for the whole prune, so it never overlaps
+        an ``ensure()`` build.  Without the lock, two races can delete
+        an image a task is about to run, failing the task:
 
-        There is a benign TOCTOU race: ``prune_images`` may check an
-        image's age and then ``rmi`` it just after a concurrent
-        ``ensure()`` rebuilt the same tag.  The next ``ensure()`` call
-        will find the image missing and rebuild it.  The worst outcome
-        is one extra rebuild, never data loss or task failure.
+        * A build in progress produces untagged images until it commits
+          the tag, and ``image prune -f`` removes them as dangling.  The
+          build then reports success for an image that no longer exists.
+        * The age check can see a stale image just before ``ensure()``
+          rebuilds the same tag, and the ``rmi`` that follows then
+          removes the fresh image.
+
+        Pruning takes seconds, so task startups wait at most that long.
 
         In normal operation most prefixed images are kept fresh by
         ``ensure()`` rebuilds during task startup.  This method mainly
@@ -255,7 +259,12 @@ class ImageCache:
             # every GC cycle would cause needless churn.
             return 0
 
-        # 1. Remove dangling (untagged) images.
+        with self._lock:
+            self._prune_dangling()
+            return self._prune_old_prefixed()
+
+    def _prune_dangling(self) -> None:
+        """Remove dangling (untagged) images.  Caller holds the lock."""
         result = subprocess.run(
             [self._cmd, "image", "prune", "-f"],
             capture_output=True,
@@ -268,10 +277,15 @@ class ImageCache:
             if stdout:
                 logger.info("Dangling image prune output: %s", stdout)
 
-        # 2. Remove old airut-prefixed images beyond max_age_hours.
-        # Uses the same staleness threshold as ensure() -- in practice most
-        # images are kept fresh by ensure() rebuilds during task startup, so
-        # this mainly catches images whose content hash changed.
+    def _prune_old_prefixed(self) -> int:
+        """Remove prefixed images older than ``max_age_hours``.
+
+        Uses the same staleness threshold as ``ensure()``.  Caller holds
+        the lock.
+
+        Returns:
+            Number of images removed.
+        """
         result = subprocess.run(
             [
                 self._cmd,
