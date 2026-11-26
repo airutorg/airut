@@ -128,13 +128,15 @@ domain must be valid. Signatures by other domains do not count.
   fetched, looking up the key in DNS through the host's resolver. A signature
   counts only if the single `From` field it covers is the authenticated sender,
   read the same way. Only `rsa-sha256` signatures with RSA keys of at least 1024
-  bits count; a signature with `l=` (covering only part of the body) or one that
-  does not sign `From` does not. Work is bounded whatever the message: the
-  number of signatures tried, the size of signatures and key records used, and
-  the messages verified at all (by header count and whitespace) are limited (see
-  the constants in `airut/gateway/email/dkim.py`). Any error while verifying
-  means the signature does not verify. The DNS resolver must be one an attacker
-  cannot answer for; this is the deployment's responsibility
+  bits and `ed25519-sha256` signatures (RFC 8463) count, each only with a key
+  record whose `k=` is the algorithm's key type (`rsa` when absent); a signature
+  with `l=` (covering only part of the body) or one that does not sign `From`
+  does not. Work is bounded whatever the message: the number of signatures
+  tried, the size of signatures and key records used, and the messages verified
+  at all (by header count and whitespace) are limited (see the constants in
+  `airut/gateway/email/dkim.py`). Any error while verifying means the signature
+  does not verify. The DNS resolver must be one an attacker cannot answer for;
+  this is the deployment's responsibility
   ([email-setup.md](../doc/email-setup.md#dns-for-dkim-keys)).
 - **`both`** (default): both. The server's result is checked first, so DNS is
   only queried for messages it vouches for, from authorized senders.

@@ -3,15 +3,15 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Tests for DKIM checks: the server's recorded result, and Airut's own."""
+"""Tests for Airut's own DKIM verification."""
 
+import base64
 from unittest.mock import MagicMock, patch
 
 import dkim
 import dns.exception
 import pytest
 
-from airut.gateway.email.authres import parse_authentication_results
 from airut.gateway.email.dkim import (
     MAX_HEADER_FIELDS,
     MAX_KEY_RECORD_BYTES,
@@ -20,7 +20,6 @@ from airut.gateway.email.dkim import (
     MAX_SIGNED_HEADERS,
     DkimVerifier,
     lookup_txt,
-    server_dkim_passes,
 )
 from tests import dkim_signing
 
@@ -196,14 +195,84 @@ class TestVerifier:
         assert _verify(padding + signed, lookup) is False
         assert lookup.names == []
 
-    def test_ed25519_not_accepted(self, lookup: _Lookup):
-        """No ed25519 support is installed; such signatures are skipped."""
-        signature = (
-            b"DKIM-Signature: v=1; a=ed25519-sha256; d=example.com; s=test;"
-            b" h=from; bh=AAAA; b=AAAA\r\n"
+    def test_ed25519_signature(self, lookup: _Lookup):
+        signed = dkim_signing.sign_ed25519(MESSAGE, "example.com")
+        assert b"a=ed25519-sha256" in signed
+        fields = DkimVerifier(lookup).verify(signed, "authorized@example.com")
+        assert fields == dkim_signing.SIGNED_HEADERS
+        assert lookup.names == [b"ed25519._domainkey.example.com."]
+
+    def test_ed25519_body_changed(self, lookup: _Lookup):
+        signed = dkim_signing.sign_ed25519(MESSAGE, "example.com")
+        tampered = signed.replace(b"the thing", b"another thing")
+        assert _verify(tampered, lookup) is False
+
+    def test_ed25519_and_rsa_signatures(self, lookup: _Lookup):
+        """Signers adopting Ed25519 sign with RSA too (RFC 8463)."""
+        signed = dkim_signing.sign(MESSAGE, "example.com")
+        both = dkim_signing.sign_ed25519(signed, "example.com")
+        assert _verify(both, lookup) is True
+        assert lookup.names == [b"ed25519._domainkey.example.com."]
+
+    def test_ed25519_and_rsa_falls_back_to_rsa(self, lookup: _Lookup):
+        """An Ed25519 signature that fails does not stop the RSA one."""
+        signed = dkim_signing.sign(MESSAGE, "example.com")
+        both = dkim_signing.sign_ed25519(signed, "example.com", selector="no")
+        assert _verify(both, lookup) is True
+        assert lookup.names == [
+            b"no._domainkey.example.com.",
+            b"test._domainkey.example.com.",
+        ]
+
+    def test_key_type_must_match_algorithm(
+        self, lookup: _Lookup, caplog: pytest.LogCaptureFixture
+    ):
+        """A valid Ed25519 signature labelled ``rsa-sha256`` is refused.
+
+        dkimpy alone verifies it with whatever key the record holds.
+        """
+        signed = dkim_signing.sign_mislabelled(
+            MESSAGE, "example.com", "ed25519"
         )
-        assert _verify(signature + MESSAGE, lookup) is False
-        assert lookup.names == []
+        assert b"a=rsa-sha256" in signed
+        assert dkim.DKIM(signed).verify(dnsfunc=dkim_signing.lookup)
+        assert _verify(signed, lookup) is False
+        assert lookup.names == [b"ed25519._domainkey.example.com."]
+        assert "holds a 'ed25519' key, not 'rsa'" in caplog.text
+
+    def test_key_type_must_match_ed25519_algorithm(
+        self, lookup: _Lookup, caplog: pytest.LogCaptureFixture
+    ):
+        """A valid RSA signature labelled ``ed25519-sha256`` is refused."""
+        signed = dkim_signing.sign_mislabelled(MESSAGE, "example.com", "rsa")
+        assert b"a=ed25519-sha256" in signed
+        assert dkim.DKIM(signed).verify(dnsfunc=dkim_signing.lookup)
+        assert _verify(signed, lookup) is False
+        assert lookup.names == [b"test._domainkey.example.com."]
+        assert "holds a 'rsa' key, not 'ed25519'" in caplog.text
+
+    def test_rsa_signature_with_key_record_without_k(self):
+        """A record without ``k=`` holds an RSA key."""
+        signed = dkim_signing.sign(MESSAGE, "example.com")
+        record = dkim_signing.public_record().replace(b" k=rsa;", b"")
+        assert b"k=" not in record
+        verifier = DkimVerifier(lambda name, timeout=5: record)
+        assert verifier.verify(signed, "authorized@example.com") is not None
+
+    def test_ed25519_key_of_wrong_length_refused(self):
+        signed = dkim_signing.sign_ed25519(MESSAGE, "example.com")
+        record = b"v=DKIM1; k=ed25519; p=" + base64.b64encode(b"x" * 16)
+        verifier = DkimVerifier(lambda name, timeout=5: record)
+        assert verifier.verify(signed, "authorized@example.com") is None
+
+    def test_malformed_key_record_refused(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        signed = dkim_signing.sign(MESSAGE, "example.com")
+        verifier = DkimVerifier(lambda name, timeout=5: b"garbage")
+        with caplog.at_level("DEBUG", logger="airut.gateway.email.dkim"):
+            assert verifier.verify(signed, "authorized@example.com") is None
+        assert "is malformed" in caplog.text
 
     def test_oversized_signature_refused(self, lookup: _Lookup):
         """A valid signature, but longer than the limit."""
@@ -283,48 +352,3 @@ class TestLookupTxt:
 
     def test_non_ascii_name(self):
         assert lookup_txt("s._domainkey.ä.com.".encode()) is None
-
-
-def _results(header: str):
-    return parse_authentication_results(header)
-
-
-class TestServerDkimPasses:
-    @pytest.mark.parametrize(
-        "header",
-        [
-            "mx; dkim=pass header.d=example.com header.s=s",
-            "mx; dkim=pass header.d=EXAMPLE.com",
-            "mx; dkim=pass header.i=@example.com",
-            'mx; dkim=pass header.i="user@example.com"',
-            "mx; dkim=pass header.d=other.example;"
-            " dkim=pass header.d=example.com",
-        ],
-    )
-    def test_passes(self, header: str):
-        assert server_dkim_passes(_results(header), "example.com") is True
-
-    @pytest.mark.parametrize(
-        "header",
-        [
-            "mx; dmarc=pass header.from=example.com",
-            "mx; dkim=fail header.d=example.com",
-            "mx; dkim=neutral header.d=example.com",
-            "mx; dkim=pass header.d=other.example",
-            "mx; dkim=pass header.d=sub.example.com",
-            "mx; dkim-atps=pass header.d=example.com",
-            "mx; dkim=pass header.d=example.com header.d=example.com",
-            "mx; dkim=pass header.i=example.com",
-            "mx; dkim=pass",
-            "mx; dkim=pass header.d=example.Kom",
-            # The Stalwart header of a forged signature: identity in a
-            # quoted value, result not pass.
-            'mx; dkim=neutral header.i="a dkim=pass b@example.com"',
-        ],
-    )
-    def test_fails(self, header: str):
-        assert server_dkim_passes(_results(header), "example.com") is False
-
-    def test_non_ascii_domain_does_not_fold(self):
-        results = _results("mx; dkim=pass header.d=example.Kom")
-        assert server_dkim_passes(results, "example.kom") is False
