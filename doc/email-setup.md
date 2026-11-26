@@ -244,9 +244,10 @@ the From domain exactly). Only the domain's key holder can produce one.
 Airut verifies signatures over the message exactly as fetched, so a result the
 mail server got wrong, or an `Authentication-Results` header written by an
 account that submits its own mail over port 465/587, cannot stand in for a valid
-signature. Only `rsa-sha256` signatures with RSA keys of at least 1024 bits are
-accepted (not `rsa-sha1` or `ed25519-sha256`), and not with `l=` (covering only
-part of the body). A domain that signs only with Ed25519 needs `server`.
+signature. Signatures are accepted with `rsa-sha256` (RSA keys of at least 1024
+bits) or `ed25519-sha256` (RFC 8463), each only with a key record of the
+matching key type; not with `rsa-sha1`, nor with `l=` (covering only part of the
+body).
 
 Use `server` where messages are changed in transit after signing (for example by
 Microsoft 365 Safe Links or disclaimers), and `none` only for senders whose

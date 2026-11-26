@@ -5,22 +5,30 @@
 
 """DKIM signing for tests.
 
-A key generated once per test run signs messages as any domain, and
-``lookup`` stands in for DNS, serving the key's public half at
-``test._domainkey.<domain>``.
+Keys generated once per test run sign messages as any domain, and
+``lookup`` stands in for DNS, serving their public halves: the RSA key's
+at ``test._domainkey.<domain>`` and the Ed25519 key's at
+``ed25519._domainkey.<domain>``.
 """
 
 import base64
 import functools
+import hashlib
 import secrets
 
 import dkim
+import nacl.signing
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from dkim.canonicalization import CanonicalizationPolicy
+from dkim.crypto import parse_pem_private_key
 
 
-#: Selector the test key is published under.
+#: Selector the RSA test key is published under.
 SELECTOR = "test"
+
+#: Selector the Ed25519 test key is published under.
+ED25519_SELECTOR = "ed25519"
 
 #: Header fields signed by default: those a signer such as Gmail covers.
 SIGNED_HEADERS = (
@@ -39,6 +47,73 @@ SIGNED_HEADERS = (
 @functools.cache
 def _key() -> rsa.RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+@functools.cache
+def _ed25519_key() -> nacl.signing.SigningKey:
+    return nacl.signing.SigningKey.generate()
+
+
+def ed25519_record() -> bytes:
+    """The DNS TXT record publishing the Ed25519 test key (RFC 8463)."""
+    public = bytes(_ed25519_key().verify_key)
+    return b"v=DKIM1; k=ed25519; p=" + base64.b64encode(public)
+
+
+def sign_ed25519(
+    raw: bytes,
+    domain: str,
+    *,
+    headers: tuple[str, ...] = SIGNED_HEADERS,
+    selector: str = ED25519_SELECTOR,
+) -> bytes:
+    """Return *raw* with an Ed25519 DKIM signature by *domain* prepended."""
+    signature = dkim.sign(
+        raw,
+        selector.encode(),
+        domain.encode(),
+        base64.b64encode(bytes(_ed25519_key())),
+        include_headers=[h.encode() for h in headers],
+        canonicalize=(b"relaxed", b"relaxed"),
+        signature_algorithm=b"ed25519-sha256",
+    )
+    return signature + raw
+
+
+def sign_mislabelled(raw: bytes, domain: str, key_type: str) -> bytes:
+    """Return *raw* with a signature whose ``a=`` names the other key type.
+
+    The signature is valid, made over SHA-256 hashes with the test key of
+    *key_type* (``rsa`` or ``ed25519``) and naming its selector, but its
+    ``a=`` tag says the other algorithm.  ``dkim.sign`` will not make
+    one, so it is built from dkimpy's internals (``gen_header``); tests
+    check dkimpy verifies it, which catches a change there.
+    """
+    if key_type == "rsa":
+        algorithm, label = b"rsa-sha256", b"ed25519-sha256"
+        selector = SELECTOR
+        key = parse_pem_private_key(private_pem())
+    else:
+        algorithm, label = b"ed25519-sha256", b"rsa-sha256"
+        selector = ED25519_SELECTOR
+        key = _ed25519_key()
+    signer = dkim.DKIM(raw, signature_algorithm=algorithm)
+    signer.hasher = hashlib.sha256
+    policy = CanonicalizationPolicy.from_c_value(b"relaxed/relaxed")
+    body_hash = hashlib.sha256(policy.canonicalize_body(signer.body)).digest()
+    headers = tuple(h.encode() for h in SIGNED_HEADERS)
+    fields = [
+        (b"v", b"1"),
+        (b"a", label),
+        (b"c", b"relaxed/relaxed"),
+        (b"d", domain.encode()),
+        (b"s", selector.encode()),
+        (b"h", b" : ".join(headers)),
+        (b"bh", base64.b64encode(body_hash)),
+        (b"b", b""),
+    ]
+    value = signer.gen_header(fields, headers, policy, b"DKIM-Signature", key)
+    return b"DKIM-Signature: " + value + raw
 
 
 def _is_probable_prime(n: int) -> bool:
@@ -140,7 +215,9 @@ def sign(
 
 
 def lookup(name: bytes, timeout: int = 5) -> bytes | None:
-    """Serve the test key at ``test._domainkey.<any domain>``."""
+    """Serve the test keys under their selectors, for any domain."""
     if name.startswith(f"{SELECTOR}._domainkey.".encode()):
         return public_record()
+    if name.startswith(f"{ED25519_SELECTOR}._domainkey.".encode()):
+        return ed25519_record()
     return None

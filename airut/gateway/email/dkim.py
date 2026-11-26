@@ -27,6 +27,10 @@ A signature counts only if the From field it covers is the sender
 Airut authenticated, read the same way.  The verifier reports which
 header fields the signature covers, so that Airut acts on those alone.
 
+Signatures made with ``rsa-sha256`` (by an RSA key of at least
+``MIN_KEY_BITS``) or ``ed25519-sha256`` (RFC 8463) count, each only with
+a key record of its own key type.
+
 Work is bounded whatever the message: at most ``MAX_SIGNATURES``
 signatures by the From domain are tried, and none is verified for a
 message with more than ``MAX_HEADER_FIELDS`` header fields or with
@@ -36,6 +40,7 @@ longer than ``MAX_SIGNATURE_BYTES`` or listing more than
 ``MAX_KEY_RECORD_BYTES``, is not used.
 """
 
+import functools
 import logging
 import re
 from typing import Protocol
@@ -77,9 +82,9 @@ DNS_TIMEOUT = 5
 #: RSA keys shorter than this are refused (RFC 8301).
 MIN_KEY_BITS = 1024
 
-#: Signing algorithms accepted.  ``rsa-sha1`` is not (RFC 8301), nor
-#: ``ed25519-sha256``, for which no support is installed.
-_ALGORITHMS = frozenset({b"rsa-sha256"})
+#: Signing algorithms accepted (``rsa-sha1`` is not: RFC 8301), with the
+#: key type each needs (RFC 8463).
+_KEY_TYPES = {b"rsa-sha256": b"rsa", b"ed25519-sha256": b"ed25519"}
 
 #: A run of two or more spaces and tabs.
 _WHITESPACE_RUN_RE = re.compile(rb"[\t ]{2,}")
@@ -167,27 +172,35 @@ def server_dkim_passes(results: AuthResults, domain: str) -> bool:
     return False
 
 
-def _unsuitable(signature: bytes, domain: str) -> str | None:
-    """Return why *signature* cannot vouch for *domain*, or None."""
+class _UnsuitableError(Exception):
+    """A signature cannot vouch for the From domain."""
+
+
+def _signature_tags(signature: bytes, domain: str) -> dict[bytes, bytes]:
+    """Return the tags of *signature*, if it can vouch for *domain*.
+
+    Raises:
+        _UnsuitableError: Saying why it cannot.
+    """
     if len(signature) > MAX_SIGNATURE_BYTES:
-        return "too long"
+        raise _UnsuitableError("too long")
     try:
         tags = parse_tag_value(signature)
     except InvalidTagValueList:
-        return "malformed"
+        raise _UnsuitableError("malformed") from None
     signer = tags.get(b"d", b"")
     if not signer.isascii() or signer.decode().lower() != domain:
-        return "another domain"
-    if tags.get(b"a") not in _ALGORITHMS:
-        return "algorithm not accepted"
+        raise _UnsuitableError("another domain")
+    if tags.get(b"a") not in _KEY_TYPES:
+        raise _UnsuitableError("algorithm not accepted")
     if b"l" in tags:
-        return "covers only part of the body (l=)"
+        raise _UnsuitableError("covers only part of the body (l=)")
     signed = _signed_fields(tags)
     if "from" not in signed:
-        return "does not sign From"
+        raise _UnsuitableError("does not sign From")
     if len(signed) > MAX_SIGNED_HEADERS:
-        return "signs too many header fields"
-    return None
+        raise _UnsuitableError("signs too many header fields")
+    return tags
 
 
 def _signed_fields(tags: dict[bytes, bytes]) -> tuple[str, ...]:
@@ -231,16 +244,37 @@ class DkimVerifier:
         self._lookup = lookup
 
     def _lookup_key(
-        self, name: bytes, timeout: int = DNS_TIMEOUT
+        self, name: bytes, *, key_type: bytes, timeout: int = DNS_TIMEOUT
     ) -> bytes | None:
-        """Look up a key record, refusing one too long to use."""
+        """Look up a key record of *key_type*, refusing one unfit to use.
+
+        A record too long, or holding a key of another type than the
+        signature's algorithm needs (RFC 6376 section 6.1.2), is refused:
+        dkimpy would use whatever key the record holds.
+        """
         record = self._lookup(name, timeout=timeout)
-        if record is not None and len(record) > MAX_KEY_RECORD_BYTES:
+        if record is None:
+            return None
+        if len(record) > MAX_KEY_RECORD_BYTES:
             logger.warning(
                 "DKIM: key record at %.200r is %d bytes (limit %d)",
                 name,
                 len(record),
                 MAX_KEY_RECORD_BYTES,
+            )
+            return None
+        try:
+            # A record without k= holds an RSA key (RFC 6376 section 3.6.1).
+            found = parse_tag_value(record).get(b"k", b"rsa")
+        except InvalidTagValueList:
+            logger.debug("DKIM: key record at %.200r is malformed", name)
+            return None
+        if found != key_type:
+            logger.warning(
+                "DKIM: key record at %.200r holds a %.20r key, not %r",
+                name,
+                found.decode("ascii", "replace"),
+                key_type.decode(),
             )
             return None
         return record
@@ -289,21 +323,24 @@ class DkimVerifier:
         ]
         tried = 0
         for index, signature in enumerate(signatures):
-            reason = _unsuitable(signature, domain)
-            if reason is not None:
-                logger.debug("DKIM: skipping signature %d: %s", index, reason)
+            try:
+                tags = _signature_tags(signature, domain)
+            except _UnsuitableError as e:
+                logger.debug("DKIM: skipping signature %d: %s", index, e)
                 continue
             if tried == MAX_SIGNATURES:
                 break
             tried += 1
+            key_type = _KEY_TYPES[tags[b"a"]]
+            dnsfunc = functools.partial(self._lookup_key, key_type=key_type)
             try:
-                verified = checker.verify(idx=index, dnsfunc=self._lookup_key)
+                verified = checker.verify(idx=index, dnsfunc=dnsfunc)
             except Exception as e:
                 logger.debug("DKIM: signature %d failed: %.200s", index, e)
                 continue
             if verified:
                 logger.debug("DKIM: signature %d by %s verified", index, domain)
-                return _signed_fields(parse_tag_value(signature))
+                return _signed_fields(tags)
         logger.warning(
             "DKIM: no signature by %s for %s verified (%d of %d tried)",
             domain,
